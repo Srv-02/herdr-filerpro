@@ -860,7 +860,7 @@ export default class FilerPro extends View {
     const file = this.file, full = joinPath(this.root, file), on = this.on;
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes }); }
+      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64) }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       e.busy = false;
       if (!r.ok) { e.message = { text: r.error, error: true }; cx.notify(); return; }
@@ -886,6 +886,17 @@ export default class FilerPro extends View {
       cx.notify();
       if (this.edit === e && !e.dirty && !e.message.error) after?.(cx);
     });
+  }
+
+  // Local saves (lib/textedit.js uses this only without a machine): the base64 goes into a file in a private folder under
+  // appHome, so only its path is in argv, where other users could read it. The save script removes the file.
+  async stageLocal(b64) {
+    const dir = `${appHome()}/filer-pro/edit`;
+    const r = await exec("sh", ["-c", 'umask 077 && mkdir -p "$1" && chmod 700 "$1"', "stage", dir]);
+    if (r.code !== 0) throw new Error(r.stderr || "Cannot create the staging folder");
+    const path = `${dir}/${this.newId()}.b64`;
+    await fs.writeFile(path, b64);
+    return path;
   }
 
   // Save a Copy…: the name form is shown above the editor (an InputState is created here, in a click).
@@ -916,7 +927,7 @@ export default class FilerPro extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode }); }
+      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode, stage: (b64) => this.stageLocal(b64) }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       c.busy = false;
       if (!r.ok) { c.error = r.error; cx.notify(); return; }

@@ -82,12 +82,17 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
     exec: async (cmd, args, opts = {}) => {
       log.execs.push({ cmd, args, opts });
       if (cmd !== "sh") return { code: 1, stdout: "", stderr: "" };
-      const r = spawnSync("sh", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env });
+      // The fake appHome "/app" lives in the scratch folder for the scripts (the local save stages its text there).
+      const real = args.map((a) => (a.startsWith("/app/") ? path.join(base, a) : a));
+      const r = spawnSync("sh", real, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env });
       return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
     openOverlay: (o) => { log.overlays.push(o); return "ov1"; }, closeOverlay: (id) => log.closed.push(id),
     notify: (n) => log.notes.push(n), watchFolder: never, nextCommand: never, layout: () => ({}), pickFolder: async () => null, run: () => {},
-    fsWrite: async (p, text) => { log.writes.push({ p, text }); }, fsMkdir: async (p) => { log.mkdirs.push(p); }, fsUnlink: async (p) => { log.unlinks.push(p); },
+    fsWrite: async (p, text) => {
+      log.writes.push({ p, text });
+      if (p.startsWith("/app/filer-pro/edit/")) fs.writeFileSync(path.join(base, p), text);
+    }, fsMkdir: async (p) => { log.mkdirs.push(p); }, fsUnlink: async (p) => { log.unlinks.push(p); },
     editorNew: (o) => {
       const s = {
         opts: o, v: o.value, handlers: {}, released: false, sets: [],
@@ -587,4 +592,34 @@ test("on a machine the probe and the save carry the machine", async () => {
   const scripts = w.log.execs.filter((e) => e.cmd === "sh" && e.args[0] === "-c" && ["probe", "begin", "commit"].includes(e.args[2]));
   assert.ok(scripts.some((e) => e.args[2] === "probe") && scripts.some((e) => e.args[2] === "commit"));
   for (const e of scripts) assert.equal(e.opts.on, "box", e.args[2]);
+});
+
+test("a local save stages the text in a private file under appHome: no content in any argv", async () => {
+  const w = world();
+  w.put("a.txt", "one\n", 0o600);
+  const self = await panel(w);
+  await editing(w, self);
+  const secret = "TOKEN=" + "s3cr3t".repeat(50) + "\n";
+  type(w, lastState(w), secret);
+  click(render(self, w), "files-save", w.cx);
+  await settle();
+  assert.equal(w.read("a.txt").toString(), secret);
+  const b64 = Buffer.from(secret).toString("base64");
+  for (const e of w.log.execs) for (const a of e.args) assert.ok(!a.includes(b64.slice(0, 40)), `content in argv of ${e.args[2]}`);
+  assert.ok(w.log.writes.some((x) => x.p.startsWith("/app/filer-pro/edit/") && x.text === b64), "staged under appHome");
+  const stage = path.join(w.base, "app", "filer-pro", "edit");
+  assert.equal(fs.statSync(stage).mode & 0o777, 0o700);
+  assert.deepEqual(fs.readdirSync(stage), [], "the save script removed the staged file");
+});
+
+test("on a machine nothing is staged locally", async () => {
+  const w = world({ machine: "box" });
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  type(w, lastState(w), "two\n");
+  click(render(self, w), "files-save", w.cx);
+  await settle();
+  assert.equal(w.read("a.txt").toString(), "two\n");
+  assert.equal(w.log.writes.some((x) => x.p.startsWith("/app/filer-pro/edit/")), false);
 });
