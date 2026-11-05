@@ -139,7 +139,9 @@ describe("probeFile on real files, local and through the fake ssh", () => {
     const { files } = scratch();
     put(path.join(files, "a"), "hi");
     const r = spawnSync("bash", ["-c", PROBE_SCRIPT, "probe", path.join(files, "a")], { encoding: "utf8" });
-    assert.equal(r.stdout, `file y 644 2 n\n${Buffer.from("hi").toString("base64")}\n`);
+    // GNU prints 644, BSD %p 100644 (file type in front); parseProbe makes both 644.
+    assert.match(r.stdout, new RegExp(`^file y (100)?644 2 n\\n${Buffer.from("hi").toString("base64")}\\n$`));
+    assert.equal(parseProbe(r.stdout).mode, "644");
   });
 
   test("an exec that rejects or fails gives a plain reason", async () => {
