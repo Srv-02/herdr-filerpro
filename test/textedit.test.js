@@ -7,7 +7,7 @@ import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
 import {
   EDIT_MAX_BYTES, CHUNK_CHARS, PROBE_SCRIPT, BEGIN_SCRIPT, BEGIN_FILE_SCRIPT, COPY_SCRIPT, APPEND_SCRIPT, COMMIT_SCRIPT, CLEAN_SCRIPT,
-  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, uploadChunks, probeFile, saveFile, saveCopy, copyName, mirrorName,
+  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, uploadChunks, probeFile, saveFile, saveCopy, copyName, mirrorName, octalMode,
 } from "../mods/filer-pro/lib/textedit.js";
 
 const FAKE_SSH = path.resolve(import.meta.dirname, "fake", "ssh");
@@ -809,4 +809,47 @@ test("mirrorName keeps only safe characters and never starts with a dot", () => 
   assert.equal(mirrorName("ab12", "a\\b:c\u0001/d"), "ab12-a_b_c__d.txt");
   assert.equal(mirrorName("ab12", ""), "ab12-file.txt");
   assert.equal(mirrorName("ab12", "x".repeat(300)).length, "ab12-".length + 80 + 4);
+});
+
+describe("mode with special bits, the same on GNU and BSD stat", () => {
+  test("octalMode: 3 digits, 4 when a special bit is set, file type masked off", () => {
+    assert.equal(octalMode("644"), "644");
+    assert.equal(octalMode("4755"), "4755");
+    assert.equal(octalMode("100644"), "644");
+    assert.equal(octalMode("104755"), "4755");
+    assert.equal(octalMode("102775"), "2775");
+    assert.equal(octalMode("0600"), "600");
+    assert.equal(octalMode("41777"), "1777");
+  });
+
+  test("a setuid file reports 4755 with this machine's real stat (GNU on Linux, BSD on macOS)", async () => {
+    const { root, files } = scratch();
+    const { exec } = makeExec(root);
+    const p = path.join(files, "tool");
+    put(p, Buffer.from("echo\n"), 0o4755);
+    if ((fs.statSync(p).mode & 0o7777) !== 0o4755) return; // a file system that drops setuid (nosuid mount)
+    for (const on of [null, "box"]) assert.equal((await open(exec, on, p)).mode, "4755");
+  });
+
+  test("a BSD stat (stubbed: no -c, %p with the file type) gives the same mode as GNU", async () => {
+    const { root, files } = scratch();
+    const bin = path.join(root, "bsd");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "stat"), [
+      "#!/bin/sh",
+      'case $1 in -c*) exit 1 ;; esac',
+      'case $1 in -f%p) echo 104755 ;; -f%z) wc -c < "$2" | tr -d " " ;; -f) echo 1:2 ;; *) exit 1 ;; esac',
+      "",
+    ].join("\n"), { mode: 0o755 });
+    const { exec, calls } = makeExec(root, { pathPrefix: bin });
+    const p = path.join(files, "f");
+    put(p, Buffer.from("abc\n"), 0o644);
+    for (const on of [null, "box"]) {
+      const info = await open(exec, on, p);
+      assert.equal(info.mode, "4755", on ?? "local");
+      assert.equal(info.size, 4);
+      assert.equal(statusText(info), "UTF-8 · LF · 4755");
+    }
+    assert.ok(calls.length > 0);
+  });
 });

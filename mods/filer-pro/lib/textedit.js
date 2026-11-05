@@ -42,11 +42,21 @@ else
 fi
 `;
 
-// ino <path>: device and inode of the path itself (not a link target), GNU or BSD stat.
+// stat in the machine's dialect, detected once (GNU stat -c, else BSD/macOS stat -f), for the path itself (no -L):
+// st_mode <path> prints the permission bits with the special bits (GNU %a, e.g. 4755; BSD %p, e.g. 104755 with the file
+// type in front, which parseProbe masks off), st_size <path> the size in bytes, ino <path> device:inode.
+const STAT = String.raw`
+if stat -c%i / >/dev/null 2>&1; then
+  st_mode() { stat -c%a "$1"; }; st_size() { stat -c%s "$1"; }; ino() { stat -c '%d:%i' "$1"; }
+else
+  st_mode() { stat -f%p "$1"; }; st_size() { stat -f%z "$1"; }; ino() { stat -f '%d:%i' "$1"; }
+fi
+`;
+
 // open_dir <path>: true when the folder of <path> is writable by everyone without the sticky bit, so any user could
 // swap the file for a link between our check and our write. Such folders are refused.
 const GUARDS = String.raw`
-if stat -c%i / >/dev/null 2>&1; then ino() { stat -c '%d:%i' "$1"; }; else ino() { stat -f '%d:%i' "$1"; }; fi
+${STAT}
 open_dir() { [ -n "$(find "$(dirname -- "$1")" -prune -perm -0002 ! -perm -1000 2>/dev/null)" ]; }
 `;
 
@@ -65,11 +75,8 @@ if [ -L "$p" ]; then echo link; exit 0; fi
 if [ -d "$p" ]; then echo dir; exit 0; fi
 if [ ! -e "$p" ]; then echo missing; exit 0; fi
 if [ ! -f "$p" ]; then echo special; exit 0; fi
-if stat -c%a / >/dev/null 2>&1; then
-  m=$(stat -c%a "$p"); s=$(stat -c%s "$p")
-else
-  m=$(stat -f%Lp "$p"); s=$(stat -f%z "$p")
-fi
+${STAT}
+m=$(st_mode "$p"); s=$(st_size "$p")
 w=n
 [ -w "$p" ] && w=y
 o=n
@@ -198,7 +205,14 @@ export function parseProbe(stdout) {
     bytes = base64ToBytes(line);
     if (bytes === null) return bad;
   }
-  return { kind: "file", writable: m[1] === "y", mode: m[2], size, bytes, openDir: m[4] === "y" };
+  return { kind: "file", writable: m[1] === "y", mode: octalMode(m[2]), size, bytes, openDir: m[4] === "y" };
+}
+
+// The permission bits as shown in the status line: 644, or 4 digits (4755) when a special bit is set. The same rule as
+// formatOctal of the Permissions dialog (#23), so both show one mode; BSD's %p brings the file type in front (100644).
+export function octalMode(text) {
+  const mode = parseInt(text, 8) & 0o7777;
+  return mode.toString(8).padStart(mode & 0o7000 ? 4 : 3, "0");
 }
 
 const REFUSED = {
