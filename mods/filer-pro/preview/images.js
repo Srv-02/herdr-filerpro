@@ -7,6 +7,7 @@ import { extOf } from "../lib/langs.js";
 import { badSpelling } from "../lib/fileops.js";
 import { sshTarget } from "../lib/machines.js";
 import { baseName } from "../lib/names.js";
+import { numbers } from "../lib/settings.js";
 
 export const MAX_IMAGE = 20 * 1024 * 1024, CACHE_LIMIT = 50 * 1024 * 1024, DIR = "data/filer-pro/images";
 // Files over a size limit that the user lifted with Load: one folder per cache key, outside the image cache.
@@ -31,13 +32,27 @@ export const PROBE_SCRIPT = [
 // file (and a part file is never counted by the cache listing). Remote: one ssh call with the script on stdin
 // (as transfer.sh does: only the constant "sh -s" meets the login shell, the path is quoted into the script)
 // and the bytes on stdout, redirected into the part file by this local shell: binary-safe, no 8 MiB text limit
-// of exec, and exec's 30 s limit applies. The cache's mtime order is "last written".
+// of exec, and exec's 30 s limit applies. The cache's mtime order is "last written". Optional <timeout> <interval>
+// <count> after <target> set ConnectTimeout, ServerAliveInterval and ServerAliveCountMax (settings ssh_*, see sshArgs);
+// as in transfer.sh only digits count, anything else means the default, and without them the ssh command line is the
+// one of before.
 const CHECKED = '{ [ "$(wc -c < "$2")" -eq "$4" ] && mv -f -- "$2" "$3" || { echo "file changed while loading" >&2; exit 1; }; }';
 export const FETCH_LOCAL = `mkdir -p "\${3%/*}" && head -c $(( $4 + 1 )) < "$1" > "$2" && ${CHECKED}`;
 const QUOTE = String.raw`sed "s/'/'\\\\''/g"`; // ' becomes '\'' (the trailing "." keeps a final newline through $(...))
-export const FETCH_SSH = `mkdir -p "\${3%/*}" && q=$(printf '%s.' "$1" | ${QUOTE}) && ` +
+export const FETCH_SSH = `num() { case $1 in ''|*[!0-9]*) R=$2 ;; *) R=$1 ;; esac; }; ` +
+  `num "\${6-}" 15; ct=$R; num "\${7-}" 15; ai=$R; num "\${8-}" 4; ac=$R; ` +
+  `mkdir -p "\${3%/*}" && q=$(printf '%s.' "$1" | ${QUOTE}) && ` +
   `printf "set -- '%s'\\n{ head -c %s -- \\"\\$1\\"\\n} </dev/null\\n" "\${q%.}" "$(( $4 + 1 ))" | ` +
-  `ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -- "$5" "sh -s" > "$2" && ${CHECKED}`;
+  `ssh -o BatchMode=yes -o "ConnectTimeout=$ct" -o "ServerAliveInterval=$ai" -o "ServerAliveCountMax=$ac" -- "$5" "sh -s" > "$2" && ${CHECKED}`;
+// The extra FETCH_SSH arguments for the SSH settings (ssh_connect_timeout, ssh_alive_interval, ssh_alive_count):
+// none when all equal the defaults (the argv of before), else all three; a value that is no whole number >= 0 counts
+// as its default. Like sshEnv in lib/jobs.js for transfer.sh.
+const SSH_KEYS = ["ssh_connect_timeout", "ssh_alive_interval", "ssh_alive_count"];
+export function sshArgs(ssh) {
+  const plain = numbers(null);
+  const vals = SSH_KEYS.map((k) => Number.isInteger(ssh?.[k]) && ssh[k] >= 0 ? ssh[k] : plain[k]);
+  return vals.every((v, i) => v === plain[SSH_KEYS[i]]) ? [] : vals.map(String);
+}
 // `x <dir>`: one `ls -l` line per entry, last written first. A single process, so thousands of files stay fast.
 export const LIST_SCRIPT = 'cd -- "$1" 2>/dev/null && ls -lnt';
 // `x <dir>`: the names in the loads folder, one per line.
@@ -275,7 +290,8 @@ export async function resolveFile({ exec, path }) {
 // `what` names the thing in error texts. fetch() returns null or { error } (`timeout: true` after the 30 s limit; see timeoutHint).
 export function createCache({ exec, hc, unlink, rand = () => Math.random().toString(36).slice(2, 8), what = "image" }) {
   const cannot = (e) => ({ error: `Cannot load this ${what}: ${oneLine(e?.message ?? e) ?? "unknown error"}` });
-  async function fetch({ on, path, size, file }) {
+  // ssh: the SSH settings of the open file (see sshArgs), per call, so a changed setting applies to the next fetch.
+  async function fetch({ on, path, size, file, ssh }) {
     const part = `${file}.${rand()}.part`;
     let target = null, script = FETCH_LOCAL;
     if (on) {
@@ -285,7 +301,7 @@ export function createCache({ exec, hc, unlink, rand = () => Math.random().toStr
       target = t.target; script = FETCH_SSH;
     }
     let r;
-    try { r = await exec("sh", ["-c", script, "x", path, part, file, String(size), ...(target ? [target] : [])], { on: null }); }
+    try { r = await exec("sh", ["-c", script, "x", path, part, file, String(size), ...(target ? [target, ...sshArgs(ssh)] : [])], { on: null }); }
     catch (e) { await unlink(part).catch(() => {}); return timedOut(e) ? { error: `${on ? "Download" : "Copy"} timed out (30 s limit)`, timeout: true } : cannot(e); }
     if (r.code !== 0) { await unlink(part).catch(() => {}); return cannot(r.stderr || `exit code ${r.code}`); }
     return null;
@@ -304,8 +320,8 @@ export function createImages({ exec, hc, exists, unlink, appHome, rand = () => M
   // { kind: "image", path, width, height } (path relative to appHome) or { error }; `final` means: no text fallback.
   // A hint with `load` carries `key` and `name`; Load itself is a transfer job (main.js), then load() finds its copy.
   // maxImage, cacheLimit: bytes from the settings (image_max_mb, image_cache_mb), svgCheck: svg_check; per call, so a
-  // changed setting applies to the next file.
-  async function load({ on, path, maxImage = MAX_IMAGE, cacheLimit = CACHE_LIMIT, svgCheck = true }) {
+  // changed setting applies to the next file. ssh: the SSH settings for the download from a machine (cache.fetch).
+  async function load({ on, path, maxImage = MAX_IMAGE, cacheLimit = CACHE_LIMIT, svgCheck = true, ssh }) {
     if (badSpelling(path)) return { error: 'Path must not contain ".", ".." or "//"' };
     const ext = extOf(path), cannot = (e) => ({ error: `Cannot load this image: ${oneLine(e?.message ?? e) ?? "unknown error"}` });
     let probe;
@@ -329,7 +345,7 @@ export function createImages({ exec, hc, exists, unlink, appHome, rand = () => M
     if (size > maxImage) return { error: `File is larger than ${mb(maxImage)} MB`, load: true, final: true, key, name };
     const dir = `${appHome()}/${DIR}`, file = `${dir}/${name}`;
     if (!(await exists(file))) {
-      const r = await cache.fetch({ on, path, size, file });
+      const r = await cache.fetch({ on, path, size, file, ssh });
       if (r) return timeoutHint(r, on, key, name);
       await cache.evict(dir, [name], cacheLimit);
     }

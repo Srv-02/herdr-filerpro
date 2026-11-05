@@ -5,7 +5,7 @@ import { mkTmp } from "./tmp-helper.js";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createImages, sniff, dimensions, cacheKey, evictPlan, fit, MAX_IMAGE, CACHE_LIMIT, DIR, PROBE_SCRIPT, FETCH_LOCAL, FETCH_SSH, LIST_SCRIPT, LOADS, loadDir, stalePlan, clearLoads, resolveFile, previewJob, loadOutcome, LOADS_LIST_SCRIPT } from "../mods/filer-pro/preview/images.js";
+import { createImages, sniff, dimensions, cacheKey, evictPlan, fit, MAX_IMAGE, CACHE_LIMIT, DIR, PROBE_SCRIPT, FETCH_LOCAL, FETCH_SSH, sshArgs, LIST_SCRIPT, LOADS, loadDir, stalePlan, clearLoads, resolveFile, previewJob, loadOutcome, LOADS_LIST_SCRIPT } from "../mods/filer-pro/preview/images.js";
 
 const APP = "/Users/m/.config/herdr-app";
 const ascii = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -476,10 +476,10 @@ test("more than 100 megapixels: a hint, nothing is copied", async () => {
 async function withFakeSsh(fn) {
   const dir = await mkTmp("filer-pro-ssh-"), oldPath = process.env.PATH;
   try {
-    await fs.writeFile(path.join(dir, "ssh"), '#!/bin/sh\nshift $(( $# - 1 ))\ncase "$1" in "sh -s") ;; *) exit 9 ;; esac\nsh -s | tee "$SEEN"\n', { mode: 0o755 });
-    process.env.PATH = `${dir}:${oldPath}`; process.env.SEEN = path.join(dir, "seen");
+    await fs.writeFile(path.join(dir, "ssh"), '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$SSH_ARGS"\nshift $(( $# - 1 ))\ncase "$1" in "sh -s") ;; *) exit 9 ;; esac\nsh -s | tee "$SEEN"\n', { mode: 0o755 });
+    process.env.PATH = `${dir}:${oldPath}`; process.env.SEEN = path.join(dir, "seen"); process.env.SSH_ARGS = path.join(dir, "ssh-args");
     return await fn(dir);
-  } finally { process.env.PATH = oldPath; delete process.env.SEEN; await fs.rm(dir, { recursive: true, force: true }); }
+  } finally { process.env.PATH = oldPath; delete process.env.SEEN; delete process.env.SSH_ARGS; await fs.rm(dir, { recursive: true, force: true }); }
 }
 test("remote fetch: a file that grows is cut at size + 1 bytes on the wire, binary-safe, odd names", async () => {
   await withFakeSsh(async (dir) => {
@@ -497,6 +497,44 @@ test("remote fetch: a file that grows is cut at size + 1 bytes on the wire, bina
     assert.deepEqual(await fs.readFile(file), data);
     await assert.rejects(fs.access(out), "the part file is gone after the move");
   });
+});
+// Settings: ssh_connect_timeout, ssh_alive_interval and ssh_alive_count reach the ssh command line as in transfer.sh
+// (test/transfer.test.js); anything but digits falls back to the default, so no value can become an ssh option.
+test("remote fetch: the SSH options come from the settings; non-digit values fall back to the defaults", async () => {
+  await withFakeSsh(async (dir) => {
+    const src = path.join(dir, "pic.png"), out = path.join(dir, "out.part"), file = path.join(dir, "cache", "out.png");
+    await fs.writeFile(src, "abc");
+    const once = async (...opts) => {
+      const r = await realExec("sh", ["-c", FETCH_SSH, "x", src, out, file, "3", "u@box", ...opts]);
+      assert.equal(r.code, 0, r.stderr);
+      return (await fs.readFile(path.join(dir, "ssh-args"), "utf8")).trim();
+    };
+    const plain = "-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -- u@box sh -s";
+    assert.equal(await once(), plain, "without options: the command line of before, byte for byte");
+    assert.equal(await once("30", "5", "9"), "-o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=5 -o ServerAliveCountMax=9 -- u@box sh -s");
+    const bad = await once("15 -o ProxyCommand=x", "", "-1");
+    assert.equal(bad, plain);
+    assert.doesNotMatch(bad, /ProxyCommand/);
+  });
+});
+
+test("sshArgs: no arguments for the defaults, three whole numbers otherwise, anything else as its default", () => {
+  assert.deepEqual(sshArgs(undefined), []);
+  assert.deepEqual(sshArgs({ ssh_connect_timeout: 15, ssh_alive_interval: 15, ssh_alive_count: 4 }), []);
+  assert.deepEqual(sshArgs({ ssh_connect_timeout: 30, ssh_alive_interval: 5, ssh_alive_count: 9 }), ["30", "5", "9"]);
+  assert.deepEqual(sshArgs({ ssh_connect_timeout: 30 }), ["30", "15", "4"]);
+  assert.deepEqual(sshArgs({ ssh_connect_timeout: 2.5, ssh_alive_interval: "7 -o X=y", ssh_alive_count: -1 }), []);
+});
+
+test("remote load: non-default SSH settings travel to the fetch, defaults leave its argv unchanged", async () => {
+  const name = `${cacheKey({ on: "box", path: "/home/u/pic.png", size: 29, mtime: 1 })}.png`, file = `${APP}/${DIR}/${name}`;
+  const f = fake((c) => c.args[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(29, 1, PNG(300, 200)), stderr: "" } : { code: 0, stdout: "", stderr: "" });
+  const base = ["x", "/home/u/pic.png", `${file}.r1.part`, file, "29", "u@box"];
+  await f.make().load({ on: "box", path: "/home/u/pic.png", ssh: { ssh_connect_timeout: 15, ssh_alive_interval: 15, ssh_alive_count: 4 } });
+  assert.deepEqual(f.calls.find((c) => c.args?.[1] === FETCH_SSH).args.slice(2), base);
+  f.calls.length = 0;
+  await f.make().load({ on: "box", path: "/home/u/pic.png", ssh: { ssh_connect_timeout: 30, ssh_alive_interval: 5, ssh_alive_count: 9 } });
+  assert.deepEqual(f.calls.find((c) => c.args?.[1] === FETCH_SSH).args.slice(2), [...base, "30", "5", "9"]);
 });
 test("remote fetch failure: load removes the part file", async () => {
   await withFakeSsh(async (dir) => {
