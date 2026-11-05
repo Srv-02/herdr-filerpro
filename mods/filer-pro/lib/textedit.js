@@ -6,7 +6,8 @@
 //
 // Remote exec probably joins argv into ONE string for the login shell, so every call stays far below
 // the Linux limit of 128 KiB per argument: one base64 chunk of at most CHUNK_CHARS per call, local or remote.
-// The text is visible in `ps` on that machine for the moment of a call.
+// On a machine the text is visible in `ps` there for the moment of a call (exec has no stdin); local saves pass a
+// stage() that writes it into a private file instead, so only a path is in argv.
 
 import { base64ToBytes, bytesToBase64, decodeUtf8, encodeUtf8, sha256Hex } from "./textcodec.js";
 import { validateName } from "./fileops.js";
@@ -41,12 +42,21 @@ else
 fi
 `;
 
+// ino <path>: device and inode of the path itself (not a link target), GNU or BSD stat.
+// open_dir <path>: true when the folder of <path> is writable by everyone without the sticky bit, so any user could
+// swap the file for a link between our check and our write. Such folders are refused.
+const GUARDS = String.raw`
+if stat -c%i / >/dev/null 2>&1; then ino() { stat -c '%d:%i' "$1"; }; else ino() { stat -f '%d:%i' "$1"; }; fi
+open_dir() { [ -n "$(find "$(dirname -- "$1")" -prune -perm -0002 ! -perm -1000 2>/dev/null)" ]; }
+`;
+
 // Where uploads and backups live on the machine: private, outside any watched folder.
 const CACHE = String.raw`
 d=@{XDG_CACHE_HOME:-$HOME/.cache}/filer-pro/edit
 `;
 
-// Output line 1: link | dir | missing | special | file <w> <mode> <size>. For a file of at most EDIT_MAX_BYTES line 2 is
+// Output line 1: link | dir | missing | special | file <w> <mode> <size> <open>, open = y when the folder is writable by
+// everyone without the sticky bit. For a file of at most EDIT_MAX_BYTES line 2 is
 // its base64 without line breaks (empty for an empty file). `head -c` bounds the read if the file grows meanwhile.
 export const PROBE_SCRIPT = sh(String.raw`
 p=$1
@@ -62,7 +72,9 @@ else
 fi
 w=n
 [ -w "$p" ] && w=y
-echo "file $w $m $s"
+o=n
+[ -n "$(find "$(dirname -- "$p")" -prune -perm -0002 ! -perm -1000 2>/dev/null)" ] && o=y
+echo "file $w $m $s $o"
 if [ "$s" -le ${EDIT_MAX_BYTES} ]; then
   head -c ${EDIT_MAX_BYTES + 1} < "$p" | base64 | tr -d '\n\r'
   echo
@@ -79,6 +91,18 @@ t=$(mktemp "$d/edit.XXXXXX") || { echo nocache; exit 1; }
 if printf %s "$1" | base64 $dec > "$t"; then echo "$t"; else rm -f "$t"; echo upload; exit 1; fi
 `);
 
+// begin-file <src>: like begin, but the base64 comes from a staged file (local saves: no content in argv, where other
+// users could read it in ps). The staged file is removed in any case.
+export const BEGIN_FILE_SCRIPT = sh(String.raw`
+umask 077
+src=$1
+${CACHE}
+mkdir -p "$d" && chmod 700 "$d" || { rm -f -- "$src"; echo nocache; exit 1; }
+${DECODER}
+t=$(mktemp "$d/edit.XXXXXX") || { rm -f -- "$src"; echo nocache; exit 1; }
+if tr -d '\n\r' < "$src" | base64 $dec > "$t"; then rm -f -- "$src"; echo "$t"; else rm -f -- "$t" "$src"; echo upload; exit 1; fi
+`);
+
 // append <tmp> <b64>: appends one decoded chunk to the upload file.
 export const APPEND_SCRIPT = sh(String.raw`
 case $1 in */filer-pro/edit/edit.*) ;; *) echo upload; exit 1 ;; esac
@@ -89,16 +113,19 @@ printf %s "$2" | base64 $dec >> "$1" || { echo upload; exit 1; }
 
 // commit <tmp> <path> <oldHash> <newHash>: replaces the content of <path> in place (same inode, mode, owner, links),
 // but only if the upload is intact (newHash) and the file still has the content the editor started from (oldHash).
-// Prints one word on the first line: ok | link | notfile | nowrite | upload | changed | nobackup | nohash | restored | broken.
+// Prints one word on the first line: ok | link | notfile | nowrite | unsafe | upload | changed | nobackup | nohash | restored | broken.
 // restored: line 2 = upload file (the file is as before). broken: line 2 = backup, line 3 = upload file.
 export const COMMIT_SCRIPT = sh(String.raw`
 t=$1; p=$2; old=$3; new=$4
 case $p in -*) p=./$p ;; esac
 ${HASHER}
 ${CACHE}
+${GUARDS}
 if [ -L "$p" ]; then echo link; exit 2; fi
 if [ ! -f "$p" ]; then echo notfile; exit 3; fi
 if [ ! -w "$p" ]; then echo nowrite; exit 4; fi
+if open_dir "$p"; then echo unsafe; exit 11; fi
+i1=$(ino "$p")
 case $t in */filer-pro/edit/edit.*) ;; *) echo upload; exit 6 ;; esac
 h=$(sum < "$t")
 if [ "$h" != "$new" ]; then echo upload; exit 6; fi
@@ -107,6 +134,8 @@ if [ "$h" != "$old" ]; then echo changed; exit 5; fi
 umask 077
 bak=$(mktemp "$d/bak.XXXXXX") || { echo nobackup; exit 7; }
 if ! cp -p "$p" "$bak"; then rm -f "$bak"; echo nobackup; exit 7; fi
+# The same file as hashed, still not a link: checked again right before the write.
+if [ -L "$p" ] || [ "$(ino "$p")" != "$i1" ]; then rm -f "$bak"; echo changed; exit 5; fi
 if cat "$t" > "$p"; then
   rm -f "$t" "$bak"
   echo ok
@@ -121,23 +150,24 @@ printf '%s\n%s\n%s\n' broken "$bak" "$t"
 exit 9
 `);
 
-// copy <tmp> <dest> <newHash> <mode>: creates a NEW file (private, exclusive), then sets the mode. Never overwrites.
-// Prints ok | exists | upload | failed | nohash.
+// copy <tmp> <dest> <newHash> <mode>: creates a NEW file (exclusive, set -C) under a umask made from <mode>, so it gets the
+// original's read and write bits from the start and no chmod follows (a chmod by path could hit a link swapped in).
+// Execute bits are not copied. Never overwrites. Prints ok | exists | unsafe | upload | failed | nohash.
 export const COPY_SCRIPT = sh(String.raw`
 t=$1; p=$2; new=$3; mode=$4
 case $p in -*) p=./$p ;; esac
 ${HASHER}
+${GUARDS}
 case $t in */filer-pro/edit/edit.*) ;; *) echo upload; exit 6 ;; esac
 h=$(sum < "$t")
 if [ "$h" != "$new" ]; then echo upload; exit 6; fi
 case $mode in ""|*[!0-7]*) mode=600 ;; esac
-umask 077
 if [ -e "$p" ] || [ -L "$p" ]; then echo exists; exit 2; fi
-if ! ( set -C; cat "$t" > "$p" ) 2>/dev/null; then
+if open_dir "$p"; then echo unsafe; exit 11; fi
+if ! ( umask "$(printf '%o' $(( 0777 & ~0$mode )))" && set -C && cat "$t" > "$p" ) 2>/dev/null; then
   if [ -e "$p" ] || [ -L "$p" ]; then echo exists; exit 2; fi
   echo failed; exit 3
 fi
-if ! chmod "$mode" "$p"; then rm -f "$p"; echo failed; exit 3; fi
 rm -f "$t"
 echo ok
 `);
@@ -158,7 +188,7 @@ export function parseProbe(stdout) {
   if (head === "link" || head === "dir" || head === "missing" || head === "special") {
     return { kind: head, writable: false, mode: null, size: 0, bytes: null };
   }
-  const m = /^file (y|n) ([0-7]+) (\d+)$/.exec(head);
+  const m = /^file (y|n) ([0-7]+) (\d+)(?: (y|n))?$/.exec(head);
   if (!m) return bad;
   const size = Number(m[3]);
   let bytes = null;
@@ -168,7 +198,7 @@ export function parseProbe(stdout) {
     bytes = base64ToBytes(line);
     if (bytes === null) return bad;
   }
-  return { kind: "file", writable: m[1] === "y", mode: m[2], size, bytes };
+  return { kind: "file", writable: m[1] === "y", mode: m[2], size, bytes, openDir: m[4] === "y" };
 }
 
 const REFUSED = {
@@ -210,6 +240,7 @@ export function checkEditable(probe, { maxChars = Infinity } = {}) {
   if (crlf && /(^|[^\r])\n/.test(decoded)) return no("Mixed line endings");
   const mode = String(probe.mode ?? "");
   if (!probe.writable || (parseInt(mode, 8) & 0o222) === 0) return no("No write permission");
+  if (probe.openDir) return no("Folder writable by everyone");
   return { ok: true, info: { bytes: b, text: crlf ? decoded.replaceAll("\r\n", "\n") : decoded, eol: crlf ? "CRLF" : "LF", mode, size: probe.size } };
 }
 
@@ -318,7 +349,9 @@ const lines = (s) => String(s ?? "").split("\n").map((l) => l.trim());
 const cannotReach = (e, on) => `Cannot reach the machine: ${explainError(String(e?.message ?? e), on)}`;
 
 // Uploads bytes into a fresh private file on the machine. -> { tmp } | { error }. The file is removed on failure.
-async function upload(exec, on, bytes) {
+// stage(b64) (local only): writes the base64 into a private file and resolves with its path, so the content never
+// appears in argv; without it (on a machine: exec has no stdin) the chunks travel as arguments.
+async function upload(exec, on, bytes, stage) {
   const chunks = uploadChunks(bytes);
   let tmp = null;
   const fail = async (error) => {
@@ -326,7 +359,12 @@ async function upload(exec, on, bytes) {
     return { error };
   };
   try {
-    const res = await exec("sh", ["-c", BEGIN_SCRIPT, "begin", chunks[0]], { on });
+    let src = null;
+    if (stage && on == null) {
+      try { src = await stage(bytesToBase64(bytes)); } catch { src = null; }
+      if (typeof src !== "string" || !src.startsWith("/")) return { error: "Could not prepare the text for saving" };
+    }
+    const res = src ? await exec("sh", ["-c", BEGIN_FILE_SCRIPT, "begin-file", src], { on }) : await exec("sh", ["-c", BEGIN_SCRIPT, "begin", chunks[0]], { on });
     if (res.code !== 0) {
       const word = firstLine(res.stdout);
       if (word === "nocache") return { error: "Cannot create the private upload folder on the machine" };
@@ -335,7 +373,7 @@ async function upload(exec, on, bytes) {
     }
     tmp = firstLine(res.stdout);
     if (!tmp.startsWith("/")) return await fail("Could not upload the text");
-    for (let i = 1; i < chunks.length; i++) {
+    for (let i = 1; !src && i < chunks.length; i++) {
       const r = await exec("sh", ["-c", APPEND_SCRIPT, "append", tmp, chunks[i]], { on });
       if (r.code !== 0) return await fail(explainError(r.stderr, on, "Could not upload the text"));
     }
@@ -356,11 +394,11 @@ async function clean(exec, on, tmp) {
 // Writes bytes into the open file in place. info is the baseline the editor started from (info.bytes = what the file
 // held). -> { ok: true, bytes, hash } (the sent bytes are the new baseline) | { ok: false, error, kept? }.
 // kept: a path on the machine that still holds the text; backup: the backup of the original (only after "may be incomplete").
-export async function saveFile({ exec, on = null, path, info, bytes }) {
+export async function saveFile({ exec, on = null, path, info, bytes, stage }) {
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
   const oldHash = sha256Hex(info.bytes);
   const hash = sha256Hex(bytes);
-  const up = await upload(exec, on, bytes);
+  const up = await upload(exec, on, bytes, stage);
   if (up.error) return { ok: false, error: up.error };
   const tmp = up.tmp;
   let res;
@@ -383,6 +421,7 @@ export async function saveFile({ exec, on = null, path, info, bytes }) {
     link: "The file is now a symbolic link; nothing was written",
     notfile: "The path is no longer a regular file; nothing was written",
     nowrite: "No write permission; nothing was written",
+    unsafe: "The folder is writable by everyone; nothing was written",
     upload: "The upload was damaged on the way; nothing was written, try again",
     nobackup: "Could not make a backup first; nothing was written",
     nohash: "The machine has no sha256 tool (sha256sum, shasum or openssl)",
@@ -392,14 +431,14 @@ export async function saveFile({ exec, on = null, path, info, bytes }) {
 
 // Creates a new file <dir>/<name> with the bytes and the given mode (octal string). Never replaces anything.
 // -> { ok: true, path, bytes, hash } | { ok: false, error }.
-export async function saveCopy({ exec, on = null, dir, name, bytes, mode }) {
+export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage }) {
   const bad = validateName(name ?? "");
   if (bad) return { ok: false, error: bad };
   if (typeof dir !== "string" || !dir.startsWith("/")) return { ok: false, error: "path must be absolute" };
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
   const dest = joinPath(dir, name);
   const hash = sha256Hex(bytes);
-  const up = await upload(exec, on, bytes);
+  const up = await upload(exec, on, bytes, stage);
   if (up.error) return { ok: false, error: up.error };
   let res;
   try {
@@ -412,6 +451,7 @@ export async function saveCopy({ exec, on = null, dir, name, bytes, mode }) {
   await clean(exec, on, up.tmp);
   const known = {
     exists: "A file with that name already exists",
+    unsafe: "The folder is writable by everyone; nothing was written",
     upload: "The upload was damaged on the way; nothing was written, try again",
     failed: "Could not create the copy",
     nohash: "The machine has no sha256 tool (sha256sum, shasum or openssl)",
