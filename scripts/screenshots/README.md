@@ -41,7 +41,7 @@ Crops (`cards/*.png`) and the browser profile are ignored by git: they hold wind
    ```sh
    scripts/screenshots/render.sh scripts/screenshots/cards/edit-terminal.html screenshots/edit-terminal.png 880 651
    scripts/screenshots/render.sh scripts/screenshots/cards/editors.html screenshots/editors.png 880 660
-   scripts/screenshots/render.sh scripts/screenshots/cards/settings.html screenshots/settings.png 880 540
+   scripts/screenshots/render.sh scripts/screenshots/cards/settings.html screenshots/settings.png 880 646
    ```
 
    A panel cut off at the bottom gets the class `cut`, which draws its border again. A crop wider than the card (as in `edit-terminal.html`) is scaled to the card width; end it between two text lines. Open the result and check it once more before you commit it.
