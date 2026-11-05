@@ -31,7 +31,7 @@ import { baseName, joinPath, parentOf, relativePath, shellPath } from "./lib/nam
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { createPermsDialog, permsView, showProbe, PERMS_SIZE } from "./ui/permsdialog.js";
-import { loaded, failed, canApply } from "./lib/permsstate.js";
+import { loaded, failed, canApply, setRecursive, counted, needsCount } from "./lib/permsstate.js";
 import { formatChange, mismatchText } from "./lib/perms.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
 import { transfersBar } from "./ui/bar.js";
@@ -465,9 +465,8 @@ export default class FilerPro extends View {
     if (p.view === "permissions" && this.perms) {
       return permsView(t, this.perms, {
         onCancel: close,
-        onApply: (cx) => this.reviewPermissions(cx),
-        onBack: (cx) => { this.perms.stage = "edit"; this.perms.error = null; cx.notify(); },
-        onConfirm: (cx) => this.applyPermissions(cx),
+        onApply: (cx) => this.applyPermissions(cx),
+        onRecursive: (cx) => this.toggleRecursive(cx),
       });
     }
     if (p.view === "file") return this.fileOverlay(t, cx);
@@ -544,25 +543,28 @@ export default class FilerPro extends View {
     });
   }
 
-  // Apply never changes anything: a recursive apply counts the entries first (bounded, may stay unknown), then the
-  // confirmation shows old and new mode and the warnings.
-  reviewPermissions(cx) {
+  // "Apply to enclosed items": the first tick counts the entries inside (bounded, may stay unknown) for the notes; Apply
+  // does not wait for it.
+  toggleRecursive(cx) {
     const p = props(), s = this.perms;
-    if (!canApply(s)) return;
-    if (!s.recursive) { s.count = null; s.stage = "confirm"; s.error = null; cx.notify(); return; }
-    s.busy = true; s.error = null; cx.notify();
-    cx.spawn(async (cx) => {
-      s.count = await this.fileOps.permissionsCount({ on: p.machine ?? null, path: p.path });
-      s.busy = false; s.stage = "confirm";
-      cx.notify();
-    });
+    setRecursive(s, !s.recursive);
+    if (needsCount(s)) {
+      s.counting = true;
+      cx.spawn(async (cx) => {
+        let n = null;
+        try { n = await this.fileOps.permissionsCount({ on: p.machine ?? null, path: p.path }); } catch {}
+        counted(s, n);
+        cx.notify();
+      });
+    }
+    cx.notify();
   }
 
-  // The confirmed change. A refusal stays in the dialog; a result that differs from the request (the system dropped a
-  // bit) is reported as a warning after the row reloaded.
+  // Apply: writes at once (the warnings were shown live). A refusal stays in the dialog; a result that differs from the
+  // request (the system dropped or kept a bit) is reported as a warning after the row reloaded.
   async applyPermissions(cx) {
     const p = props(), s = this.perms;
-    if (s.busy) return;
+    if (!canApply(s)) return;
     s.busy = true; s.error = null; cx?.notify();
     let out;
     try { out = await this.fileOps.chmod({ on: p.machine ?? null, path: p.path, root: p.root, mode: s.mode, recursive: s.recursive }); }

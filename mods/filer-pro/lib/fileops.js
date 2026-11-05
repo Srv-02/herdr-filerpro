@@ -455,7 +455,8 @@ export function createFileOps({ exec, trashBin = TRASH_BIN }) {
   }
 
   // mode: the integer (0 to 0o7777) to set. Answer: { ok, mode (re-read afterwards, null if that failed), requested,
-  // mismatch (the system set something else, for example BSD refuses the sticky bit on a file, Linux drops setgid without the group) }.
+  // mismatch (the system set something else than asked, for example Linux drops setgid when the user is not in the group;
+  // which bits a system keeps differs by OS, so the answer is always the mode read back) }.
   async function chmod({ on = null, path, root, mode, recursive = false }) {
     let arg;
     try { arg = chmodArg(mode); } catch { return { ok: false, error: "Invalid permissions" }; }

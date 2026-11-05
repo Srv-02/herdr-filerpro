@@ -1,5 +1,5 @@
-// Issue #23 in mods/filer-pro/main.js: the menu entry opens the dialog, the dialog reads the mode, Apply only shows the
-// confirmation, and only Change runs chmod. main.js is loaded with stubbed host modules (as in test/bundles-main.test.js).
+// Issue #23 in mods/filer-pro/main.js: the menu entry opens the dialog, the dialog reads the mode, warnings show live
+// under the fields, Apply runs chmod at once, and the dialog keeps one size in every state. main.js is loaded with stubbed host modules (as in test/bundles-main.test.js).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -38,6 +38,7 @@ const hooks = `export async function resolve(s, c, next) { return s in ${JSON.st
 export async function load(u, c, next) { return u.startsWith("stub:") ? { format: "module", shortCircuit: true, source: ${JSON.stringify(STUBS)}[u.slice(5)] } : next(u, c); }`;
 register("data:text/javascript," + encodeURIComponent(hooks));
 const FilerPro = (await import("../mods/filer-pro/main.js")).default;
+const { PERMS_SIZE, LAYOUT } = await import("../mods/filer-pro/ui/permsdialog.js");
 
 const never = () => new Promise(() => {});
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
@@ -122,49 +123,50 @@ test("the dialog reads the mode with the probe script, path as argv, on the mach
   assert.equal(self.perms.input.value(), "644");
 });
 
-test("Apply shows the confirmation with old and new mode and runs no chmod", async () => {
-  const { log, cx, view, self } = await dialog();
-  click(view(), "filer-pro-perms-others-w", cx);
-  assert.equal(self.perms.input.value(), "646", "the octal field follows the box");
-  click(view(), "filer-pro-perms-apply", cx);
-  await settle();
-  assert.equal(self.perms.stage, "confirm");
-  assert.equal(execsOf(log, CHMOD_SCRIPT).length, 0);
-  const change = byId(view(), "filer-pro-perms-change");
-  assert.deepEqual(change.kids, ["644 → 646"]);
-  assert.ok(byId(view(), "filer-pro-perms-warnings").kids.length >= 1, "world writable is listed");
-});
+const textIn = (el) => [...walk(el)].flatMap((e) => e.kids).filter((k) => typeof k === "string").join("\n");
+const notesText = (view) => textIn(byId(view(), "filer-pro-perms-notes"));
 
-test("Back returns to the form, Cancel changes nothing", async () => {
-  const { log, cx, view, self } = await dialog();
-  click(view(), "filer-pro-perms-others-r", cx);
-  click(view(), "filer-pro-perms-apply", cx);
-  click(view(), "filer-pro-perms-back", cx);
-  assert.equal(self.perms.stage, "edit");
-  click(view(), "filer-pro-perms-cancel", cx);
-  assert.deepEqual(log.closed, ["ov1"]);
-  assert.equal(execsOf(log, CHMOD_SCRIPT).length, 0);
-});
-
-test("Change runs chmod with the five digit mode and the path as argv, reloads and closes", async () => {
-  const { log, cx, view } = await dialog({ answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 0, stdout: "0600\n", stderr: "" } : undefined) });
+test("there is no confirmation step: Apply runs chmod with the five digit mode and the path as argv, reloads and closes", async () => {
+  const { log, cx, view, self } = await dialog({ answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 0, stdout: "0600\n", stderr: "" } : undefined) });
   click(view(), "filer-pro-perms-group-r", cx);
   click(view(), "filer-pro-perms-others-r", cx);
+  assert.equal(self.perms.input.value(), "600", "the octal field follows the boxes");
   click(view(), "filer-pro-perms-apply", cx);
-  click(view(), "filer-pro-perms-confirm", cx);
   await settle();
   assert.deepEqual(execsOf(log, CHMOD_SCRIPT).map((e) => e.args), [["-c", CHMOD_SCRIPT, "x", "00600", FILE, "0"]]);
   assert.ok(log.shared.some(([k]) => k === "filer-pro.changed"), "the row reloads");
   assert.deepEqual(log.closed, ["ov1"]);
   assert.deepEqual(log.notes.map((n) => [n.title, n.level, n.body]), [["Permissions changed", "success", "report.txt: 644 → 600"]]);
+  assert.equal(byId(view(), "filer-pro-perms-confirm"), undefined);
+  assert.equal(byId(view(), "filer-pro-perms-back"), undefined);
+});
+
+test("warnings show live under the fields and go away again", async () => {
+  const { cx, view } = await dialog();
+  assert.equal(notesText(view), "No changes.");
+  click(view(), "filer-pro-perms-group-w", cx);
+  click(view(), "filer-pro-perms-others-w", cx);
+  assert.match(notesText(view), /World writable/);
+  click(view(), "filer-pro-perms-others-w", cx);
+  assert.equal(notesText(view), "644 → 664, no warnings.");
+  click(view(), "filer-pro-perms-owner-r", cx);
+  assert.match(notesText(view), /your own read permission/);
+});
+
+test("Cancel changes nothing", async () => {
+  const { log, cx, view } = await dialog();
+  click(view(), "filer-pro-perms-others-r", cx);
+  click(view(), "filer-pro-perms-cancel", cx);
+  assert.deepEqual(log.closed, ["ov1"]);
+  assert.equal(execsOf(log, CHMOD_SCRIPT).length, 0);
 });
 
 test("a result that differs from the request is a warning notice (the system dropped a bit)", async () => {
   const { log, cx, view, self } = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true }, answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 0, stdout: "0755\n", stderr: "" } : undefined) });
   self.perms.input.v = "2755"; // typed into the octal field
   self.perms.input.h.change({}, cx);
+  assert.match(notesText(view), /sets setgid/);
   click(view(), "filer-pro-perms-apply", cx);
-  click(view(), "filer-pro-perms-confirm", cx);
   await settle();
   assert.deepEqual(execsOf(log, CHMOD_SCRIPT).map((e) => e.args[3]), ["02755"]);
   assert.deepEqual(log.notes.map((n) => [n.title, n.level, n.body]), [["Permissions differ from the request", "warning", "photos: asked for 2755, the system set 755"]]);
@@ -175,28 +177,112 @@ test("a refusal by the system stays in the dialog, which stays open", async () =
   const { log, cx, view, self } = await dialog({ answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 1, stdout: "", stderr: "chmod: cannot access 'x': Permission denied\n" } : undefined) });
   click(view(), "filer-pro-perms-others-r", cx);
   click(view(), "filer-pro-perms-apply", cx);
-  click(view(), "filer-pro-perms-confirm", cx);
   await settle();
   assert.equal(self.perms.error, "chmod: cannot access 'x': Permission denied");
+  assert.match(notesText(view), /Permission denied/);
   assert.deepEqual(log.closed, []);
   assert.equal(log.notes.length, 0);
   assert.equal(self.perms.busy, false);
 });
 
-test("a recursive apply counts the entries first and names them in the confirmation", async () => {
-  const { log, cx, view, self } = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true }, answer: (cmd, args) => (args[1] === COUNT_SCRIPT ? { code: 0, stdout: "  17\n", stderr: "" } : args[1] === GUARD_SCRIPT ? { code: 0, stdout: nul("y", "d", ROOT, ROOT, "/Users/example", "n", "n", "n", "n"), stderr: "" } : undefined) });
+const RECURSIVE_ANSWER = (count) => (cmd, args) => (args[1] === COUNT_SCRIPT ? { code: 0, stdout: `  ${count}\n`, stderr: "" } : args[1] === GUARD_SCRIPT ? { code: 0, stdout: nul("y", "d", ROOT, ROOT, "/Users/example", "n", "n", "n", "n"), stderr: "" } : undefined);
+
+test("Apply to enclosed items: ticking it counts the entries inside once and shows the number live; Apply runs chmod -R", async () => {
+  const { log, cx, view, self } = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true }, answer: RECURSIVE_ANSWER(3) });
   click(view(), "filer-pro-perms-recursive", cx);
-  click(view(), "filer-pro-perms-apply", cx);
+  assert.match(notesText(view), /Counting the items inside/);
   await settle();
   assert.deepEqual(execsOf(log, COUNT_SCRIPT).map((e) => e.args), [["-c", COUNT_SCRIPT, "x", DIR]]);
-  assert.equal(self.perms.stage, "confirm");
-  assert.equal(execsOf(log, CHMOD_SCRIPT).length, 0);
-  const text = [...walk(byId(view(), "filer-pro-perms-warnings"))].flatMap((e) => e.kids).filter((k) => typeof k === "string").join("\n");
-  assert.match(text, /17 items/);
-  assert.equal(self.perms.count, 17);
-  click(view(), "filer-pro-perms-confirm", cx);
+  assert.match(notesText(view), /on 3 items inside/);
+  click(view(), "filer-pro-perms-recursive", cx);
+  assert.doesNotMatch(notesText(view), /inside/);
+  click(view(), "filer-pro-perms-recursive", cx);
+  await settle();
+  assert.equal(execsOf(log, COUNT_SCRIPT).length, 1, "counted once");
+  assert.equal(execsOf(log, CHMOD_SCRIPT).length, 0, "ticking changes nothing");
+  click(view(), "filer-pro-perms-apply", cx);
   await settle();
   assert.equal(execsOf(log, CHMOD_SCRIPT)[0].args[5], "1");
+  assert.equal(self.perms.count, 3);
+  assert.deepEqual(log.closed, ["ov1"]);
+});
+
+test("Apply to enclosed items: more than 10,000 items inside", async () => {
+  const { cx, view } = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true }, answer: RECURSIVE_ANSWER(10001) });
+  click(view(), "filer-pro-perms-recursive", cx);
+  await settle();
+  assert.match(notesText(view), /more than 10,000 items inside/);
+});
+
+test("Apply to enclosed items: the guard still refuses a protected folder, the dialog stays open", async () => {
+  const { log, cx, view, self } = await dialog({ probe: DIR_PROBE, props: { path: "/Users/example", root: "/Users/example", isDir: true }, answer: RECURSIVE_ANSWER(5) });
+  click(view(), "filer-pro-perms-recursive", cx);
+  await settle();
+  click(view(), "filer-pro-perms-apply", cx);
+  await settle();
+  assert.equal(execsOf(log, CHMOD_SCRIPT).length, 0);
+  assert.ok(self.perms.error, "the refusal is shown");
+  assert.deepEqual(log.closed, []);
+});
+
+test("the text label of every checkbox toggles it: the clickable element holds the label", async () => {
+  const { cx, view, self } = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true }, answer: RECURSIVE_ANSWER(3) });
+  const row = byId(view(), "filer-pro-perms-recursive");
+  assert.match(textIn(row), /Apply to enclosed items/);
+  assert.ok(row.calls.some(([k]) => k === "on_click"));
+  assert.ok(row.calls.some(([k, v]) => k === "role" && v === "check_box"));
+  const cell = byId(view(), "filer-pro-perms-group-w");
+  assert.ok(cell.calls.some(([k, v]) => k === "accessibility_label" && v === "Group write, not checked"));
+  click(view(), "filer-pro-perms-group-w", cx);
+  assert.ok(byId(view(), "filer-pro-perms-group-w").calls.some(([k, v]) => k === "accessibility_label" && v === "Group write, checked"));
+  assert.equal(self.perms.text, "775");
+});
+
+// The fixed heights of the dialog's parts (h(...) on the root's children), plus padding and gaps.
+function footprint(root) {
+  const h = (el) => el.calls.find(([k]) => k === "h")?.[1];
+  const parts = root.kids.map(h);
+  assert.ok(parts.every((x) => typeof x === "number"), `every part has a fixed height: ${parts}`);
+  const pad = root.calls.find(([k]) => k === "p")[1], gap = root.calls.find(([k]) => k === "gap")[1];
+  return { parts, height: 2 * pad + gap * (parts.length - 1) + parts.reduce((a, b) => a + b, 0) };
+}
+
+test("the dialog keeps one size: no warning, the 666 warning, a folder with the count, read only, loading and errors", async () => {
+  const sizes = [];
+  const a = await dialog();
+  sizes.push(["a: 644", footprint(a.view())]);
+  const b = await dialog();
+  b.self.perms.input.v = "666"; b.self.perms.input.h.change({}, b.cx);
+  assert.match(notesText(b.view), /World writable/);
+  sizes.push(["b: 666", footprint(b.view())]);
+  const c = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true }, answer: RECURSIVE_ANSWER(3) });
+  click(c.view(), "filer-pro-perms-recursive", c.cx);
+  sizes.push(["c: counting", footprint(c.view())]);
+  await settle();
+  c.self.perms.input.v = "4777"; c.self.perms.input.h.change({}, c.cx);
+  c.self.perms.error = "chmod: Permission denied";
+  sizes.push(["c: count and five notes", footprint(c.view())]);
+  const d = await dialog({ probe: nul("f", "0644", "0", "0", "root", "wheel", "501") });
+  sizes.push(["d: read only", footprint(d.view())]);
+  const e = await dialog({ answer: () => undefined, probe: "garbage" });
+  sizes.push(["probe failed", footprint(e.view())]);
+  for (const [name, f] of sizes) assert.deepEqual(f, sizes[0][1], name);
+  assert.equal(sizes[0][1].height, PERMS_SIZE.height, "the overlay is exactly as high as its parts");
+  assert.deepEqual(PERMS_SIZE, { width: 420, height: 388 });
+  assert.equal(LAYOUT.notes, 68, "three 18px lines");
+});
+
+test("the menu opens files and folders with the same size", () => {
+  const sizes = [false, true].map((isDir) => {
+    const log = host({ props: { overlay: "m1", view: "menu", machine: null, root: ROOT, path: FILE, isDir, folder: ROOT } });
+    const cx = fakeCx();
+    const self = Object.assign(Object.create(FilerPro.prototype), {});
+    self.init(null, cx);
+    click(self.render(cx), "filer-pro-menu-permissions", cx);
+    const o = log.overlays.at(-1);
+    return [o.width, o.height];
+  });
+  assert.deepEqual(sizes, [[420, 388], [420, 388]]);
 });
 
 test("not the owner: the form is read only, the note says why, Apply does nothing", async () => {
@@ -209,8 +295,9 @@ test("not the owner: the form is read only, the note says why, Apply does nothin
 });
 
 test("a probe that fails shows its message and offers only Close", async () => {
-  const { view, self } = await dialog({ answer: () => undefined, probe: "garbage" });
+  const { view, self, cx } = await dialog({ answer: () => undefined, probe: "garbage" });
   assert.equal(self.perms.phase, "error");
-  assert.ok(byId(view(), "filer-pro-perms-cancel"));
-  assert.equal(byId(view(), "filer-pro-perms-apply"), undefined);
+  assert.deepEqual(byId(view(), "filer-pro-perms-cancel").kids, ["Close"]);
+  assert.equal(click(view(), "filer-pro-perms-apply", cx), false, "Apply is there (same layout) but inert");
+  assert.match(notesText(view), /permissions/i);
 });

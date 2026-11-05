@@ -1,5 +1,5 @@
-// File permissions (issue #23): pure helpers for modes (octal, the rwx matrix, symbolic text, the warnings of the
-// confirmation dialog), the three shell scripts and the parsers of their answers. No file system access here; the exec-backed
+// File permissions (issue #23): pure helpers for modes (octal, the rwx matrix, symbolic text, the warnings the dialog
+// shows while editing), the three shell scripts and the parsers of their answers. No file system access here; the exec-backed
 // operations are in createFileOps (lib/fileops.js). The helpers are exported on purpose so other parts (a mode in a status
 // line) can format a mode the same way.
 import { group } from "./numbers.js";
@@ -54,15 +54,16 @@ export function specialBits(mode) {
 
 const list = (words) => (words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}` : words[0]);
 
-// The warnings the confirmation dialog lists. count: entries inside for a recursive apply (a number; more than
-// COUNT_LIMIT means "more than"), null when it could not be determined.
-export function modeWarnings({ oldMode, newMode, isDir, recursive, count }) {
+// The warnings the dialog shows under the fields while the mode is edited, one short line each (they share a fixed
+// three line area). The number of items a recursive apply touches is not a warning: see insideText.
+export function modeWarnings({ oldMode, newMode, isDir, recursive }) {
   const out = [];
-  if (newMode & 0o002) out.push("Others can write (world writable): any user on the machine can change it.");
+  if (newMode & 0o002) out.push("World writable: any user on the machine can change it.");
   const lost = ["r", "w", ...(isDir ? ["x"] : [])].filter((w) => getBit(oldMode, "owner", w) && !getBit(newMode, "owner", w));
   if (lost.length) {
     const names = lost.map((w) => ({ r: "read", w: "write", x: "execute" })[w]);
-    out.push(`You remove your own ${list(names)} permission, you may lock yourself out${lost.includes("x") ? " (a folder without it cannot be entered)" : ""}.`);
+    out.push(lost.includes("x") ? `Removes your own ${list(names)} permission: you can no longer open the folder.`
+      : `Removes your own ${list(names)} permission: you may lock yourself out.`);
   }
   const sets = [], clears = [];
   for (const [name, bit] of Object.entries(SPECIAL)) {
@@ -71,14 +72,20 @@ export function modeWarnings({ oldMode, newMode, isDir, recursive, count }) {
   }
   if (sets.length || clears.length) out.push(`Special bits change: ${[sets.length ? `sets ${sets.join(", ")}` : "", clears.length ? `clears ${clears.join(", ")}` : ""].filter(Boolean).join("; ")}.`);
   if (recursive) {
-    const inside = count === null || count === undefined ? "Applies to many items inside (links are skipped)."
-      : count > COUNT_LIMIT ? `Applies to more than ${group(COUNT_LIMIT)} items inside (links are skipped).`
-      : `Applies to ${group(count)} ${count === 1 ? "item" : "items"} inside (links are skipped).`;
-    out.push(`${inside} Every item inside gets exactly this mode.`);
-    if (!(newMode & 0o111)) out.push("Folders inside lose their execute bits and cannot be entered.");
+    if (!(newMode & 0o111)) out.push("Folders inside lose their execute bits and cannot be opened.");
     else out.push("Files inside become executable.");
   }
   return out;
+}
+
+// The line about a recursive apply. count: the entries inside the folder (not the folder itself; more than COUNT_LIMIT
+// means "more than"), null when it could not be determined; counting: still running.
+export function insideText(count, counting = false) {
+  if (counting) return "Counting the items inside…";
+  const n = count === null || count === undefined ? "many items"
+    : count > COUNT_LIMIT ? `more than ${group(COUNT_LIMIT)} items`
+    : `${group(count)} ${count === 1 ? "item" : "items"}`;
+  return `Also sets this mode on ${n} inside (links are skipped).`;
 }
 
 // The notice when the mode read back after chmod is not the one asked for (actual: null when it could not be read).
@@ -157,6 +164,7 @@ else
 fi
 st "$p" && echo "$M"`;
 
-// `x <path>`: the number of entries (the folder itself, files, folders; links are skipped) up to COUNT_LIMIT + 1. find stops
-// as soon as head has enough, so a huge tree does not run into the 30 second limit of exec (macOS has no timeout).
-export const COUNT_SCRIPT = `find -P "$1" ! -type l 2>/dev/null | head -n ${COUNT_LIMIT + 1} | wc -l`;
+// `x <path>`: the number of entries inside the folder (files and folders at any depth, not the folder itself; links are
+// skipped) up to COUNT_LIMIT + 1. find stops as soon as head has enough, so a huge tree does not run into the 30 second
+// limit of exec (macOS has no timeout). -mindepth 1 is in both GNU and BSD find.
+export const COUNT_SCRIPT = `find -P "$1" -mindepth 1 ! -type l 2>/dev/null | head -n ${COUNT_LIMIT + 1} | wc -l`;

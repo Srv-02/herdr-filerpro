@@ -236,14 +236,16 @@ test("chmod, permissions and count on a machine: same scripts, on is passed to e
   assert.deepEqual(calls.map((c) => [c.cmd, c.args[1], c.on]), [["sh", PROBE_SCRIPT, "box"], ["sh", CHMOD_SCRIPT, "box"], ["sh", COUNT_SCRIPT, "box"]]);
 });
 
-test("permissionsCount: files and folders inside, links skipped, a huge tree capped", async () => {
+test("permissionsCount: files and folders inside (not the folder itself), links skipped, a huge tree capped", async () => {
   const { d, root, home } = tree();
   fs.symlinkSync(`${d}/outside`, `${root}/sub/out`);
   const o = ops(home).ops;
-  assert.equal(await o.permissionsCount({ on: null, path: `${root}/sub` }), 4, "sub, deep, b.txt, c.txt");
+  assert.equal(await o.permissionsCount({ on: null, path: `${root}/sub` }), 3, "deep, b.txt, c.txt; not sub itself, not the link");
   fs.mkdirSync(`${d}/big`);
   for (let i = 0; i < 40; i++) fs.writeFileSync(`${d}/big/f${i}`, "");
-  assert.equal(await o.permissionsCount({ on: null, path: `${d}/big` }), 41);
+  assert.equal(await o.permissionsCount({ on: null, path: `${d}/big` }), 40, "a folder with 40 files: 40 items inside");
+  fs.mkdirSync(`${d}/empty`);
+  assert.equal(await o.permissionsCount({ on: null, path: `${d}/empty` }), 0, "an empty folder has nothing inside");
   assert.equal(COUNT_LIMIT, 10000);
   const failing = ops(home, { answer: () => ({ code: 1, stdout: "", stderr: "boom" }) }).ops;
   assert.equal(await failing.permissionsCount({ on: null, path: `${d}/big` }), null);
@@ -325,7 +327,7 @@ test("fake machine: recursive changes the tree through the guard and skips a lin
   fs.symlinkSync(`${d}/outside`, `${root}/sub/out`);
   fs.chmodSync(`${d}/outside/o.txt`, 0o644);
   const m = machine(home);
-  assert.equal(await m.ops.permissionsCount({ on: "box", path: `${root}/sub` }), 4);
+  assert.equal(await m.ops.permissionsCount({ on: "box", path: `${root}/sub` }), 3, "deep, b.txt, deep/c.txt inside sub");
   const r = await m.ops.chmod({ on: "box", path: `${root}/sub`, root, mode: 0o750, recursive: true });
   assert.equal(r.ok, true, r.error);
   for (const p of ["sub", "sub/deep", "sub/b.txt", "sub/deep/c.txt"]) assert.equal(mode(`${root}/${p}`), 0o750, p);

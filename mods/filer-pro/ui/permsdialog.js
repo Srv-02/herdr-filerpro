@@ -1,15 +1,31 @@
 // Permissions dialog (issue #23): the rwx matrix, an octal field kept in sync with it, owner and group (read only), the
-// special bits (indicators only), and a confirmation step before anything is changed. The state is lib/permsstate.js;
-// this file only creates the InputState (in init, never in render) and draws. Esc closes, like the name dialog.
+// special bits (indicators only) and, for a folder, "Apply to enclosed items". Apply writes at once; what used to be a
+// confirmation step is the notes area under the fields, updated live (lib/permsstate.js notes()).
+// Every part has a fixed height, so the dialog keeps its exact size in every state: loading, editing, warnings, the
+// recursive count, read only and errors. PERMS_SIZE is the sum of those heights; the notes area holds three lines and
+// scrolls inside itself when there are more. The state is lib/permsstate.js; this file only creates the InputState
+// (in init, never in render) and draws. Esc closes, like the name dialog.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { BASE } from "../lib/icons.js";
 import { formatSymbolic, getBit, specialBits } from "../lib/perms.js";
-import { createPermsState, setText, toggleBit, setRecursive, canApply, review } from "../lib/permsstate.js";
+import { createPermsState, setText, toggleBit, setRecursive, canApply, notes } from "../lib/permsstate.js";
 
-export const PERMS_SIZE = { width: 460, height: 540 };
 const WHO = [["owner", "Owner"], ["group", "Group"], ["others", "Others"]];
 const WHAT = [["r", "Read"], ["w", "Write"], ["x", "Execute"]];
+const DIGIT = { r: 4, w: 2, x: 1 };
+
+// The layout, top to bottom. The dialog height is computed from it, so a change here moves PERMS_SIZE with it.
+export const LAYOUT = {
+  pad: 18, gap: 12,
+  head: 20 + 4 + 18 + 2 + 16, // title row, name, owner line
+  matrix: 2 + 2 * 3 + 24 + 3 * 28, // border, padding, column heads, three rows
+  octal: 28,
+  notes: 2 * 7 + 3 * 18, // padding and three 18px lines
+  footer: 32,
+};
+const sum = (l) => 2 * l.pad + 4 * l.gap + l.head + l.matrix + l.octal + l.notes + l.footer;
+export const PERMS_SIZE = { width: 420, height: sum(LAYOUT) };
 
 // spec: { name, isDir } -> state (lib/permsstate.js) with input, handle, focused
 export function createPermsDialog(spec, cx) {
@@ -43,14 +59,21 @@ export function flipRecursive(state, cx) {
   cx.notify();
 }
 
-const dimmed = (state) => state.readOnly !== null || state.busy;
+const locked = (state) => state.phase !== "ready" || state.readOnly !== null || state.busy;
 
-function checkbox(t, id, on, locked, onClick) {
-  return div().id(id).w(18).h(18).flex_none().rounded(4).border_1().flex().items_center().justify_center()
+// The drawn box of a checkbox (16px). The click and the accessible name sit on the element around it, which also holds
+// the text label where there is one, so the label toggles too.
+function box(t, on, dim) {
+  return div().w(16).h(16).flex_none().rounded(4).border_1().flex().items_center().justify_center()
     .border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
-    .when(locked, (el) => el.opacity(0.45))
-    .when(!locked, (el) => el.cursor_pointer().on_click((_e, cx) => onClick(cx)))
-    .when(on, (el) => el.child(svg(`${BASE}/check.svg`).size(12).flex_none().text_color(t.accent_foreground)));
+    .when(dim, (el) => el.opacity(0.45))
+    .when(on, (el) => el.child(svg(`${BASE}/check.svg`).size(11).flex_none().text_color(t.accent_foreground)));
+}
+
+// A clickable checkbox target: role, accessible name with its state, hover, and the click (not when locked).
+function toggle(el, t, { id, label, on, dim, onClick }) {
+  return el.id(id).role("check_box").accessibility_label(`${label}, ${on ? "checked" : "not checked"}`)
+    .when(!dim, (e) => e.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)));
 }
 
 function button(t, id, text, primary, enabled, action) {
@@ -60,76 +83,88 @@ function button(t, id, text, primary, enabled, action) {
     .when(enabled, (el) => el.cursor_pointer().hover((s) => s.opacity(0.88)).on_click((_e, cx) => action(cx))).child(text);
 }
 
-const small = (t, text, color) => div().text_size(11.5).line_height("16px").text_color(color ?? t.muted).child(text);
+const COL = 62, DIG = 22;
 
+// Owner / Group / Others by Read / Write / Execute in an inset card; each cell is the click target, the octal digit of
+// the row at the right shows how the three digits come about.
 function matrix(t, state) {
-  const locked = dimmed(state);
-  const head = h_flex().items_center().child(div().w(80).flex_none())
-    .children(WHAT.map(([, label]) => div().flex_1().text_size(11.5).text_color(t.muted).child(label)));
-  const rows = WHO.map(([who, label]) => h_flex().id(`filer-pro-perms-row-${who}`).h(30).items_center()
-    .child(div().w(80).flex_none().text_size(13).child(label))
-    .children(WHAT.map(([what]) => div().flex_1().child(checkbox(t, `filer-pro-perms-${who}-${what}`, getBit(state.mode, who, what), locked, (cx) => flip(state, who, what, cx))))));
-  return v_flex().gap(0).child(head).children(rows);
+  const dim = locked(state);
+  const head = h_flex().h(24).items_center()
+    .child(div().flex_1())
+    .children(WHAT.map(([, label]) => div().w(COL).flex_none().flex().justify_center().text_size(11).text_color(t.muted).child(label)))
+    .child(div().w(DIG).flex_none());
+  const rows = WHO.map(([who, label]) => {
+    const digit = WHAT.reduce((n, [what]) => n + (getBit(state.mode, who, what) ? DIGIT[what] : 0), 0);
+    return h_flex().id(`filer-pro-perms-row-${who}`).h(28).items_center().border_t(1).border_color(t.border)
+      .child(div().flex_1().text_size(13).child(label))
+      .children(WHAT.map(([what, whatLabel]) => {
+        const on = getBit(state.mode, who, what);
+        return toggle(h_flex().w(COL).h(24).flex_none().items_center().justify_center().rounded(6), t,
+          { id: `filer-pro-perms-${who}-${what}`, label: `${label} ${whatLabel.toLowerCase()}`, on, dim, onClick: (cx) => flip(state, who, what, cx) })
+          .child(box(t, on, dim));
+      }))
+      .child(div().w(DIG).flex_none().flex().justify_end().text_size(12.5).text_color(t.muted).child(state.phase === "ready" ? String(digit) : ""));
+  });
+  return v_flex().h(LAYOUT.matrix).flex_none().px(12).py(3).rounded(8).border_1().border_color(t.border).bg(t.background)
+    .child(head).children(rows);
 }
 
-function special(t, state) {
+// Octal field, the ls style text, and the special bits as chips at the right (lit in t.ansi3 when set).
+function octalRow(t, state) {
   const bits = specialBits(state.mode);
-  const chip = (name, on) => div().id(`filer-pro-perms-${name}`).px(8).py(2).rounded(6).border_1().text_size(11.5)
-    .border_color(on ? t.ansi3 : t.border).text_color(on ? t.ansi3 : t.dim).child(name);
-  return h_flex().gap(6).items_center().child(div().w(80).flex_none().text_size(11.5).text_color(t.muted).child("Special"))
-    .children(["setuid", "setgid", "sticky"].map((n) => chip(n, bits[n])));
+  const chip = (name) => div().id(`filer-pro-perms-${name}`).h(20).px(6).flex().items_center().rounded(5).border_1().text_size(11)
+    .border_color(bits[name] ? t.ansi3 : t.border).text_color(bits[name] ? t.ansi3 : t.dim).child(name);
+  return h_flex().h(LAYOUT.octal).flex_none().gap(8).items_center()
+    .child(div().text_size(12.5).text_color(t.muted).child("Octal"))
+    .child(Input.new(state.input).w(64).h(28).px(8).rounded(6).border_1()
+      .border_color(state.textError ? t.ansi1 : state.focused ? t.accent : t.input).bg(t.background).text_size(13).text_color(t.foreground)
+      .when(locked(state), (el) => el.opacity(0.45)))
+    .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.muted).child(state.phase === "ready" ? formatSymbolic(state.mode) : ""))
+    .child(h_flex().gap(4).items_center().child(chip("setuid")).child(chip("setgid")).child(chip("sticky")));
 }
 
-function editView(t, state, handlers) {
-  const ok = canApply(state);
-  const note = state.readOnly ?? state.error ?? "";
-  return v_flex().gap(10).flex_1()
-    .child(v_flex().gap(2)
-      .child(div().text_size(13).truncate().child(state.name))
-      .child(small(t, `Owner ${state.owner}, group ${state.group} (read only)`)))
-    .child(matrix(t, state))
-    .child(h_flex().gap(8).items_center()
-      .child(div().w(80).flex_none().text_size(13).child("Octal"))
-      .child(Input.new(state.input).w(84).h(32).px(10).rounded(8).border_1()
-        .border_color(state.textError ? t.ansi1 : state.focused ? t.accent : t.input).bg(t.background).text_size(12.8).text_color(t.foreground)
-        .when(dimmed(state), (el) => el.opacity(0.45)))
-      .child(div().text_size(12.5).text_color(t.muted).child(formatSymbolic(state.mode))))
-    .child(special(t, state))
-    .when(state.isDir, (el) => el.child(h_flex().id("filer-pro-perms-recursive-row").gap(8).items_center()
-      .child(checkbox(t, "filer-pro-perms-recursive", state.recursive, dimmed(state), (cx) => flipRecursive(state, cx)))
-      .child(div().text_size(13).child("Apply to enclosed items"))))
-    .child(div().min_h(32).text_size(11.5).line_height("16px").text_color(state.readOnly ? t.ansi3 : t.ansi1).child(state.textError ?? note))
-    .child(h_flex().gap(8).justify_end()
-      .child(button(t, "filer-pro-perms-cancel", "Cancel", false, true, handlers.onCancel))
-      .child(button(t, "filer-pro-perms-apply", "Apply", true, ok, handlers.onApply)));
+const MARK = {
+  error: (t) => ["shield-exclamation-point.svg", t.ansi1, t.ansi1],
+  warning: (t) => ["shield-exclamation-point.svg", t.ansi3, t.foreground],
+  note: (t) => ["info.svg", t.ansi3, t.foreground],
+  info: (t) => ["info.svg", t.dim, t.muted],
+  ok: (t) => ["check.svg", t.muted, t.muted],
+};
+
+// The notes: fixed height, three lines visible, scrolls inside when there are more.
+function notesArea(t, state) {
+  const lines = notes(state).map(({ level, text }) => {
+    const [icon, mark, color] = MARK[level](t);
+    return h_flex().gap(7).items_start()
+      .child(div().h(18).flex_none().flex().items_center().child(svg(`${BASE}/${icon}`).size(12).flex_none().text_color(mark)))
+      .child(div().flex_1().min_w(0).text_size(12).line_height("18px").text_color(color).child(text));
+  });
+  return v_flex().id("filer-pro-perms-notes").h(LAYOUT.notes).flex_none().px(10).py(7).rounded(8).bg(t.hover).overflow_y_scroll()
+    .children(lines);
 }
 
-function confirmView(t, state, handlers) {
-  const r = review(state, state.count);
-  return v_flex().gap(10).flex_1()
-    .child(div().text_size(13).truncate().child(state.name))
-    .child(h_flex().gap(10).items_center()
-      .child(div().id("filer-pro-perms-change").text_size(20).font_semibold().child(r.change))
-      .child(div().text_size(12.5).text_color(t.muted).child(`${formatSymbolic(state.original)} → ${formatSymbolic(state.mode)}`)))
-    .when(state.recursive, (el) => el.child(small(t, "Including everything inside", t.foreground)))
-    .child(v_flex().id("filer-pro-perms-warnings").gap(6).flex_1()
-      .children(r.warnings.map((w) => h_flex().gap(6).items_start().child(div().text_size(12.5).text_color(t.ansi3).child("!")).child(div().flex_1().min_w(0).text_size(12.5).line_height("18px").child(w)))))
-    .child(div().min_h(16).text_size(11.5).text_color(t.ansi1).child(state.error ?? ""))
-    .child(h_flex().gap(8).justify_end()
-      .child(button(t, "filer-pro-perms-back", "Back", false, !state.busy, handlers.onBack))
-      .child(button(t, "filer-pro-perms-confirm", "Change", true, !state.busy, handlers.onConfirm)));
-}
-
-// handlers: { onCancel(), onApply(cx), onBack(cx), onConfirm(cx) }
+// handlers: { onCancel(), onApply(cx), onRecursive(cx) }
 export function permsView(t, state, handlers) {
-  const body = state.phase === "loading" ? div().flex_1().text_size(13).text_color(t.muted).child("Reading permissions…")
-    : state.phase === "error" ? v_flex().gap(10).flex_1().child(div().flex_1().text_size(13).text_color(t.ansi1).child(state.error))
-      .child(h_flex().justify_end().child(button(t, "filer-pro-perms-cancel", "Close", false, true, handlers.onCancel)))
-    : state.stage === "confirm" ? confirmView(t, state, handlers) : editView(t, state, handlers);
+  const dim = locked(state);
+  const ok = canApply(state);
+  const owner = state.phase === "ready" ? `Owner ${state.owner} · Group ${state.group}` : "";
+  const recursive = toggle(h_flex().h(28).px(6).ml(-6).gap(8).items_center().rounded(6), t,
+    { id: "filer-pro-perms-recursive", label: "Apply to enclosed items", on: state.recursive, dim, onClick: (cx) => handlers.onRecursive(cx) })
+    .child(box(t, state.recursive, dim))
+    .child(div().text_size(12.5).text_color(dim ? t.dim : t.foreground).child("Apply to enclosed items"));
   return v_flex().id("filer-pro-permissions").track_focus(state.handle)
     .on_key_down((e, cx) => { if (e.key === "escape") { handlers.onCancel(); cx.stop_propagation(); } })
-    .size_full().p(18).gap(10).bg(t.popover).text_color(t.foreground)
-    .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child(state.stage === "confirm" ? "Change permissions?" : "Permissions"))
-      .child(div().text_size(11).text_color(t.dim).child("Esc")))
-    .child(body);
+    .size_full().p(LAYOUT.pad).gap(LAYOUT.gap).bg(t.popover).text_color(t.foreground)
+    .child(v_flex().h(LAYOUT.head).flex_none()
+      .child(h_flex().h(20).items_center().child(div().flex_1().text_size(15).font_semibold().child("Permissions"))
+        .child(div().text_size(11).text_color(t.dim).child("Esc")))
+      .child(div().mt(4).h(18).text_size(13).truncate().child(state.name))
+      .child(div().mt(2).h(16).text_size(11.5).text_color(t.muted).truncate().child(owner)))
+    .child(matrix(t, state))
+    .child(octalRow(t, state))
+    .child(notesArea(t, state))
+    .child(h_flex().h(LAYOUT.footer).flex_none().gap(8).items_center()
+      .child(div().flex_1().min_w(0).child(state.isDir ? recursive : div()))
+      .child(button(t, "filer-pro-perms-cancel", state.phase === "error" ? "Close" : "Cancel", false, true, handlers.onCancel))
+      .child(button(t, "filer-pro-perms-apply", "Apply", true, ok, handlers.onApply)));
 }

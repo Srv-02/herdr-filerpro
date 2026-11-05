@@ -1,8 +1,8 @@
 // lib/permsstate.js: the state behind the Permissions dialog (pure): checkboxes and the octal field in sync both ways,
-// read only cases, when Apply is possible and what the confirmation shows.
+// read only cases, when Apply is possible and the notes shown live under the fields.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPermsState, loaded, failed, toggleBit, setText, setRecursive, canApply, review, readOnlyReason } from "../mods/filer-pro/lib/permsstate.js";
+import { createPermsState, loaded, failed, toggleBit, setText, setRecursive, canApply, notes, counted, needsCount, readOnlyReason } from "../mods/filer-pro/lib/permsstate.js";
 
 const probe = (over = {}) => ({ type: "f", mode: 0o644, uid: "501", gid: "20", user: "alice", group: "staff", me: "501", isDir: false, isLink: false, owned: true, ...over });
 const ready = (over = {}, spec = {}) => loaded(createPermsState({ name: "a.txt", isDir: false, ...spec }), probe(over));
@@ -11,7 +11,7 @@ test("a new state is loading and cannot be applied", () => {
   const s = createPermsState({ name: "a.txt", isDir: false });
   assert.equal(s.phase, "loading");
   assert.equal(canApply(s), false);
-  assert.equal(s.stage, "edit");
+  assert.equal("stage" in s, false, "there is no confirmation step");
 });
 
 test("loaded: mode, octal text and owner are taken from the probe", () => {
@@ -109,19 +109,67 @@ test("busy blocks Apply and changes", () => {
   assert.equal(canApply(s), false);
 });
 
-test("review: old and new mode and the warnings", () => {
+const texts = (s) => notes(s).map((n) => n.text);
+const levels = (s) => notes(s).map((n) => n.level);
+
+test("notes: never empty; no change, or the change without warnings, as a quiet summary", () => {
+  assert.deepEqual(notes(createPermsState({ name: "a", isDir: false })), [{ level: "info", text: "Reading permissions…" }]);
+  const s = ready();
+  assert.deepEqual(notes(s), [{ level: "info", text: "No changes." }]);
+  toggleBit(s, "others", "r");
+  assert.deepEqual(notes(s), [{ level: "ok", text: "644 → 640, no warnings." }]);
+});
+
+test("notes: warnings appear and go away live while the mode is edited", () => {
   const s = ready();
   setText(s, "666");
-  assert.deepEqual(review(s, null).change, "644 → 666");
-  assert.ok(review(s, null).warnings.some((w) => /world writable/.test(w)));
+  assert.deepEqual(levels(s), ["warning"]);
+  assert.match(texts(s)[0], /World writable/);
+  toggleBit(s, "others", "w");
+  assert.deepEqual(levels(s), ["ok"], "the warning is gone with the bit");
+  setText(s, "044");
+  assert.ok(texts(s).some((x) => /your own read and write permission/.test(x)));
+  setText(s, "4644");
+  assert.ok(texts(s).some((x) => /sets setuid/.test(x)));
+});
+
+test("notes: a file that already is world writable warns before anything is edited", () => {
+  const s = ready({ mode: 0o666 });
+  assert.deepEqual(levels(s), ["warning"]);
+});
+
+test("notes: Apply to enclosed items shows the count of the entries inside, counting first", () => {
   const d = ready({ type: "d", isDir: true, mode: 0o755 }, { isDir: true });
-  toggleBit(d, "others", "x");
   setRecursive(d, true);
-  const r = review(d, 12);
-  assert.equal(r.change, "755 → 754");
-  assert.ok(r.warnings.some((w) => /12 items/.test(w)));
-  assert.ok(review(d, null).warnings.some((w) => /many items/.test(w)));
-  const plain = ready();
-  toggleBit(plain, "others", "r");
-  assert.deepEqual(review(plain, null).warnings, []);
+  assert.equal(needsCount(d), true);
+  d.counting = true;
+  assert.equal(needsCount(d), false, "one count at a time");
+  assert.ok(texts(d).includes("Counting the items inside…"));
+  counted(d, 3);
+  assert.equal(needsCount(d), false, "counted once per dialog");
+  assert.deepEqual(levels(d), ["warning", "info"]);
+  assert.match(texts(d)[0], /Files inside become executable/);
+  assert.equal(texts(d)[1], "Also sets this mode on 3 items inside (links are skipped).");
+  counted(d, 10001);
+  assert.match(texts(d)[1], /more than 10,000 items/);
+  counted(d, null);
+  assert.match(texts(d)[1], /many items/);
+  setRecursive(d, false);
+  assert.deepEqual(levels(d), ["info"], "unticked: nothing about the inside");
+});
+
+test("notes: blocking messages come first; read only shows only its reason", () => {
+  const s = ready();
+  setText(s, "66");
+  assert.equal(levels(s)[0], "error");
+  assert.match(texts(s)[0], /octal/);
+  const r = ready({ uid: "0", owned: false, me: "501", mode: 0o666 });
+  assert.deepEqual(notes(r), [{ level: "note", text: "Not the owner, permissions cannot be changed" }]);
+  assert.deepEqual(notes(failed(createPermsState({ name: "a", isDir: false }), "No such file or folder: /x")), [{ level: "error", text: "No such file or folder: /x" }]);
+  const e = ready();
+  toggleBit(e, "others", "r");
+  e.error = "Permission denied";
+  assert.deepEqual(notes(e)[0], { level: "error", text: "Permission denied" });
+  toggleBit(e, "others", "r");
+  assert.equal(e.error, null, "an edit replaces the message of a refused apply");
 });

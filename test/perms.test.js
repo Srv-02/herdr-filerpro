@@ -1,10 +1,10 @@
-// lib/perms.js: pure mode helpers (octal parsing and formatting, the rwx matrix, symbolic text, the warnings of the
-// confirmation dialog) and the parsers for the probe, count and chmod answers.
+// lib/perms.js: pure mode helpers (octal parsing and formatting, the rwx matrix, symbolic text, the warnings the dialog
+// shows while editing) and the parsers for the probe, count and chmod answers.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseOctal, formatOctal, formatSymbolic, formatChange, chmodArg, getBit, setBit, specialBits, modeWarnings, canChange,
-  parseProbe, parseCount, parseModeOut, mismatchText, COUNT_LIMIT,
+  parseProbe, parseCount, parseModeOut, mismatchText, insideText, COUNT_LIMIT,
 } from "../mods/filer-pro/lib/perms.js";
 
 test("parseOctal: 3 or 4 digits 0-7 are accepted", () => {
@@ -89,7 +89,7 @@ test("specialBits", () => {
   assert.deepEqual(specialBits(0o2755), { setuid: false, setgid: true, sticky: false });
 });
 
-const w = (over) => modeWarnings({ oldMode: 0o644, newMode: 0o644, isDir: false, recursive: false, count: null, ...over });
+const w = (over) => modeWarnings({ oldMode: 0o644, newMode: 0o644, isDir: false, recursive: false, ...over });
 
 test("modeWarnings: a harmless change has no warning", () => {
   assert.deepEqual(w({ newMode: 0o600 }), []);
@@ -97,8 +97,8 @@ test("modeWarnings: a harmless change has no warning", () => {
 });
 
 test("modeWarnings: world writable result", () => {
-  for (const m of [0o777, 0o666, 0o602, 0o1777]) assert.ok(w({ newMode: m }).some((x) => /world writable/.test(x)), m.toString(8));
-  assert.ok(!w({ newMode: 0o664 }).some((x) => /world writable/.test(x)));
+  for (const m of [0o777, 0o666, 0o602, 0o1777]) assert.ok(w({ newMode: m }).some((x) => /World writable/.test(x)), m.toString(8));
+  assert.ok(!w({ newMode: 0o664 }).some((x) => /World writable/.test(x)));
 });
 
 test("modeWarnings: removing the user's own read or write permission", () => {
@@ -111,7 +111,7 @@ test("modeWarnings: removing the user's own read or write permission", () => {
 });
 
 test("modeWarnings: a folder without execute for the owner cannot be entered", () => {
-  assert.ok(w({ isDir: true, oldMode: 0o755, newMode: 0o644 }).some((x) => /your own execute permission/.test(x)));
+  assert.ok(w({ isDir: true, oldMode: 0o755, newMode: 0o644 }).some((x) => /your own execute permission: you can no longer open the folder/.test(x)));
   assert.ok(!w({ isDir: false, oldMode: 0o755, newMode: 0o644 }).some((x) => /execute/.test(x)));
 });
 
@@ -124,22 +124,36 @@ test("modeWarnings: setuid, setgid and sticky", () => {
   assert.ok(!w({ oldMode: 0o4755, newMode: 0o4700 }).some((x) => /Special bits/.test(x)), "unchanged special bits are no warning");
 });
 
-test("modeWarnings: recursive apply names the entry count", () => {
-  const r = (count, over = {}) => modeWarnings({ oldMode: 0o755, newMode: 0o755, isDir: true, recursive: true, count, ...over });
-  assert.ok(r(1234).some((x) => /1,234 items/.test(x)));
-  assert.ok(r(1).some((x) => /1 item inside/.test(x)));
-  assert.ok(r(COUNT_LIMIT + 1).some((x) => /more than 10,000 items/.test(x)));
-  assert.ok(r(null).some((x) => /many items/.test(x)));
-  assert.ok(r(5).some((x) => /every item inside/i.test(x)));
-  assert.ok(!w({ count: 5 }).some((x) => /inside/.test(x)), "not recursive: no count");
+test("insideText: the entries inside a recursive apply, never the folder itself", () => {
+  assert.equal(insideText(1234), "Also sets this mode on 1,234 items inside (links are skipped).");
+  assert.match(insideText(1), /on 1 item inside/);
+  assert.match(insideText(0), /on 0 items inside/);
+  assert.match(insideText(COUNT_LIMIT), /10,000 items/);
+  assert.match(insideText(COUNT_LIMIT + 1), /more than 10,000 items/);
+  assert.match(insideText(null), /many items/);
+  assert.equal(insideText(null, true), "Counting the items inside…");
+});
+
+test("modeWarnings: no count, and nothing about the inside without recursive", () => {
+  assert.ok(!w({ isDir: true, oldMode: 0o755, newMode: 0o755 }).some((x) => /inside/.test(x)));
+  assert.ok(!modeWarnings({ oldMode: 0o755, newMode: 0o755, isDir: true, recursive: true, count: 5 }).some((x) => /items/.test(x)), "the count is insideText's");
 });
 
 test("modeWarnings: recursive with one mode for files and folders", () => {
-  const r = (newMode) => modeWarnings({ oldMode: 0o755, newMode, isDir: true, recursive: true, count: 3 });
-  assert.ok(r(0o644).some((x) => /cannot be entered/.test(x)));
+  const r = (newMode) => modeWarnings({ oldMode: 0o755, newMode, isDir: true, recursive: true });
+  assert.ok(r(0o644).some((x) => /cannot be opened/.test(x)));
   assert.ok(r(0o755).some((x) => /Files inside become executable/.test(x)));
-  assert.ok(!r(0o750).every((x) => !/become executable/.test(x)));
+  assert.ok(r(0o750).some((x) => /become executable/.test(x)));
   assert.ok(!r(0o600).some((x) => /become executable/.test(x)));
+});
+
+test("modeWarnings: every line fits the notes area (one line of about 64 characters, at most two)", () => {
+  const all = [
+    ...w({ newMode: 0o666 }), ...w({ newMode: 0o044 }), ...w({ isDir: true, oldMode: 0o755, newMode: 0o055 }),
+    ...w({ oldMode: 0o1755, newMode: 0o6755 }), ...modeWarnings({ oldMode: 0o755, newMode: 0o644, isDir: true, recursive: true }),
+    insideText(COUNT_LIMIT + 1), insideText(null, true),
+  ];
+  for (const x of all) assert.ok(x.length <= 128, x);
 });
 
 test("canChange: the owner or root, nobody else", () => {
