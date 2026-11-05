@@ -26,7 +26,7 @@ Then click `Filer Pro` in the tab bar. To install by hand, see [Manual install](
 
 ![File tree with git marks and the context menu open](screenshots/browse.png)
 
-The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, download, copy, paste, rename and delete.
+The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, edit, download, copy, paste, rename and delete.
 
 ### Transfers you can trust
 
@@ -90,11 +90,33 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 `{ "preview": false }` turns the preview off (source view only), `{ "mermaid": false }` leaves Mermaid fences as code. `{ "perf": true }` writes render timings to `~/.config/herdr-app/data/filer-pro/perf.jsonl`.
 
+#### Editors
+
+Right click a file for **Open in Editor** (a GUI editor) or **Edit in Terminal** (a terminal editor in a new split to the right, on the file's machine). Both are dimmed for folders.
+
+```json
+{
+  "terminal_editor": "helix",
+  "terminal_editors": [{ "name": "nvim", "command": "nvim -u NONE" }],
+  "gui_editor": "Zed",
+  "gui_editors": [{ "name": "Sublime", "local": "subl {path}" }]
+}
+```
+
+- `terminal_editor`: one of `vi` (default), `vim`, `nano`, `micro`, `fresh`, `helix` (runs `hx`), or the name of an own entry.
+- `terminal_editors`: own entries `{ "name", "command" }`. `command` is the program with its own arguments; the file path is added as the last argument. An own entry with a shipped name replaces it.
+- `gui_editor`: one of `VS Code` (default), `Cursor`, `Zed`, or the name of an own entry.
+- `gui_editors`: own entries `{ "name", "local", "remote" }`. `local` opens a file on this computer, `remote` (optional) a file on an SSH machine. Placeholders: `{path}` (absolute path on the file's machine), `{path_uri}` (the same path percent-encoded for a URI) and `{target}` (the machine's SSH target, `remote` only). Each template needs `{path}` or `{path_uri}`.
+
+Commands and templates are split into words first (spaces separate, `'…'` and `"…"` group, no escapes), then the placeholders are filled in per word. No shell is involved, so any file name is safe. Unknown names and broken entries fall back to the default; nothing checks beforehand whether the editor is installed. A missing terminal editor shows the shell's "not found" in the new terminal, a failing GUI editor shows its error as a notice. Command line tools that are not on Herdr's `PATH` are also tried in `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`.
+
+Remote files: **Edit in Terminal** starts the editor in a split of the focused terminal (or a new tab of the active space) when the active space is on the file's machine; otherwise a notice asks you to switch to a space on that machine. **Open in Editor** uses the editor's own remote mode: VS Code and Cursor open `vscode-remote://ssh-remote+<target>/<path>` (needs the Remote - SSH extension), Zed opens `ssh://<target>/<path>` (Zed remote development). The editor connects by itself, so the SSH target must work from your editor too; ports belong in `~/.ssh/config` as a host alias.
+
 To remove only the preview, delete `mods/filer-pro/preview/` from the installed mod. Files then open as source. The caches `data/filer-pro/diagrams/`, `data/filer-pro/images/` and `data/filer-pro/loads/` under `~/.config/herdr-app/` can go too.
 
 ### What it runs and touches
 
-- **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit) and `node` (Mermaid).
+- **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
 - **Files:** it lists and changes files wherever you browse and act, locally and on your machines. Its own data lives in `~/.config/herdr-app/filer-pro.json`, `~/.config/herdr-app/data/filer-pro/` and `~/.config/herdr-app/filer-pro/`.
 - **Automation folder:** the mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). Anything that can write to that folder can drive the mod.
 - **Network:** only SSH to the machines you added to Herdr. Documents never load remote content.
