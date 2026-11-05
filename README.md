@@ -50,6 +50,8 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 ![Context menu with Open in Editor and Edit in Terminal](screenshots/editors.png)
 
+![Edit in Terminal: vi in a split next to the Filer Pro panel](screenshots/edit-terminal.png)
+
 Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, nano or helix in a split next to your terminal. It works for files on your SSH machines too, and you can add your own editors.
 
 ### Settings and updates
@@ -164,8 +166,6 @@ Commands and templates are split into words first (spaces separate, `'…'` and 
 
 Remote files: **Edit in Terminal** starts the editor in a split of the focused terminal (or a new tab of the active space) when the active space is on the file's machine; otherwise a notice asks you to switch to a space on that machine. **Open in Editor** uses the editor's own remote mode: VS Code and Cursor open `vscode-remote://ssh-remote+<target>/<path>` (needs the Remote - SSH extension), Zed opens `ssh://<target>/<path>` (Zed remote development). The editor connects by itself, so the SSH target must work from your editor too; ports belong in `~/.ssh/config` as a host alias.
 
-To remove only the preview, delete `mods/filer-pro/preview/` from the installed mod. Files then open as source. The caches `data/filer-pro/diagrams/`, `data/filer-pro/images/` and `data/filer-pro/loads/` under `~/.config/herdr-app/` can go too.
-
 ### What it runs and touches
 
 - **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
@@ -185,6 +185,8 @@ Privacy: the request goes to GitHub without any account or token and sends no da
 2. Remove the two blocks from your layout.
 3. Delete `~/.config/herdr-app/mods/filer-pro` and `~/.config/herdr-app/data/filer-pro`, optionally also `~/.config/herdr-app/filer-pro.json` and `~/.config/herdr-app/filer-pro/`.
 
+To remove only the preview, delete `mods/filer-pro/preview/` from the installed mod. Files then open as source. The caches `data/filer-pro/diagrams/`, `data/filer-pro/images/` and `data/filer-pro/loads/` under `~/.config/herdr-app/` can go too.
+
 ### Development
 
 ```sh
@@ -192,7 +194,7 @@ npm test        # unit and integration tests (Node, no Herdr needed)
 npm run lint    # syntax check of all scripts
 ```
 
-Local side is macOS, remote side Linux or macOS. Platform specific code lives in `mods/filer-pro/lib/platform.js` and `mods/filer-pro/bin/transfer.sh`. [RECIPE.md](RECIPE.md) describes the mod as a brief to build it from scratch.
+Local side is macOS, remote side Linux or macOS. Platform specific code lives in `mods/filer-pro/lib/platform.js` and `mods/filer-pro/bin/transfer.sh`. [RECIPE.md](RECIPE.md) describes the mod as a brief to build it from scratch. [scripts/screenshots](scripts/screenshots/README.md) holds the pipeline and demo project behind the README images.
 
 ## Credits
 
