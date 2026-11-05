@@ -8,7 +8,8 @@ const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action
 // state: { paste: { enabled, reason }, isDir?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
 // Open in Editor and Edit in Terminal are dimmed; remote: the row is on a machine, Show in Finder is dimmed because it would download first;
 // bundle: a local macOS package (lib/bundles.js), a folder that Open starts like the Finder does, with the entry
-// Show Package Contents, or Hide Package Contents while contents is true)
+// Show Package Contents, or Hide Package Contents while contents is true; windows: this computer is Windows, where Permissions… is
+// dimmed because there is no chmod; on a machine it works)
 export function rowMenuItems(state) {
   const file = state.isDir !== true;
   const local = state.remote !== true;
@@ -33,6 +34,7 @@ export function rowMenuItems(state) {
     SEPARATOR,
     entry("new_folder", "New Folder…"),
     entry("rename", "Rename…"),
+    entry("permissions", "Permissions…", state.windows !== true || !local),
     entry("delete", "Delete…"),
   ];
 }
