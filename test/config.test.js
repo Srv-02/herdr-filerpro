@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, ...numbers(null),
+    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, ...numbers(null),
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -114,4 +114,13 @@ test("settings dialog keys: numbers clamped or defaulted, node_path absolute or 
   assert.equal(c.node_path, "/usr/bin/node");
   c = await loadConfig(reader("{nope"), appHome, home);
   assert.deepEqual([c.list_total, c.svg_check, c.node_path], [5000, true, ""]);
+});
+
+test("hide_system_files is on and hide_dotfiles off by default; each changes only with a boolean (issue #17)", async () => {
+  for (const text of [null, "{nope", '{"hide_system_files":"no","hide_dotfiles":1}']) {
+    const c = await loadConfig(reader(text), appHome, home);
+    assert.deepEqual([c.hide_system_files, c.hide_dotfiles], [true, false], String(text));
+  }
+  const c = await loadConfig(reader('{"hide_system_files":false,"hide_dotfiles":true}'), appHome, home);
+  assert.deepEqual([c.hide_system_files, c.hide_dotfiles], [false, true]);
 });

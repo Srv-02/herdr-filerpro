@@ -42,9 +42,9 @@ test("settings: a wrong type or a fraction falls back to the default, an integer
 test("settings: every dialog key is listed once with a section, a label and a help line; perf and the editor lists are not", () => {
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
-  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
+  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "hide_system_files", "hide_dotfiles", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
   for (const k of ["perf", "terminal_editors", "gui_editors"]) assert.ok(!keys.includes(k), k);
-  const sections = ["Updates", "Downloads", "Preview", "Security", ...ADVANCED];
+  const sections = ["Updates", "Downloads", "File list", "Preview", "Security", ...ADVANCED];
   for (const s of SETTINGS) assert.ok(s.label && s.help && sections.includes(s.section), s.key);
   for (const s of NUMBERS) assert.ok(ADVANCED.includes(s.section) && s.unit, s.key);
 });
@@ -57,6 +57,18 @@ test("settings: labels and help lines of the spec", () => {
   assert.equal(by.pdf_remote_max_mb.help, "Bigger PDFs show a Load button first. They have to be copied over the network.");
   assert.equal(by.ssh_alive_count.unit, "missed checks");
   assert.equal(by.node_path.section, "Preview limits");
+});
+
+test("settings: the two hide switches of issue #17, in the visible File list group, not in Advanced", () => {
+  const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+  assert.deepEqual([by.hide_system_files.kind, by.hide_system_files.default, by.hide_system_files.section], ["bool", true, "File list"]);
+  assert.deepEqual([by.hide_dotfiles.kind, by.hide_dotfiles.default, by.hide_dotfiles.section], ["bool", false, "File list"]);
+  assert.equal(by.hide_system_files.label, "Hide system files");
+  assert.equal(by.hide_system_files.help, "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them.");
+  assert.equal(by.hide_dotfiles.label, "Hide hidden files");
+  assert.equal(by.hide_dotfiles.help, "Hides every file and folder whose name starts with a dot, such as .env or .gitignore.");
+  assert.ok(!ADVANCED.includes("File list"), "one File list heading in the dialog; the Advanced numbers are File list limits");
+  assert.equal(by.list_per_folder.section, "File list limits");
 });
 
 test("group: thousands with commas, without Intl", () => {

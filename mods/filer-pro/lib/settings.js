@@ -11,15 +11,15 @@ const bool = (key, def, label, help, section) => ({ key, kind: "bool", default: 
 export const group = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 // The Advanced part of the dialog, in this order.
-export const ADVANCED = Object.freeze(["File list", "Preview limits", "Transfers & connections"]);
+export const ADVANCED = Object.freeze(["File list limits", "Preview limits", "Transfers & connections"]);
 
 // Numbers: whole numbers in units a person types (MB, seconds); the code converts where it uses them.
 // Defaults are the values the mod had as constants before they became settings.
 export const NUMBERS = Object.freeze([
-  int("list_per_folder", 500, 10, 10000, "Files shown per folder", "Bigger folders are cut off with a note.", "File list", "files"),
-  int("list_total", 5000, 100, 20000, "Files shown in total", "Across all open folders together.", "File list", "files"),
-  int("tree_depth", 40, 1, 200, "Deepest folder level", "Folders nested deeper than this are not listed.", "File list", "levels"),
-  int("refresh_seconds", 10, 2, 3600, "Look for changes every", "The list also updates right after your own actions.", "File list", "seconds"),
+  int("list_per_folder", 500, 10, 10000, "Files shown per folder", "Bigger folders are cut off with a note.", "File list limits", "files"),
+  int("list_total", 5000, 100, 20000, "Files shown in total", "Across all open folders together.", "File list limits", "files"),
+  int("tree_depth", 40, 1, 200, "Deepest folder level", "Folders nested deeper than this are not listed.", "File list limits", "levels"),
+  int("refresh_seconds", 10, 2, 3600, "Look for changes every", "The list also updates right after your own actions.", "File list limits", "seconds"),
   int("preview_max_chars", 200000, 10000, 2000000, "Longest formatted preview", "Longer Markdown and HTML files are cut off.", "Preview limits", "characters"),
   int("source_max_chars", 400000, 10000, 5000000, "Longest plain text view", "Longer text is cut off.", "Preview limits", "characters"),
   int("image_max_mb", 20, 1, 500, "Show images right away up to", "Bigger images show a Load button first.", "Preview limits", "MB"),
@@ -38,6 +38,8 @@ export const NUMBERS = Object.freeze([
 export const SETTINGS = Object.freeze([
   bool("update_check", true, "Check for updates automatically", "Once a day, Filer Pro asks GitHub whether a new version exists. Nothing about you or your files is sent, but GitHub sees your IP address.", "Updates"),
   Object.freeze({ key: "download_folder", kind: "text", default: "~/Downloads", label: "Download folder", help: "Where Download and Download to… put files.", section: "Downloads" }),
+  bool("hide_system_files", true, "Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them.", "File list"),
+  bool("hide_dotfiles", false, "Hide hidden files", "Hides every file and folder whose name starts with a dot, such as .env or .gitignore.", "File list"),
   bool("preview", true, "Show previews", "Markdown, HTML, images and PDFs open formatted. Turn off to always see the raw text.", "Preview"),
   bool("mermaid", true, "Draw diagrams", "Turns Mermaid code in Markdown files into diagrams. Needs Node.js.", "Preview"),
   bool("svg_check", true, "Check SVG images before showing them", "Recommended. Blocks SVG files that try to load content from the internet.", "Security"),

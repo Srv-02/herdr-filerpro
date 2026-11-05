@@ -1,4 +1,4 @@
-// Settings dialog (overlay view "settings"): Updates, Downloads, Editors, Preview, Security and a collapsed Advanced
+// Settings dialog (overlay view "settings"): Updates, Downloads, Editors, File list, Preview, Security and a collapsed Advanced
 // part with every number of lib/settings.js, checked field by field and written back with saveSettings (read-modify-write,
 // only the changed keys). Every InputState is created here, in the overlay's init (never in render), from the snapshot
 // the opener put into shared("filer-pro.settings").
@@ -265,6 +265,11 @@ function body(t, state, handlers, stored) {
         .child(help(t, `Missing your editor? Add it to ${state.configPath}, then reopen Settings.`))
         .child(h_flex().child(div().id("filer-pro-settings-editors-doc").cursor_pointer().text_size(12.5).line_height("18px").text_color(t.accent)
           .on_click((_e, cx) => cx.open_url(EDITORS_DOC_URL)).child("How to add an editor")))),
+
+    // Above Preview, as in the panel (the list on top, the preview below) and in Advanced (File list limits first).
+    heading(t, "File list"),
+    switchRow(t, state, "hide_system_files"),
+    switchRow(t, state, "hide_dotfiles", { last: true }),
 
     heading(t, "Preview"),
     switchRow(t, state, "preview"),

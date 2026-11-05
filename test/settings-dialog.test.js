@@ -174,7 +174,7 @@ test("view: the parts in the order of the design, help lines below the labels, p
   const root = view(s);
   const out = texts(root);
   const order = ["UPDATES", "Filer Pro 1.0.0", "Check for updates automatically", "DOWNLOADS", "Download folder", "Choose…", "EDITORS", "Open in Editor", "Edit in Terminal",
-    "Missing your editor? Add it to ~/.config/herdr-app/filer-pro.json, then reopen Settings.", "How to add an editor", "PREVIEW", "Show previews", "Draw diagrams",
+    "Missing your editor? Add it to ~/.config/herdr-app/filer-pro.json, then reopen Settings.", "How to add an editor", "FILE LIST", "Hide system files", "Hide hidden files", "PREVIEW", "Show previews", "Draw diagrams",
     "SECURITY", "Check SVG images before showing them", "Keep this on", SVG_WARNING, "Advanced", "Limits, timeouts and connections. The defaults suit almost everyone.",
     "Filer Pro is free and open source.", "GitHub", "Buy me a coffee", "Cancel", "Save"];
   let at = -1;
@@ -193,7 +193,7 @@ test("view: Advanced opens with its three groups, every number with its unit and
   s.advanced = true;
   const root = view(s), out = texts(root);
   for (const x of SETTINGS) assert.ok(out.includes(`#filer-pro-settings-${x.key}`), x.key);
-  const groups = ["File list", "Preview limits", "Transfers & connections"].map((g) => out.indexOf(g));
+  const groups = ["File list limits", "Preview limits", "Transfers & connections"].map((g) => out.indexOf(g));
   assert.ok(groups.every((i, n) => i > 0 && (n === 0 || i > groups[n - 1])));
   assert.ok(out.includes("Bigger folders are cut off with a note. Default 500."));
   assert.ok(out.includes("Across all open folders together. Default 5,000."));
@@ -277,4 +277,18 @@ test("tilde: only paths in the home folder get ~", () => {
   assert.equal(tilde("/home/u/Downloads", "/home/u"), "~/Downloads");
   assert.equal(tilde("/home/user2/x", "/home/u"), "/home/user2/x");
   assert.equal(tilde("/tmp", null), "/tmp");
+});
+
+test("view: the File list switches start at their defaults, flip on click, and only a flipped one is written (issue #17)", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  assert.deepEqual([s.flags.hide_system_files, s.flags.hide_dotfiles], [true, false]);
+  assert.deepEqual(collect(s), {});
+  const sw = byId(view(s), "filer-pro-settings-hide_dotfiles-switch");
+  called(sw, "on_click")[0][0]({}, makeCx());
+  assert.equal(s.flags.hide_dotfiles, true);
+  assert.deepEqual(collect(s), { hide_dotfiles: true });
+  const row = byId(view(s), "filer-pro-settings-hide_system_files");
+  assert.deepEqual(texts(row.kids[0]), ["Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them."]);
+  const off = createSettingsDialog(await snapshot({ hide_system_files: false }), cx);
+  assert.equal(off.flags.hide_system_files, false);
 });

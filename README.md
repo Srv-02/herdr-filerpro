@@ -104,7 +104,7 @@ The gear in the panel header opens every setting, and changes apply without a re
 
 #### Settings dialog
 
-Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
+Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **File list** (hide system files and hidden files), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
 
 Each field is checked when you leave it and again on Save; nothing is written until every field is valid, and a wrong field in Advanced opens it. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). What turning `update_check` off or on again does is described in [Updates](#updates).
 
@@ -118,6 +118,8 @@ A missing key means its default. In the file, a number of the wrong type (or wit
 | `update_check` | `true` | `true` / `false` | Daily update check |
 | `perf` | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart; config file only) |
 | `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | see [Editors](#editors) | | Edit in Terminal, Open in Editor (the lists are config file only) |
+| `hide_system_files` | `true` | `true` / `false` | Hide OS clutter: `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`, `.apdisk`, `Icon\r`, `Thumbs.db`, `desktop.ini` (the last two in any case). Hidden entries do not count against the list limits; copy, move and delete of a folder still include them |
+| `hide_dotfiles` | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot |
 | `list_per_folder` | `500` | 10–10,000 | Entries shown per folder |
 | `list_total` | `5000` | 100–20,000 | Entries shown in the whole tree |
 | `tree_depth` | `40` | 1–200 | Deepest folder level shown |

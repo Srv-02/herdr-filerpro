@@ -23,6 +23,7 @@ import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menui
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
+import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate } from "./lib/reload.js";
 import { baseName, joinPath, relativePath, shellPath } from "./lib/names.js";
 import { writeClipboard } from "./lib/pasteboard.js";
@@ -55,20 +56,21 @@ function location() {
 }
 const key = () => JSON.stringify(location());
 // The settings before the config file was read (and in copies that never read it): today's defaults.
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false };
 const MB = 1024 * 1024;
 // Title of the error toast per failed request action.
 const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Copy failed", paste: "Paste failed", rename: "Rename failed", mkdir: "New folder failed", delete: "Delete failed", clip: "Copy failed" };
 
 // perFolder: the setting list_per_folder; the listing returns at most one entry more, so a cut folder is noticed.
-async function directory(path, on, perFolder) {
+// hide: the settings hide_system_files and hide_dotfiles; the listing leaves those entries out before it counts.
+async function directory(path, on, perFolder, hide) {
   if (!on && window()?.platform === "windows") {
-    const r = await exec("powershell", ["-NoProfile", "-Command", psListCommand(path, perFolder)]);
+    const r = await exec("powershell", ["-NoProfile", "-Command", psListCommand(path, perFolder, hide)]);
     if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
     const result = JSON.parse(r.stdout || "[]");
     return Array.isArray(result) ? result : [result];
   }
-  const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder)], { on });
+  const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder), ...hideArgs(hide)], { on });
   if (r.code !== 0) throw Object.assign(new Error(r.stderr || "Cannot list this folder"), { missing: folderMissing(r) });
   const fields = r.stdout.split("\0"), out = [];
   for (let i = 0; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
@@ -133,7 +135,7 @@ export default class FilerPro extends View {
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
       // The first listing ran with the defaults: other list settings reload the tree at the next tick.
-      if (["list_per_folder", "list_total", "tree_depth"].some((k) => cfg[k] !== DEFAULTS[k])) this.refreshedAt = 0;
+      if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles"].some((k) => cfg[k] !== DEFAULTS[k])) this.refreshedAt = 0;
       this.version = await this.readVersion();
       if (cfg.perf) await this.startPerf(cx);
     });
@@ -531,7 +533,7 @@ export default class FilerPro extends View {
     const { on, cwd: root } = context;
     let entries;
     try {
-      entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder);
+      entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder, this.conf);
     } catch (e) {
       // An open subfolder that was renamed or deleted just leaves the tree, with everything below it.
       if (path && e?.missing && this.current(context)) { pruneFolder(this.folders, this.entries, path); return; }
@@ -560,6 +562,8 @@ export default class FilerPro extends View {
     this.limited = false;
     cx.spawn(async cx => {
       try {
+        // An open folder that a hide setting now hides leaves the tree, with everything below it (it would still use up list_total).
+        for (const path of [...this.folders]) if (hiddenPath(path, this.conf)) pruneFolder(this.folders, this.entries, path);
         for (const path of ["", ...this.folders]) {
           if (!this.current(context)) return;
           await this.loadFolder(path, context);

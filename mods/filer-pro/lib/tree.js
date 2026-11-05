@@ -1,15 +1,17 @@
 // Bookkeeping of the file tree. Pure.
 import { psQuoted } from "./names.js";
+import { SYSTEM_CASE, psHideFilter } from "./hidden.js";
 
-// `files <dir> <limit>`: NUL-separated kind (d/f) and name of each entry but .git, at most <limit> + 1 of them (one past
-// the limit tells main.js that the folder was cut); ends with `test -d`, see folderMissing.
-export const LIST_SCRIPT = 'n=0; for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
+// `files <dir> <limit> [<system> <dots>]`: NUL-separated kind (d/f) and name of each entry but .git, at most <limit> + 1
+// of them (one past the limit tells main.js that the folder was cut); ends with `test -d`, see folderMissing.
+// <system> and <dots> are 1 or 0 (lib/hidden.js hideArgs): 1 skips system files or dot names before they are counted.
+export const LIST_SCRIPT = 'n=0; cr=$(printf \'\\r\'); for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ "$4" = 1 ]; then case $name in .*) continue;; esac; fi; if [ "$3" = 1 ]; then case $name in ' + SYSTEM_CASE + ') continue;; esac; fi; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
 
 // The Windows listing: JSON of { name, dir } for at most `limit` + 1 entries. Windows PowerShell otherwise uses the
 // console code page; exec decodes UTF-8. Reparse points keep directory attributes even when dangling; check their target.
-// `limit` is a whole number from lib/settings.js.
-export function psListCommand(path, limit) {
-  return "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git' | Select-Object -First " + (Math.trunc(limit) + 1) + " | ForEach-Object { @{ name=$_.Name; dir=($_.PSIsContainer -and (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($_.Target -and [IO.Directory]::Exists(([IO.Path]::Combine([IO.Path]::GetDirectoryName($_.FullName), $_.Target[0])))))) } }) | ConvertTo-Json -Compress } '" + psQuoted(path) + "'";
+// `limit` is a whole number from lib/settings.js; `hide` the switches of lib/hidden.js, filtered before the limit.
+export function psListCommand(path, limit, hide) {
+  return "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git'" + psHideFilter(hide) + " | Select-Object -First " + (Math.trunc(limit) + 1) + " | ForEach-Object { @{ name=$_.Name; dir=($_.PSIsContainer -and (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($_.Target -and [IO.Directory]::Exists(([IO.Path]::Combine([IO.Path]::GetDirectoryName($_.FullName), $_.Target[0])))))) } }) | ConvertTo-Json -Compress } '" + psQuoted(path) + "'";
 }
 
 export const limitText = (perFolder, total) => `File list limited to ${perFolder.toLocaleString("en-US")} entries per folder and ${total.toLocaleString("en-US")} total`;
