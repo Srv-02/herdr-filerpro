@@ -10,6 +10,9 @@ import { splitMermaidSteps, MAX_DIAGRAMS, MAX_DIAGRAM_CHARS } from "./mermaid.js
 export const PREVIEW_MAX_CHARS = 200000;
 export { MAX_DIAGRAMS, MAX_DIAGRAM_CHARS };
 
+// The note under a shortened preview, with the limit the document was prepared with (setting preview_max_chars).
+export const noteText = (limit) => `Preview is shortened (first ${limit.toLocaleString("en-US")} characters, long lines cut) · open Source for the whole file`;
+
 // Links in a document are written by whoever wrote the document: only web links go to the system opener.
 // A local path, file:, javascript: or a custom scheme could start a program.
 export function safeLink(url) {
@@ -20,33 +23,34 @@ const fence = (text) => "```mermaid\n" + text + "\n```";
 
 /**
  * The steps of prepare: yields between pieces of work, returns
- * { kind, parts: [{ kind: "markdown" | "html" | "mermaid", text, diagram? }], truncated, diagrams }.
- * Mermaid parts beyond MAX_DIAGRAMS fold back into Markdown, so they show as code.
+ * { kind, parts: [{ kind: "markdown" | "html" | "mermaid", text, diagram? }], truncated, diagrams, limit }.
+ * Mermaid parts beyond maxDiagrams fold back into Markdown, so they show as code. maxChars and maxDiagrams come from the
+ * settings (preview_max_chars, max_diagrams); `limit` is the maxChars used, for the note.
  */
-export function* prepareSteps(text, { kind, mermaid }) {
+export function* prepareSteps(text, { kind, mermaid, maxChars = PREVIEW_MAX_CHARS, maxDiagrams = MAX_DIAGRAMS }) {
   let source = text, truncated = false;
-  if (source.length > PREVIEW_MAX_CHARS) {
-    let cut = PREVIEW_MAX_CHARS;
+  if (source.length > maxChars) {
+    let cut = maxChars;
     const last = source.charCodeAt(cut - 1);
     if (last >= 0xd800 && last <= 0xdbff) cut--;
     source = source.slice(0, cut);
     truncated = true;
   }
-  if (kind === "html") return { kind, parts: [{ kind: "html", text: yield* htmlSteps(source) }], truncated, diagrams: 0 };
+  if (kind === "html") return { kind, parts: [{ kind: "html", text: yield* htmlSteps(source) }], truncated, diagrams: 0, limit: maxChars };
   const stripped = yield* markdownSteps(source);
   yield;
   const split = mermaid ? yield* splitMermaidSteps(stripped.text) : [{ kind: "markdown", text: stripped.text }];
   const parts = [];
   let diagrams = 0;
   for (const p of split) {
-    const keep = p.kind === "mermaid" && diagrams < MAX_DIAGRAMS;
+    const keep = p.kind === "mermaid" && diagrams < maxDiagrams;
     if (keep) diagrams++;
     const next = p.kind === "mermaid" && !keep ? { kind: "markdown", text: fence(p.text) } : { ...p };
     const prev = parts.at(-1);
     if (next.kind === "markdown" && prev?.kind === "markdown") prev.text += "\n\n" + next.text;
     else parts.push(next);
   }
-  return { kind, parts, truncated: truncated || stripped.cut, diagrams };
+  return { kind, parts, truncated: truncated || stripped.cut, diagrams, limit: maxChars };
 }
 
 export function prepare(text, options) {

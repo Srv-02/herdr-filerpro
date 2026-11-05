@@ -5,14 +5,16 @@ const ITEM_H = 28, SEPARATOR_H = 7, PADDING = 8, RESERVE = 4;
 const SEPARATOR = { separator: true };
 const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action.replace(/_/g, "-")}`, label, action, enabled });
 
-// state: { paste: { enabled, reason }, isDir?, remote? } (isDir: the row is a folder, Open and Open in Preview
-// are dimmed; remote: the row is on a machine, Show in Finder is dimmed because it would download first)
+// state: { paste: { enabled, reason }, isDir?, remote? } (isDir: the row is a folder, Open, Open in Preview,
+// Open in Editor and Edit in Terminal are dimmed; remote: the row is on a machine, Show in Finder is dimmed because it would download first)
 export function rowMenuItems(state) {
   const file = state.isDir !== true;
   const local = state.remote !== true;
   return [
     entry("open", "Open", file),
     entry("open_preview", "Open in Preview", file),
+    entry("open_editor", "Open in Editor", file),
+    entry("edit_terminal", "Edit in Terminal", file),
     entry("reveal", "Show in Finder", local),
     SEPARATOR,
     entry("download", "Download"),
@@ -32,7 +34,7 @@ export function rowMenuItems(state) {
 }
 
 export function rootMenuItems(state) {
-  return [entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled)];
+  return [entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), SEPARATOR, entry("settings", "Settings…")];
 }
 
 export function menuHeight(items) {

@@ -274,3 +274,18 @@ test("main.js: PDFs are decided before the text is read, Load starts a quiet job
   const loadText = main.indexOf("if (this.loader)", view), pic = main.indexOf('this.doc.kind === "pdf"', view), code = main.indexOf("if (!this.code)", view);
   assert.ok(loadText > 0 && loadText < pic && pic < code, "viewer: Load hint, then the page, then the loading text");
 });
+
+test("settings: maxLocal, maxRemote and cacheLimit per call", async () => {
+  const MB = 1024 * 1024;
+  const over = local(6 * MB);
+  assert.equal((await over.make().load({ on: null, path: LOCAL, maxLocal: 5 * MB })).error, "File is larger than 5 MB");
+  assert.equal((await local(6 * MB).make().load({ on: null, path: LOCAL, maxLocal: 7 * MB })).kind, "pdf");
+  const size = 30 * MB;
+  const r = fake((c) => c.args?.[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(size, 7, PDF), stderr: "" } : ok);
+  assert.equal((await r.make().load({ on: "box", path: REMOTE, maxRemote: 25 * MB })).error, "File is larger than 25 MB");
+  const key = cacheKey({ on: null, path: LOCAL, size: 500, mtime: 7 });
+  const c = fake((x) => x.args?.[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(500, 7, PDF), stderr: "" }
+    : x.cmd === "osascript" ? rendered(3, 1, 1224, 1584) : x.args?.[1] === LIST_SCRIPT ? { code: 0, stdout: row(10, pageName(key, 1)) + row(60e6, "old.png"), stderr: "" } : ok);
+  await c.make().load({ on: null, path: LOCAL, cacheLimit: 100 * MB });
+  assert.deepEqual(c.kinds(), ["probe", "render", "list"], "under a 100 MB cache the old file stays");
+});

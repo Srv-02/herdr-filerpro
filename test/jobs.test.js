@@ -1192,3 +1192,44 @@ test("inspect #54: a linked target counts as no folder, a missing target has no 
   const m = await g.jobs.inspect({ direction: "local", machine: null, src: "/Users/m/a.txt", destDir: "/Users/m/q" });
   assert.equal("destIsDir" in m, false);
 });
+
+test("settings: clearFinished(keepMs) uses the configured time", async () => {
+  const { f, jobs } = setup();
+  f.store["filer-pro.jobs"] = { a: { id: "a", state: "done", finishedAt: f.t } };
+  f.t += 3_000;
+  jobs.clearFinished(5_000);
+  assert.deepEqual(Object.keys(f.jobs()), ["a"]);
+  f.t += 3_000;
+  jobs.clearFinished(5_000);
+  assert.deepEqual(Object.keys(f.jobs()), []);
+});
+
+test("settings: stall_seconds from settings() decides when tick kills a transfer", async () => {
+  const f = createFake();
+  const jobs = createJobs({ ...f.deps(), settings: () => ({ stall_seconds: 30 }) });
+  f.sizes[SRC] = 100;
+  await jobs.start(down());
+  f.sizes[`${DIR}/.a.txt.fs-id1.part`] = 10;
+  f.t += 1000;
+  await jobs.tick();
+  f.t += 31_000;
+  await jobs.tick();
+  assert.deepEqual(f.hcCalls.filter((a) => a[0] === "kill"), [["kill", "term-fs-id1"]]);
+});
+
+test("settings: SSH options reach transfer.sh through env, only when they differ from the defaults", async () => {
+  const run = async (settings) => {
+    const f = createFake();
+    const jobs = createJobs({ ...f.deps(), settings: () => settings });
+    await jobs.start(down());
+    return f.hcRuns()[0].slice(8);
+  };
+  const plain = await run({ ssh_connect_timeout: 15, ssh_alive_interval: 15, ssh_alive_count: 4 });
+  assert.equal(plain[0], "sh");
+  assert.deepEqual(await run({}), plain);
+  assert.deepEqual((await run({ ssh_connect_timeout: 30, ssh_alive_interval: 15, ssh_alive_count: 4 })).slice(0, 5),
+    ["env", "FILER_PRO_SSH_CONNECT_TIMEOUT=30", "FILER_PRO_SSH_ALIVE_INTERVAL=15", "FILER_PRO_SSH_ALIVE_COUNT=4", "sh"]);
+  // Anything that is not a whole number in range never reaches the command line: the default is used.
+  assert.deepEqual(await run({ ssh_connect_timeout: "15 -o ProxyCommand=x", ssh_alive_interval: 1.5, ssh_alive_count: 4 }), plain);
+  assert.deepEqual((await run({ ssh_connect_timeout: 9999, ssh_alive_interval: 15, ssh_alive_count: 4 })).slice(0, 2), ["env", "FILER_PRO_SSH_CONNECT_TIMEOUT=300"]);
+});

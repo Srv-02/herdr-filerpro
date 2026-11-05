@@ -1,5 +1,5 @@
 // Images in the file view: detection by extension and header, the dimensions from the header, the cache under
-// data/filer-pro/images/ with its 50 MB limit, and the copy into it (cp, or ssh from a machine), all through exec.
+// data/filer-pro/images/ with its size limit (image_cache_mb, default 50 MB), and the copy into it (cp, or ssh from a machine), all through exec.
 // Pure: Herdr comes in as dependencies, so it runs under Node tests (see diagrams.js). dimensions() follows the
 // Issues mod's pictures.js, which ships with herdr-app.
 import { createHash } from "crypto";
@@ -9,8 +9,10 @@ import { sshTarget } from "../lib/machines.js";
 import { baseName } from "../lib/names.js";
 
 export const MAX_IMAGE = 20 * 1024 * 1024, CACHE_LIMIT = 50 * 1024 * 1024, DIR = "data/filer-pro/images";
-// Files over a size limit that the user lifted with Load: one folder per cache key, outside the 50 MB cache.
+// Files over a size limit that the user lifted with Load: one folder per cache key, outside the image cache.
 export const LOADS = "data/filer-pro/loads";
+// A byte limit in MB for texts: "20", or "0.5" for a limit that is no whole number of MB.
+export const mb = (bytes) => String(Math.round((bytes / 1024 / 1024) * 10) / 10);
 export const loadDir = (key) => `${LOADS}/${key}`;
 
 // `x <path>`: -1 when the path does not exist (a dangling link too), else "<size> <mtime>" of the file behind a
@@ -137,8 +139,9 @@ export function sniff(bytes, ext) {
   return f && f === (ext === "jpg" ? "jpeg" : ext) ? f : null;
 }
 
-// { width, height } from the header, null when unknown.
-export function dimensions(bytes) {
+// { width, height } from the header, null when unknown. svgCheck false (setting svg_check) skips svgSafe: an SVG then
+// opens even when it could set its own size through CSS or load more than itself; its size still comes from the root.
+export function dimensions(bytes, { svgCheck = true } = {}) {
   const f = format(bytes);
   let w = 0, h = 0;
   if (f === "ico") {
@@ -188,7 +191,7 @@ export function dimensions(bytes) {
     // A plain number (or px) is a size; a percentage or a missing value takes its size from the viewBox; any other
     // unit (mm, em, 1e5, ...) is no size, never a fall back to a small viewBox. Only the root's own attributes count.
     const text = head(bytes), at0 = svgStart(text), attrs = at0 >= 0 ? svgAttrs(text, at0) : null;
-    if (!attrs || !svgSafe(lower(bytes), attrs)) return null;
+    if (!attrs || (svgCheck && !svgSafe(lower(bytes), attrs))) return null;
     const plain = /^\s*(\d+\.?\d*|\.\d+)(?:px)?\s*$/, percent = /^\s*(\d+\.?\d*|\.\d+)%\s*$/, num = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)";
     const kind = (v) => v === undefined || percent.test(v) ? "box" : plain.test(v) ? "num" : "bad";
     const [aw, ah] = [attrs.get("width"), attrs.get("height")], [kw, kh] = [kind(aw), kind(ah)];
@@ -287,9 +290,9 @@ export function createCache({ exec, hc, unlink, rand = () => Math.random().toStr
     if (r.code !== 0) { await unlink(part).catch(() => {}); return cannot(r.stderr || `exit code ${r.code}`); }
     return null;
   }
-  async function evict(dir, keep) {
+  async function evict(dir, keep, limit = CACHE_LIMIT) {
     try {
-      const old = evictPlan((await exec("sh", ["-c", LIST_SCRIPT, "x", dir], { on: null })).stdout, CACHE_LIMIT, keep);
+      const old = evictPlan((await exec("sh", ["-c", LIST_SCRIPT, "x", dir], { on: null })).stdout, limit, keep);
       if (old.length) await exec("rm", ["-f", "--", ...old.map((n) => `${dir}/${n}`)], { on: null });
     } catch {}
   }
@@ -300,7 +303,9 @@ export function createImages({ exec, hc, exists, unlink, appHome, rand = () => M
   const cache = createCache({ exec, hc, unlink, rand });
   // { kind: "image", path, width, height } (path relative to appHome) or { error }; `final` means: no text fallback.
   // A hint with `load` carries `key` and `name`; Load itself is a transfer job (main.js), then load() finds its copy.
-  async function load({ on, path }) {
+  // maxImage, cacheLimit: bytes from the settings (image_max_mb, image_cache_mb), svgCheck: svg_check; per call, so a
+  // changed setting applies to the next file.
+  async function load({ on, path, maxImage = MAX_IMAGE, cacheLimit = CACHE_LIMIT, svgCheck = true }) {
     if (badSpelling(path)) return { error: 'Path must not contain ".", ".." or "//"' };
     const ext = extOf(path), cannot = (e) => ({ error: `Cannot load this image: ${oneLine(e?.message ?? e) ?? "unknown error"}` });
     let probe;
@@ -308,12 +313,12 @@ export function createImages({ exec, hc, exists, unlink, appHome, rand = () => M
     if (probe.code !== 0) return cannot(probe.stderr || `exit code ${probe.code}`);
     const [first, ...rest] = probe.stdout.split("\n"), [size, mtime] = first.trim().split(" ").map(Number);
     if (!(size >= 0)) return { error: "This file is no longer available", final: true };
-    if (ext === "svg" && size > MAX_IMAGE) return { error: "File is larger than 20 MB · no preview", final: true }; // never drawn, never read as text
+    if (ext === "svg" && size > maxImage) return { error: `File is larger than ${mb(maxImage)} MB · no preview`, final: true }; // never drawn, never read as text
     const bytes = Uint8Array.from(rest.join(" ").match(/\b[0-9a-f]{2}\b/g) ?? [], (h) => parseInt(h, 16));
     const kind = sniff(bytes, ext);
     if (!kind) return { error: `File header is not ${ext.toUpperCase()} · no preview` };
-    if (kind === "svg" && size > bytes.length) return { error: "SVG is larger than the 64 KiB checked · no preview" };
-    const dims = dimensions(bytes);
+    if (kind === "svg" && svgCheck && size > bytes.length) return { error: "SVG is larger than the 64 KiB checked · no preview" };
+    const dims = dimensions(bytes, { svgCheck });
     if (!dims) return { error: "Image size unknown · no preview" };
     if (dims.width * dims.height > 100e6) return { error: "Image has more than 100 megapixels · no preview", final: true };
     const key = cacheKey({ on, path, size, mtime });
@@ -321,12 +326,12 @@ export function createImages({ exec, hc, exists, unlink, appHome, rand = () => M
     // A copy in loads/<key>/ wins at any size: the Load click (or the transfer job) put it there, e.g. after a timed-out download.
     if (await exists(loaded)) return { kind: "image", path: rel, ...dims };
     // Over the limit the transfer job (main.js, jobs.start `as`) puts the file under that name, locally and from a machine; load() only reports.
-    if (size > MAX_IMAGE) return { error: "File is larger than 20 MB", load: true, final: true, key, name };
+    if (size > maxImage) return { error: `File is larger than ${mb(maxImage)} MB`, load: true, final: true, key, name };
     const dir = `${appHome()}/${DIR}`, file = `${dir}/${name}`;
     if (!(await exists(file))) {
       const r = await cache.fetch({ on, path, size, file });
       if (r) return timeoutHint(r, on, key, name);
-      await cache.evict(dir, [name]);
+      await cache.evict(dir, [name], cacheLimit);
     }
     return { kind: "image", path: `${DIR}/${name}`, ...dims };
   }
