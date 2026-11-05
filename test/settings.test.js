@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { group as groupFromNumbers } from "../mods/filer-pro/lib/numbers.js";
 import { SETTINGS, NUMBERS, numbers, validateField, terminalProblem, guiProblem, saveSettings, changedEdits, group, ADVANCED } from "../mods/filer-pro/lib/settings.js";
 import { PREVIEW_MAX_CHARS, MAX_DIAGRAMS, MAX_DIAGRAM_CHARS } from "../mods/filer-pro/preview/prepare.js";
 import { MAX_IMAGE, CACHE_LIMIT } from "../mods/filer-pro/preview/images.js";
@@ -59,8 +60,8 @@ test("settings: labels and help lines of the spec", () => {
   assert.equal(by.node_path.section, "Preview limits");
 });
 
-test("group: thousands with commas, without Intl", () => {
-  assert.deepEqual([0, 10, 999, 1000, 10000, 2000000].map(group), ["0", "10", "999", "1,000", "10,000", "2,000,000"]);
+test("group is the one from lib/numbers.js (settings re-exports it for the dialog)", () => {
+  assert.equal(group, groupFromNumbers);
 });
 
 test("validateField: numbers must be whole and in range", () => {
