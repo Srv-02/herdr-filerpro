@@ -106,6 +106,13 @@ test("limits: exactly 100 MB local renders, one byte more is a Load hint without
   assert.equal(over.calls[1].args[4], LOCAL);
 });
 
+test("remote: non-default SSH settings travel to the fetch", async () => {
+  const key = cacheKey({ on: "box", path: REMOTE, size: 500, mtime: 7 }), pdf = `${APP}/${DIR}/${key}.pdf`;
+  const f = fake((c) => c.args?.[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(500, 7, PDF), stderr: "" } : c.cmd === "osascript" ? rendered(1, 1, 1000, 500) : ok);
+  await f.make().load({ on: "box", path: REMOTE, ssh: { ssh_connect_timeout: 30, ssh_alive_interval: 5, ssh_alive_count: 9 } });
+  assert.deepEqual(f.calls.find((c) => c.args?.[1] === FETCH_SSH).args.slice(2), ["x", REMOTE, `${pdf}.r1.part`, pdf, "500", "u@box", "30", "5", "9"]);
+});
+
 test("remote up to 20 MB: fetched as <key>.pdf through ssh, rastered from the cache, page and PDF kept", async () => {
   const key = cacheKey({ on: "box", path: REMOTE, size: MAX_PDF_REMOTE, mtime: 7 }), pdf = `${APP}/${DIR}/${key}.pdf`;
   let list = "";

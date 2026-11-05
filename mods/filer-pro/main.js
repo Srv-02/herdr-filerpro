@@ -683,9 +683,11 @@ export default class FilerPro extends View {
     });
   }
 
-  // The size limits of images and PDFs in bytes, from the settings of the open file (per call: the loaders live per view).
+  // The size limits of images and PDFs in bytes and the SSH options of their download from a machine, from the settings
+  // of the open file (per call: the loaders live per view).
   loadLimits(cfg = this.fileCfg ?? DEFAULTS) {
-    return { maxImage: cfg.image_max_mb * MB, cacheLimit: cfg.image_cache_mb * MB, maxLocal: cfg.pdf_local_max_mb * MB, maxRemote: cfg.pdf_remote_max_mb * MB, svgCheck: cfg.svg_check };
+    const ssh = { ssh_connect_timeout: cfg.ssh_connect_timeout, ssh_alive_interval: cfg.ssh_alive_interval, ssh_alive_count: cfg.ssh_alive_count };
+    return { maxImage: cfg.image_max_mb * MB, cacheLimit: cfg.image_cache_mb * MB, maxLocal: cfg.pdf_local_max_mb * MB, maxRemote: cfg.pdf_remote_max_mb * MB, svgCheck: cfg.svg_check, ssh };
   }
 
   // A file over the limit: a running preview job for its loads folder is joined (the panel's, while the dialog opens);
