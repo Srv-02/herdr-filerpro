@@ -92,7 +92,9 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 #### Settings dialog
 
-Every setting below can also be changed in **Settings** (the button in the panel header while no file is open, or right click the free area below the tree, `Settings…`). The dialog checks each value and shows what is wrong next to the field; nothing is written until every field is valid. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). Turning `update_check` off hides the update hint at once; turning it on again can take up to an hour until the first check, because the update pass runs at most hourly.
+Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
+
+Each field is checked when you leave it and again on Save; nothing is written until every field is valid, and a wrong field in Advanced opens it. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). Turning `update_check` off hides the update hint at once; turning it on again can take up to an hour until the first automatic check, because the update pass runs at most hourly (**Check now** asks at once).
 
 A missing key means its default. In the file, a number of the wrong type (or with a fraction) means the default, a whole number out of range the nearest bound.
 
@@ -102,8 +104,8 @@ A missing key means its default. In the file, a number of the wrong type (or wit
 | `preview` | `true` | `true` / `false` | Preview Markdown, HTML, images and PDFs |
 | `mermaid` | `true` | `true` / `false` | Draw Mermaid diagrams |
 | `update_check` | `true` | `true` / `false` | Daily update check |
-| `perf` | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart) |
-| `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | see [Editors](#editors) | | Edit in Terminal, Open in Editor |
+| `perf` | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart; config file only) |
+| `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | see [Editors](#editors) | | Edit in Terminal, Open in Editor (the lists are config file only) |
 | `list_per_folder` | `500` | 10–10,000 | Entries shown per folder |
 | `list_total` | `5000` | 100–20,000 | Entries shown in the whole tree |
 | `tree_depth` | `40` | 1–200 | Deepest folder level shown |
@@ -130,7 +132,7 @@ The SSH settings apply to transfers (download, upload, copy on a machine, Load).
 
 #### Editors
 
-Right click a file for **Open in Editor** (a GUI editor) or **Edit in Terminal** (a terminal editor in a new split to the right, on the file's machine). Both are dimmed for folders.
+Right click a file for **Open in Editor** (a GUI editor) or **Edit in Terminal** (a terminal editor in a new split to the right, on the file's machine). Both are dimmed for folders. Settings picks among the shipped editors and your own entries; own entries are added only here, in `~/.config/herdr-app/filer-pro.json`, and show up in Settings after you reopen it. An entry with a problem (see below) is left out of the list.
 
 ```json
 {
@@ -157,13 +159,13 @@ To remove only the preview, delete `mods/filer-pro/preview/` from the installed 
 - **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
 - **Files:** it lists and changes files wherever you browse and act, locally and on your machines. Its own data lives in `~/.config/herdr-app/filer-pro.json`, `~/.config/herdr-app/data/filer-pro/` and `~/.config/herdr-app/filer-pro/`.
 - **Automation folder:** the mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). Anything that can write to that folder can drive the mod.
-- **Network:** SSH to the machines you added to Herdr, and at most one request per day to GitHub for the update check (off with `"update_check": false`). Documents never load remote content; this holds for SVG images only while `svg_check` is on (whether Herdr's image renderer fetches external references of an unchecked SVG is not verified).
+- **Network:** SSH to the machines you added to Herdr, and at most one request per day to GitHub for the update check (off with `"update_check": false`), plus one for each click on **Check now** in Settings. Documents never load remote content; this holds for SVG images only while `svg_check` is on (whether Herdr's image renderer fetches external references of an unchecked SVG is not verified).
 
 ### Updates
 
-The installed version is in `mods/filer-pro/mod.json`. Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the panel header shows `● <version> available`, which opens the release page. Nothing is downloaded or installed; to update, install the new version as described above.
+The installed version is in `mods/filer-pro/mod.json` and shown at the top of Settings. Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the panel header shows `● <version> available`, which opens the release page. **Check now** in Settings asks at once and shows the answer there: up to date (with the time of the last check), a newer version with a link to its release page, or that GitHub could not be reached. Nothing is downloaded or installed; to update, install the new version as described above.
 
-Privacy: the request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address. To turn it off, set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`; then no request is made at all, and a hint already shown disappears within a second. If you turn it on again, the first check can take up to an hour.
+Privacy: the request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address. To turn the daily check off, switch off **Check for updates automatically** in Settings, or set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`; then no request is made unless you click **Check now**, and a hint already shown disappears within a second. If you turn it on again, the first automatic check can take up to an hour.
 
 ### Removing
 
