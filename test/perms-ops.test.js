@@ -275,12 +275,12 @@ test("CHMOD_SCRIPT recursive: BSD chmod gets -h (a swapped-in link is changed it
   const bin = `${d}/bin2`;
   fs.mkdirSync(bin);
   fs.writeFileSync(`${bin}/chmod`, `#!/bin/sh\necho "$@" >> "${d}/chmod.log"\n`, { mode: 0o755 });
-  fs.writeFileSync(`${bin}/stat`, `#!/bin/sh\nif [ "$BSD" = 1 ]; then [ "$1" = -c ] && exit 1; case $3 in %p) echo 40755 ;; *) echo 1 ;; esac; else exec /usr/bin/stat "$@"; fi\n`, { mode: 0o755 });
+  fs.writeFileSync(`${bin}/stat`, `#!/bin/sh\nif [ "$BSD" = 1 ]; then [ "$1" = -c ] && exit 1; case $3 in %p) echo 40755 ;; *) echo 1 ;; esac; else [ "$1" = -c ] && { echo 755; exit 0; }; [ "$2" = -c ] && { echo 755; exit 0; }; exit 1; fi\n`, { mode: 0o755 });
   const run = (bsd) => spawnSync("sh", ["-c", CHMOD_SCRIPT, "x", "00750", `${root}/sub`, "1"], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BSD: bsd } });
   run("1");
   const bsdLog = fs.readFileSync(`${d}/chmod.log`, "utf8");
   fs.rmSync(`${d}/chmod.log`);
-  if (fs.existsSync("/usr/bin/stat")) run("0");
+  run("0");
   assert.match(bsdLog, /^-h -- 00750 /m);
-  if (fs.existsSync(`${d}/chmod.log`)) assert.doesNotMatch(fs.readFileSync(`${d}/chmod.log`, "utf8"), /-h/);
+  assert.doesNotMatch(fs.readFileSync(`${d}/chmod.log`, "utf8"), /-h/);
 });
