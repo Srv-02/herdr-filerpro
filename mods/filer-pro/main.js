@@ -19,7 +19,7 @@ import { fileClick } from "./lib/clicks.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
-import { createFileOps, successToast } from "./lib/fileops.js";
+import { createFileOps, successToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
@@ -27,13 +27,15 @@ import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, L
 import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate } from "./lib/reload.js";
-import { baseName, joinPath, parentOf, relativePath, shellPath } from "./lib/names.js";
+import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
+import { PROBE_SCRIPT, parseProbe, probeFile, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory } from "./lib/textedit.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
 import { transfersBar } from "./ui/bar.js";
 import { menuView } from "./ui/menu.js";
 import { conflictView } from "./ui/conflict.js";
+import { editTools, promptBar, statusBar } from "./ui/edit.js";
 import { createSettingsDialog, settingsView, submitSettings, tilde } from "./ui/settings.js";
 
 // The preview lives in ./preview/ and is only ever loaded here, with import(): a deleted or broken folder
@@ -153,7 +155,7 @@ export default class FilerPro extends View {
       this.refreshedAt = Date.now();
       this.reloadConfig(cx);
     });
-    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); });
+    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); });
     this.drive(cx);
   }
 
@@ -515,7 +517,15 @@ export default class FilerPro extends View {
   }
 
   // Esc or closing the dialog without a choice counts as Cancel.
+  // A dirty edit buffer is written to unsaved/ first (the app closes the dialog or panel without asking).
   async close() {
+    const e = this.edit;
+    if (e) {
+      if (e.dirty) await this.keepUnsaved(e);
+      else this.dropMirror(e);
+      this.edit = null;
+      this.releaseEdit(e);
+    }
     if (props()?.view === "file") { this.code?.release(); this.code = null; this.file = null; this.doc = null; this.loader = null; return; }
     if (props()?.view !== "conflict") return;
     const a = closeAnswer(this.batchId, shared("filer-pro.pending"), shared("filer-pro.answer"));
@@ -557,6 +567,7 @@ export default class FilerPro extends View {
   refresh(cx) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
+      if (this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
@@ -654,6 +665,8 @@ export default class FilerPro extends View {
     const bus = { getShared: shared, setShared };
     const plan = panelPlan({ on: this.on, root: this.root, file: this.file }, s);
     if (!plan.hit) { answerShow(bus, s.id, false, { ok: false, error: plan.error }); return; }
+    if (s.action === "mode" && this.edit) { answerShow(bus, s.id, true, { ok: false, error: "Leave edit mode first" }); return; }
+    if (s.action !== "mode" && this.edit?.dirty) { answerShow(bus, s.id, true, { ok: false, error: "Unsaved changes in the open file" }); return; }
     if (s.action === "mode") {
       if (this.doc?.kind === "image" || this.doc?.kind === "pdf") { answerShow(bus, s.id, true, { ok: false, error: this.doc.kind === "pdf" ? "PDFs have no source view" : "Images have no source view", mode: "preview" }); return; }
       const out = modeResult(joinPath(this.root, this.file), s.mode, Boolean(this.previewer && this.doc));
@@ -669,6 +682,7 @@ export default class FilerPro extends View {
   // opts (request action open): mode "source" keeps the source although a preview exists; onDone(state)
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
+    this.leaveEdit(); this.editCheck = null;
     this.code?.release(); this.code = null; this.file = path; this.fileError = null;
     if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
@@ -704,11 +718,9 @@ export default class FilerPro extends View {
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
-        const t = theme();
-        this.code = EditorState.new({ language: langOf(path), readonly: true, soft_wrap: true,
-          value: text.length > cfg.source_max_chars ? text.slice(0, cfg.source_max_chars) + "\n… (file truncated)" : text,
-          font_family: settings().font_family, font_size: 12,
-          syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
+        this.code = EditorState.new(this.editorOptions(path, text.length > cfg.source_max_chars ? text.slice(0, cfg.source_max_chars) + "\n… (file truncated)" : text, true));
+        if (text.length > cfg.source_max_chars) this.editCheck = { state: "refused", reason: "Display truncated" };
+        else this.checkEdit(path, cfg, cx);
         if (previewer) {
           // The source is on screen now; the preview follows in small steps, so typing and drawing never wait for it.
           cx.notify(); // the source is on screen
@@ -730,6 +742,254 @@ export default class FilerPro extends View {
         opts.onDone?.(mine ? { error: this.fileError, mode: this.mode, preview: Boolean(this.doc) } : { error: "Another file was opened meanwhile", mode: "source" });
       }
     });
+  }
+
+  // The options of the source editor, read only for the display and editable for the edit mode.
+  editorOptions(path, value, readonly) {
+    const t = theme();
+    return { language: langOf(path), readonly, soft_wrap: true, value, font_family: settings().font_family, font_size: 12,
+      syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } };
+  }
+
+  // Is the read-only editor what the viewer shows (no preview, image, PDF or error in its place)?
+  sourceShown() {
+    if (!this.code || this.fileError || this.loader) return false;
+    return !(this.previewer && this.doc && (this.mode === "preview" || this.doc.kind === "image" || this.doc.kind === "pdf"));
+  }
+
+  // Probes the open file in the background (lib/textedit.js): this.editCheck says whether Edit is possible and why not.
+  checkEdit(path, cfg, cx) {
+    const context = this.context, root = this.root, on = this.on;
+    if (!on && window()?.platform === "windows") { this.editCheck = { state: "refused", reason: "Editing is not available on Windows" }; return; }
+    const check = this.editCheck = { state: "checking" };
+    cx.spawn(async (cx) => {
+      const r = await probeFile({ exec, on, path: joinPath(root, path), maxChars: cfg.source_max_chars });
+      if (this.editCheck !== check || this.file !== path || !this.current(context)) return;
+      this.editCheck = r.ok ? { state: "ok", info: r.info } : { state: "refused", reason: r.reason };
+      cx.notify();
+    });
+  }
+
+  // Edit on: a second, editable EditorState with the file's text (the read-only one stays for the display).
+  enterEdit(cx) {
+    const c = this.editCheck;
+    if (this.edit || c?.state !== "ok" || !this.sourceShown()) return;
+    const info = c.info, state = EditorState.new(this.editorOptions(this.file, info.text, false));
+    // An editor that rewrites the text (tabs, line ends) would make every file look changed.
+    if (state.value() !== info.text) {
+      state.release();
+      this.editCheck = { state: "refused", reason: "The editor changes this file's text" };
+      cx.notify();
+      return;
+    }
+    const history = createHistory();
+    history.reset(info.text);
+    const e = this.edit = { state, history, info, dirty: false, applying: null, prompt: null, message: null, modeBefore: null, busy: false, copy: null,
+      mirrored: null, mirrorAt: 0, wroteFile: false, id: this.newId(), context: this.context, wasFixed: Boolean(this.context?.fixed) };
+    e.mirrorPath = `${appHome()}/filer-pro/unsaved/${e.id}-${baseName(this.file)}`;
+    if (this.context) this.context.fixed = true; // the file stays open while the focus moves
+    state.on("change", (_ev, cx) => this.editChanged(cx));
+    // The dialog has no other timer (it stays passive until editing starts): this one runs the mirror for it.
+    if (props()?.overlay && !this.mirrorTimer) { this.mirrorTimer = true; cx.timer.every(2000, (cx) => this.mirrorUnsaved(cx)); }
+    cx.notify();
+  }
+
+  // A change of the editable buffer. The value that undo or redo just set is not a new step.
+  editChanged(cx) {
+    const e = this.edit;
+    if (!e) return;
+    const v = e.state.value();
+    if (v !== e.applying) e.history.record(v, Date.now());
+    e.applying = null;
+    e.dirty = v !== e.info.text;
+    if (e.message?.error) e.message = null;
+    cx.notify();
+  }
+
+  step(dir, cx) {
+    const e = this.edit, v = e?.history[dir]();
+    if (v == null) return;
+    e.applying = v;
+    e.state.set_value(v);
+    e.dirty = v !== e.info.text;
+    cx.notify();
+  }
+
+  // Ends edit mode without asking (the callers ask first); the unsaved mirror file goes with it.
+  leaveEdit() {
+    const e = this.edit;
+    if (!e) return;
+    this.edit = null;
+    this.dropMirror(e);
+    this.releaseEdit(e);
+  }
+
+  releaseEdit(e) {
+    try { e.state.release(); e.copy?.input.release(); } catch {}
+    if (e.context) e.context.fixed = e.wasFixed;
+  }
+
+  // Leaves edit mode, then runs then(cx). Unsaved changes: asks Save / Discard / Cancel first.
+  requestLeave(then, cx) {
+    const e = this.edit;
+    if (!e) { then?.(cx); return; }
+    if (e.busy) return;
+    if (!e.dirty) { this.leaveEdit(); then?.(cx); cx.notify(); return; }
+    e.prompt = { kind: "leave", then };
+    cx.notify();
+  }
+
+  // The Cancel button: clean leaves at once, dirty asks whether to discard.
+  cancelEdit(cx) {
+    const e = this.edit;
+    if (!e || e.busy) return;
+    if (!e.dirty) { this.leaveEdit(); cx.notify(); return; }
+    e.prompt = { kind: "discard", then: null };
+    cx.notify();
+  }
+
+  // Writes the buffer into the file (lib/textedit.js saveFile). The saved bytes are the new baseline. after(cx) runs
+  // once it is saved and the buffer is still clean. A failure keeps the buffer, edit mode and the message.
+  save(cx, after) {
+    const e = this.edit;
+    if (!e || e.busy) return;
+    const value = e.state.value(), bytes = bufferBytes(value, e.info);
+    if (!bytes) { e.message = { text: "Text contains characters that cannot be saved as UTF-8", error: true }; cx.notify(); return; }
+    e.busy = true; e.message = null; e.prompt = null;
+    cx.notify();
+    const file = this.file, full = joinPath(this.root, file), on = this.on;
+    cx.spawn(async (cx) => {
+      let r;
+      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes }); }
+      catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
+      e.busy = false;
+      if (!r.ok) { e.message = { text: r.error, error: true }; cx.notify(); return; }
+      const text = value.replace(/\r\n?/g, "\n"), modeBefore = e.info.mode;
+      Object.assign(e.info, { bytes: r.bytes, text, size: r.bytes.length });
+      e.message = { text: "Saved", error: false };
+      // The mode is read again; bytes that are not the ones just sent mean someone wrote in between.
+      try {
+        const res = await exec("sh", ["-c", PROBE_SCRIPT, "probe", full], { on });
+        const p = res?.code === 0 ? parseProbe(res.stdout) : null;
+        if (p?.kind === "file") {
+          e.info.mode = p.mode;
+          if (!p.bytes || p.bytes.length !== r.bytes.length || p.bytes.some((b, i) => b !== r.bytes[i])) e.message = { text: "Changed by someone else right after saving", error: true };
+        }
+      } catch {}
+      e.modeBefore = modeBefore;
+      setShared("filer-pro.changed", { at: Date.now() });
+      if (this.edit === e) {
+        e.dirty = e.state.value() !== text;
+        if (this.file === file) this.code?.set_value(text);
+        if (!e.dirty) this.dropMirror(e);
+      }
+      cx.notify();
+      if (this.edit === e && !e.dirty && !e.message.error) after?.(cx);
+    });
+  }
+
+  // Save a Copy…: the name form is shown above the editor (an InputState is created here, in a click).
+  openCopy(cx) {
+    const e = this.edit;
+    if (!e || e.busy || e.copy) return;
+    const name = copyName(baseName(this.file));
+    e.prompt = null;
+    e.copy = createNameDialog({ title: "Save a Copy", button: "Save", id: "copy", value: name, selectEnd: stemEnd(name, false), check: (v) => validateName(v) },
+      { onSubmit: (n, cx) => this.submitCopy(n, cx) }, cx);
+    cx.notify();
+  }
+
+  closeCopy(cx) {
+    const e = this.edit;
+    if (!e?.copy) return;
+    try { e.copy.input.release(); } catch {}
+    e.copy = null;
+    cx.notify();
+  }
+
+  // The copy goes into the file's folder and never replaces a file. The form stays open on an error.
+  submitCopy(name, cx) {
+    const e = this.edit, c = e?.copy;
+    if (!c || c.busy) return;
+    const bytes = bufferBytes(e.state.value(), e.info), dir = parentOf(joinPath(this.root, this.file)), on = this.on;
+    c.busy = true; c.error = null;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      let r;
+      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode }); }
+      catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
+      c.busy = false;
+      if (!r.ok) { c.error = r.error; cx.notify(); return; }
+      setShared("filer-pro.changed", { at: Date.now() });
+      if (this.edit === e && e.copy === c) { this.closeCopy(cx); e.message = { text: `Saved a copy as ${name}`, error: false }; }
+      cx.notify();
+    });
+  }
+
+  // The unsaved-text mirror: while the buffer is dirty it is copied to unsaved/ (at most every 1.5 s, only when it
+  // changed), so a close without asking (Esc handled by the app, a crash) loses nothing.
+  async mirrorUnsaved(_cx, force = false) {
+    const e = this.edit;
+    if (!e?.dirty || (e.writing && !force)) return;
+    const v = e.state.value();
+    if (v === e.mirrored || (!force && Date.now() - e.mirrorAt < 1500)) return;
+    e.mirrorAt = Date.now();
+    e.writing = true;
+    try {
+      await fs.mkdir(parentOf(e.mirrorPath), { recursive: true });
+      await fs.writeFile(e.mirrorPath, v);
+      e.mirrored = v; e.wroteFile = true;
+    } catch {} finally { e.writing = false; }
+  }
+
+  dropMirror(e) {
+    if (e.wroteFile) fs.unlink(e.mirrorPath).catch(() => {});
+    e.wroteFile = false; e.mirrored = null;
+  }
+
+  // close() with a dirty buffer: one last write and a toast with the place.
+  async keepUnsaved(e) {
+    await this.mirrorUnsaved(null, true);
+    if (e.wroteFile && e.mirrored === e.state.value()) notify({ title: "Unsaved changes kept", body: tilde(e.mirrorPath, home()), level: "warning" });
+    else notify({ title: "Unsaved changes lost", body: `Could not write ${tilde(e.mirrorPath, home())}`, level: "error" });
+  }
+
+  // Header buttons of the edit mode (ui/edit.js), only while the plain source is shown.
+  editTools(t) {
+    if (!this.sourceShown()) return [];
+    return editTools(t, { check: this.editCheck, edit: this.edit }, {
+      onToggle: (cx) => (this.edit ? this.requestLeave(null, cx) : this.enterEdit(cx)),
+      onUndo: (cx) => this.step("undo", cx), onRedo: (cx) => this.step("redo", cx),
+      onCancel: (cx) => this.cancelEdit(cx), onSave: (cx) => this.save(cx), onCopy: (cx) => this.openCopy(cx),
+    });
+  }
+
+  // The editor with the prompt or the name form above and the status line below.
+  editView(t) {
+    const e = this.edit, p = e.prompt;
+    return v_flex().flex_1().min_h(0)
+      .when(Boolean(p), el => el.child(promptBar(t, p, baseName(this.file), {
+        onSave: (cx) => { e.prompt = null; this.save(cx, (cx) => { this.leaveEdit(); p.then?.(cx); cx.notify(); }); },
+        onDiscard: (cx) => { this.leaveEdit(); p.then?.(cx); cx.notify(); },
+        onCancel: (cx) => { e.prompt = null; cx.notify(); },
+      })))
+      .when(Boolean(e.copy), el => el.child(div().h(190).flex_none().child(nameView(t, e.copy, { onCancel: (cx) => this.closeCopy(cx) }))))
+      .child(Editor.new(e.state).flex_1().min_h(0))
+      .child(statusBar(t, statusText(e.info, e.modeBefore), e.message));
+  }
+
+  // The fullscreen dialog's keys: cmd-s, cmd-z and cmd-shift-z while editing; Esc asks before it closes over unsaved text.
+  fileKey(ev, cx, close) {
+    const e = this.edit, stroke = ev.keystroke ?? ev.key;
+    if (e && ["cmd-s", "cmd-z", "cmd-shift-z"].includes(stroke)) {
+      if (stroke === "cmd-s") this.save(cx); else this.step(stroke === "cmd-z" ? "undo" : "redo", cx);
+      cx.stop_propagation();
+      return;
+    }
+    if (ev.key !== "escape" && stroke !== "escape") return;
+    if (e?.copy) return; // the name form has its own Esc
+    cx.stop_propagation();
+    if (!e?.prompt) this.requestLeave(close, cx);
   }
 
   // The size limits of images and PDFs in bytes and the SSH options of their download from a machine, from the settings
@@ -830,7 +1090,7 @@ export default class FilerPro extends View {
 
   // Header buttons of the preview module: Preview/Source and Open in browser (local HTML).
   previewTools(t) {
-    if (!this.previewer || !this.doc || !this.file) return [];
+    if (!this.previewer || !this.doc || !this.file || this.edit) return [];
     return this.previewer.tools(this.doc, { mode: this.mode, canOpen: !this.on, page: this.page, pages: this.pages }, t, {
       onToggle: (cx) => { this.mode = this.mode === "preview" ? "source" : "preview"; cx.notify(); },
       onOpen: (cx) => cx.spawn(async () => { await openRegularFile(joinPath(this.root, this.file), { exec, notify, platform }); }),
@@ -845,14 +1105,17 @@ export default class FilerPro extends View {
       return this.previewer.view(this.doc, { t, font: settings().font_family, file: this.file, width: this.previewWidth },
         { onWidth: (w, cx) => { if (w !== this.previewWidth) { this.previewWidth = w; cx.notify(); } } });
     if (!this.code) return div().p(12).text_color(t.dim).child(this.fileError || ({ image: "Loading image…", pdf: "Loading PDF…" }[previewKind(this.file)] ?? "Loading file…"));
-    return Editor.new(this.code).flex_1().min_h(0);
+    if (this.edit) return this.editView(t);
+    const editor = Editor.new(this.code).flex_1().min_h(0);
+    if (this.editCheck?.state !== "ok") return editor;
+    return v_flex().flex_1().min_h(0).child(editor).child(statusBar(t, statusText(this.editCheck.info, null), null));
   }
 
   // Icon and name of the open file: the panel's header (end: right-aligned before the buttons) and the dialog's title.
   fileTitle(t, dark, end) {
     return h_flex().flex_1().min_w(0).gap(6).items_center().text_size(12).text_color(t.dim).when(end, el => el.justify_end())
       .when(Boolean(this.file), el => el.child(image(icon(this.file, false, false, dark)).size(14).flex_none()))
-      .child(div().min_w(0).truncate().child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""));
+      .child(div().min_w(0).truncate().child((this.edit?.dirty ? "● " : "") + (this.file ?? this.root?.split(/[\\/]/).pop() ?? "")));
   }
 
   // A header button in the style of the preview's Source/Preview button; `child` is a text or an element.
@@ -876,11 +1139,12 @@ export default class FilerPro extends View {
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
     const close = () => { try { closeOverlay(p.overlay); } catch {} };
     return v_flex().id("files-full").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
-      .on_key_down((e, cx) => { if (e.key === "escape") { close(); cx.stop_propagation(); } })
+      .on_key_down((e, cx) => this.fileKey(e, cx, close))
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(this.fileTitle(t, dark, false))
         .children(this.previewTools(t))
-        .child(this.tool("files-full-close", "✕", t, close)))
+        .children(this.editTools(t))
+        .child(this.tool("files-full-close", "✕", t, (cx) => this.requestLeave(close, cx))))
       .child(this.viewer(t));
   }
 
@@ -960,13 +1224,15 @@ export default class FilerPro extends View {
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
+        .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => this.requestLeave((cx) => { this.show(null); cx.notify(); }, cx)).child("←")))
         .child(div().font_semibold().child("Filer Pro"))
         .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
         .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
-        .when(Boolean(this.file), el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t,
+        .children(this.editTools(t))
+        .when(Boolean(this.file) && this.edit?.dirty, el => el.child(div().id("files-full").px(7).py(2).rounded(6).text_color(t.dim).tooltip("Save or cancel first").child(svg(`${BASE}/maximize.svg`).size(13))))
+        .when(Boolean(this.file) && !this.edit?.dirty, el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t,
           () => openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.on, root: this.root, path: this.file, mode: this.doc ? this.mode : "preview", page: this.page, pages: this.pages, force: this.force }, kind: "dialog", width: 0.86, height: 0.9 })))))
       // The tree stays mounted while a file is open, at zero height with a spacer of the same content height:
       // GPUI keeps a scroll offset only for elements rendered every frame (issue #5).

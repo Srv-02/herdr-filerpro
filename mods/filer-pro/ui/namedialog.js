@@ -35,7 +35,7 @@ export function nameView(t, state, handlers) {
     .text_color(primary && enabled ? t.solid_foreground : enabled ? t.foreground : t.dim).text_size(12.5).font_medium()
     .when(enabled, el => el.cursor_pointer().hover(s => s.opacity(0.88)).on_click((_e, cx) => action(cx))).child(text);
   return v_flex().id(`filer-pro-${spec.id}`).track_focus(state.handle)
-    .on_key_down((e, cx) => { if (e.key === "escape") { handlers.onCancel(); cx.stop_propagation(); } })
+    .on_key_down((e, cx) => { if (e.key === "escape") { handlers.onCancel(cx); cx.stop_propagation(); } })
     .size_full().p(18).gap(10).bg(t.popover).text_color(t.foreground)
     .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child(spec.title))
       .child(div().text_size(11).text_color(t.dim).child("Esc")))
