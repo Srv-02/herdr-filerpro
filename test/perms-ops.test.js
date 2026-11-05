@@ -284,3 +284,64 @@ test("CHMOD_SCRIPT recursive: BSD chmod gets -h (a swapped-in link is changed it
   assert.match(bsdLog, /^-h -- 00750 /m);
   assert.doesNotMatch(fs.readFileSync(`${d}/chmod.log`, "utf8"), /-h/);
 });
+
+// ---- through the fake machine (test/fake/ssh): exec with { on } goes over the fake ssh like a real machine would, the command
+// words are quoted and joined into one string for the remote shell, as ssh does.
+import path from "node:path";
+const FAKE_SSH = path.resolve(import.meta.dirname, "fake/ssh");
+const quote = (w) => `'${String(w).replaceAll("'", `'\\''`)}'`;
+function machine(home) {
+  const calls = [];
+  const exec = async (cmd, args, opts = {}) => {
+    if (!opts.on) throw new Error("these tests run on the machine only");
+    calls.push({ cmd, on: opts.on });
+    const r = spawnSync(FAKE_SSH, [opts.on, cmd, ...args.map(quote)], { encoding: "utf8", env: { ...process.env, HOME: home } });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  return { calls, ops: createFileOps({ exec }) };
+}
+
+test("fake machine: permissions are read from the remote tree", async () => {
+  const { root, home } = tree();
+  fs.chmodSync(`${root}/a.txt`, 0o640);
+  fs.chmodSync(`${root}/sub`, 0o2750);
+  const { ops: o, calls } = machine(home);
+  const f = await o.permissions({ on: "box", path: `${root}/a.txt` });
+  assert.deepEqual([f.ok, f.mode, f.isDir, f.owned, f.uid], [true, 0o640, false, true, String(process.getuid())]);
+  assert.equal((await o.permissions({ on: "box", path: `${root}/sub` })).isDir, true);
+  assert.ok(calls.every((c) => c.on === "box"));
+});
+
+test("fake machine: a single file is changed and the re-read mode comes back", async () => {
+  const { root, home } = tree();
+  fs.chmodSync(`${root}/a.txt`, 0o644);
+  const r = await machine(home).ops.chmod({ on: "box", path: `${root}/a.txt`, root, mode: 0o600, recursive: false });
+  assert.deepEqual(r, { ok: true, mode: 0o600, requested: 0o600, mismatch: false });
+  assert.equal(mode(`${root}/a.txt`), 0o600);
+});
+
+test("fake machine: recursive changes the tree through the guard and skips a link to the outside", async () => {
+  const { d, root, home } = tree();
+  fs.symlinkSync(`${d}/outside`, `${root}/sub/out`);
+  fs.chmodSync(`${d}/outside/o.txt`, 0o644);
+  const m = machine(home);
+  assert.equal(await m.ops.permissionsCount({ on: "box", path: `${root}/sub` }), 4);
+  const r = await m.ops.chmod({ on: "box", path: `${root}/sub`, root, mode: 0o750, recursive: true });
+  assert.equal(r.ok, true, r.error);
+  for (const p of ["sub", "sub/deep", "sub/b.txt", "sub/deep/c.txt"]) assert.equal(mode(`${root}/${p}`), 0o750, p);
+  assert.equal(mode(`${d}/outside/o.txt`), 0o644, "behind the link: untouched");
+  const refused = await m.ops.chmod({ on: "box", path: root, root, mode: 0o700, recursive: true });
+  assert.equal(refused.error, "Refusing to change permissions of this folder");
+});
+
+test("fake machine: a symbolic link is refused and its target keeps its mode", async () => {
+  const { d, root, home } = tree();
+  fs.chmodSync(`${d}/outside/o.txt`, 0o644);
+  fs.symlinkSync(`${d}/outside/o.txt`, `${root}/ln`);
+  const m = machine(home);
+  const r = await m.ops.chmod({ on: "box", path: `${root}/ln`, root, mode: 0o600, recursive: false });
+  assert.deepEqual(r, { ok: false, error: "Symbolic links are not changed" });
+  assert.equal(mode(`${d}/outside/o.txt`), 0o644);
+  const p = await m.ops.permissions({ on: "box", path: `${root}/ln` });
+  assert.equal(p.isLink, true);
+});
