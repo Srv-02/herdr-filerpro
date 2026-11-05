@@ -46,6 +46,18 @@ Markdown renders with Mermaid diagrams, PDF shows page by page. Remote content i
 
 Code opens with syntax colors and line wrap, HTML and images open in place. One click goes fullscreen.
 
+### Your editor, one click away
+
+![Context menu with Open in Editor and Edit in Terminal](screenshots/editors.png)
+
+Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, nano or helix in a split next to your terminal. It works for files on your SSH machines too, and you can add your own editors.
+
+### Settings and updates
+
+![The settings dialog with Updates, Editors, Preview and Security](screenshots/settings.png)
+
+The gear in the panel header opens every setting, and changes apply without a restart. Once a day Filer Pro asks GitHub for a new release and shows a small hint in the header when there is one; one switch turns that off.
+
 ## Details
 
 ### Requirements
@@ -94,7 +106,7 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
 
-Each field is checked when you leave it and again on Save; nothing is written until every field is valid, and a wrong field in Advanced opens it. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). Turning `update_check` off hides the update hint at once; turning it on again can take up to an hour until the first automatic check, because the update pass runs at most hourly (**Check now** asks at once).
+Each field is checked when you leave it and again on Save; nothing is written until every field is valid, and a wrong field in Advanced opens it. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). What turning `update_check` off or on again does is described in [Updates](#updates).
 
 A missing key means its default. In the file, a number of the wrong type (or with a fraction) means the default, a whole number out of range the nearest bound.
 
@@ -132,7 +144,7 @@ The SSH settings apply to transfers (download, upload, copy on a machine, Load).
 
 #### Editors
 
-Right click a file for **Open in Editor** (a GUI editor) or **Edit in Terminal** (a terminal editor in a new split to the right, on the file's machine). Both are dimmed for folders. Settings picks among the shipped editors and your own entries; own entries are added only here, in `~/.config/herdr-app/filer-pro.json`, and show up in Settings after you reopen it. An entry with a problem (see below) is left out of the list.
+Right click a file for **Open in Editor** (a GUI editor) or **Edit in Terminal** (a terminal editor in a new split to the right, on the file's machine). Both are dimmed for folders. Settings picks among the shipped editors and your own entries. Own entries go into `~/.config/herdr-app/filer-pro.json` (Settings has no form for them) and show up in Settings after you reopen it. An entry with a problem (see below) is left out of the list.
 
 ```json
 {
@@ -165,7 +177,7 @@ To remove only the preview, delete `mods/filer-pro/preview/` from the installed 
 
 The installed version is in `mods/filer-pro/mod.json` and shown at the top of Settings. Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the panel header shows `● <version> available`, which opens the release page. **Check now** in Settings asks at once and shows the answer there: up to date (with the time of the last check), a newer version with a link to its release page, or that GitHub could not be reached. Nothing is downloaded or installed; to update, install the new version as described above.
 
-Privacy: the request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address. To turn the daily check off, switch off **Check for updates automatically** in Settings, or set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`; then no request is made unless you click **Check now**, and a hint already shown disappears within a second. If you turn it on again, the first automatic check can take up to an hour.
+Privacy: the request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address. To turn the daily check off, switch off **Check for updates automatically** in Settings, or set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`; then no request is made unless you click **Check now**, and a hint already shown disappears within a second. If you turn it on again, the first automatic check can take up to an hour, because the update pass runs at most hourly; **Check now** asks at once.
 
 ### Removing
 
