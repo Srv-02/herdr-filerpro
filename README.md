@@ -26,7 +26,7 @@ Then click `Filer Pro` in the tab bar. To install by hand, see [Manual install](
 
 ![File tree with git marks and the context menu open](screenshots/browse.png)
 
-The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, edit, download, copy, paste, rename and delete.
+The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, edit, download, copy, paste, rename and delete. Apps and other macOS packages show as files: a double click starts them, and Show Package Contents looks inside. System files like `.DS_Store` stay out of the way, and hidden files can go too.
 
 ### Transfers you can trust
 
@@ -56,9 +56,9 @@ Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, na
 
 ### Settings and updates
 
-![The settings dialog with Updates, Editors, Preview and Security](screenshots/settings.png)
+![The settings dialog with Updates, Downloads, Editors, File list, Preview, Security and the closed Advanced part](screenshots/settings.png)
 
-The gear in the panel header opens every setting, and changes apply without a restart. Once a day Filer Pro asks GitHub for a new release and shows a small hint in the header when there is one; one switch turns that off.
+The gear in the panel header opens every setting, and changes apply without a restart. Choose whether files and apps open with one click or two, and what the tree hides. Once a day Filer Pro asks GitHub for a new release and shows a small hint in the header when there is one; one switch turns that off.
 
 ## Details
 
@@ -106,45 +106,45 @@ The gear in the panel header opens every setting, and changes apply without a re
 
 #### Settings dialog
 
-Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **File list** (hide system files and hidden files, open files and apps with a double click), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
+Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **File list** (the switches **Hide system files**, **Hide hidden files**, **Open files with a double click** and **Open apps with a double click**; while hidden files are hidden, **Hide system files** shows on and cannot be switched), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting in three groups: **File list limits**, **Preview limits** and **Transfers & connections**. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
 
 Each field is checked when you leave it and again on Save; nothing is written until every field is valid, and a wrong field in Advanced opens it. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). What turning `update_check` off or on again does is described in [Updates](#updates).
 
 A missing key means its default. In the file, a number of the wrong type (or with a fraction) means the default, a whole number out of range the nearest bound.
 
-| Key | Default | Range | What it does |
-|---|---|---|---|
-| `download_folder` | `~/Downloads` | not empty | Where downloads go |
-| `preview` | `true` | `true` / `false` | Preview Markdown, HTML, images and PDFs |
-| `mermaid` | `true` | `true` / `false` | Draw Mermaid diagrams |
-| `update_check` | `true` | `true` / `false` | Daily update check |
-| `perf` | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart; config file only) |
-| `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | see [Editors](#editors) | | Edit in Terminal, Open in Editor (the lists are config file only) |
-| `hide_system_files` | `true` | `true` / `false` | Hide OS clutter: `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`, `.apdisk`, `Icon\r`, `Thumbs.db`, `desktop.ini` (the last two in any case). Hidden entries do not count against the list limits; copy, move and delete of a folder still include them |
-| `hide_dotfiles` | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot; while on, system files are hidden too, whatever `hide_system_files` says |
-| `double_click_files` | `false` | `true` / `false` | Open a file with a double click; a single click then only marks it. Folders always open with a single click |
-| `double_click_apps` | `true` | `true` / `false` | Start a local macOS package (`.app`, `.pkg`, `.rtfd`) with a double click; a single click then only marks it. Off: a single click starts it |
-| `list_per_folder` | `500` | 10–10,000 | Entries shown per folder |
-| `list_total` | `5000` | 100–20,000 | Entries shown in the whole tree |
-| `tree_depth` | `40` | 1–200 | Deepest folder level shown |
-| `refresh_seconds` | `10` | 2–3,600 | Periodic reload of the tree (it also reloads on file changes and after actions) |
-| `source_max_chars` | `400000` | 10,000–5,000,000 | Characters of the source view, the rest is cut |
-| `preview_max_chars` | `200000` | 10,000–2,000,000 | Characters of a Markdown or HTML preview |
-| `image_max_mb` | `20` | 1–500 | Larger images show a Load button (SVGs: no preview) |
-| `image_cache_mb` | `50` | 10–5,000 | Size of the image and PDF page cache |
-| `pdf_local_max_mb` | `100` | 1–2,000 | Larger local PDFs show a Load button |
-| `pdf_remote_max_mb` | `20` | 1–500 | Larger PDFs on a machine show a Load button |
-| `max_diagrams` | `20` | 1–100 | Mermaid diagrams drawn per file |
-| `max_diagram_chars` | `20000` | 1,000–200,000 | Characters per Mermaid diagram |
-| `node_path` | `""` | empty or an absolute path | Node for Mermaid; empty tries `node`, `/opt/homebrew/bin/node`, `/usr/local/bin/node` |
-| `ssh_connect_timeout` | `15` | 1–300 s | SSH `ConnectTimeout` for transfers |
-| `ssh_alive_interval` | `15` | 1–300 s | SSH `ServerAliveInterval` for transfers |
-| `ssh_alive_count` | `4` | 1–100 | SSH `ServerAliveCountMax` for transfers |
-| `stall_seconds` | `120` | 10–3,600 | A transfer whose temp file does not grow this long is stopped as stalled |
-| `keep_done_seconds` | `10` | 0–3,600 | How long finished transfers stay in the transfers bar |
-| `svg_check` | `true` | `true` / `false` | Check SVG files before drawing them (see below) |
+| Key | In Settings | Default | Range | What it does |
+|---|---|---|---|---|
+| `update_check` | Updates: Check for updates automatically | `true` | `true` / `false` | Daily update check |
+| `download_folder` | Downloads: Download folder | `~/Downloads` | not empty | Where downloads go |
+| `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | Editors: Open in Editor, Edit in Terminal (the lists: config file only) | see [Editors](#editors) | | Edit in Terminal, Open in Editor |
+| `hide_system_files` | File list: Hide system files | `true` | `true` / `false` | Hide OS clutter: `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`, `.apdisk`, `Icon\r`, `Thumbs.db`, `desktop.ini` (the last two in any case). Hidden entries do not count against the list limits; copy, move and delete of a folder still include them |
+| `hide_dotfiles` | File list: Hide hidden files | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot; while on, system files are hidden too, whatever `hide_system_files` says |
+| `double_click_files` | File list: Open files with a double click | `false` | `true` / `false` | Open a file with a double click; a single click then only marks it. Folders always open with a single click |
+| `double_click_apps` | File list: Open apps with a double click | `true` | `true` / `false` | Start a local macOS package (`.app`, `.pkg`, `.rtfd`) with a double click; a single click then only marks it. Off: a single click starts it |
+| `preview` | Preview: Show previews | `true` | `true` / `false` | Preview Markdown, HTML, images and PDFs |
+| `mermaid` | Preview: Draw diagrams | `true` | `true` / `false` | Draw Mermaid diagrams |
+| `svg_check` | Security: Check SVG images before showing them | `true` | `true` / `false` | Check SVG files before drawing them (see below) |
+| `list_per_folder` | Advanced, File list limits: Files shown per folder | `500` | 10–10,000 | Entries shown per folder |
+| `list_total` | Advanced, File list limits: Files shown in total | `5000` | 100–20,000 | Entries shown in the whole tree |
+| `tree_depth` | Advanced, File list limits: Deepest folder level | `40` | 1–200 | Deepest folder level shown |
+| `refresh_seconds` | Advanced, File list limits: Look for changes every | `10` | 2–3,600 s | Periodic reload of the tree (it also reloads on file changes and after actions) |
+| `preview_max_chars` | Advanced, Preview limits: Longest formatted preview | `200000` | 10,000–2,000,000 | Characters of a Markdown or HTML preview |
+| `source_max_chars` | Advanced, Preview limits: Longest plain text view | `400000` | 10,000–5,000,000 | Characters of the source view, the rest is cut |
+| `image_max_mb` | Advanced, Preview limits: Show images right away up to | `20` | 1–500 MB | Larger images show a Load button (SVGs: no preview) |
+| `pdf_local_max_mb` | Advanced, Preview limits: Show PDFs on this Mac right away up to | `100` | 1–2,000 MB | Larger local PDFs show a Load button |
+| `pdf_remote_max_mb` | Advanced, Preview limits: Show PDFs on SSH machines right away up to | `20` | 1–500 MB | Larger PDFs on a machine show a Load button |
+| `image_cache_mb` | Advanced, Preview limits: Disk space for the image cache | `50` | 10–5,000 MB | Size of the image and PDF page cache |
+| `max_diagrams` | Advanced, Preview limits: Diagrams per file | `20` | 1–100 | Mermaid diagrams drawn per file |
+| `max_diagram_chars` | Advanced, Preview limits: Largest diagram | `20000` | 1,000–200,000 | Characters per Mermaid diagram |
+| `node_path` | Advanced, Preview limits: Node.js for diagrams | `""` | empty or an absolute path | Node for Mermaid; empty tries `node`, `/opt/homebrew/bin/node`, `/usr/local/bin/node` |
+| `ssh_connect_timeout` | Advanced, Transfers & connections: Give up connecting after | `15` | 1–300 s | SSH `ConnectTimeout` for transfers and previews |
+| `ssh_alive_interval` | Advanced, Transfers & connections: Check the connection every | `15` | 1–300 s | SSH `ServerAliveInterval` for transfers and previews |
+| `ssh_alive_count` | Advanced, Transfers & connections: Drop the connection after | `4` | 1–100 | SSH `ServerAliveCountMax` for transfers and previews |
+| `stall_seconds` | Advanced, Transfers & connections: Stop a stuck transfer after | `120` | 10–3,600 s | A transfer whose temp file does not grow this long is stopped as stalled |
+| `keep_done_seconds` | Advanced, Transfers & connections: Keep finished transfers visible for | `10` | 0–3,600 s | How long finished transfers stay in the transfers bar |
+| `perf` | config file only | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart) |
 
-The SSH settings apply to transfers (download, upload, copy on a machine, Load). The preview's image cache copies small files over SSH with the fixed defaults (that copy has a 30 s limit anyway). Fixed and not configurable: the 100-megapixel limit for images, the 30 s limit per Mermaid render, and internal timers.
+The SSH settings apply to transfers (download, upload, copy on a machine, Load) and to the preview's copy of images and PDFs from a machine (that copy also stops after 30 s). Fixed and not configurable: the 100-megapixel limit for images, the 30 s limit per Mermaid render, and internal timers.
 
 **SVG check (`svg_check`).** This is a security boundary. With the check on (default), an SVG is drawn only if it cannot set its own size through CSS or load more than itself (no external style sheets, entities, `foreignObject`, XHTML, or CSS that sets a size or pulls in a URL), and only up to the first 64 KiB, which are checked. Turned off, every SVG with a readable size is drawn: a crafted SVG can then load external content or inject code, and can set its own size in CSS past the 100-megapixel limit. Turning it off is at your own risk.
 
