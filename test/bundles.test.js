@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { BUNDLE_EXTENSIONS, isBundle, markBundles, treeDir, sortsAsFolder, bundleIcon } from "../mods/filer-pro/lib/bundles.js";
+import { BUNDLE_EXTENSIONS, isBundle, markBundles, treeDir, sortsAsFolder, bundleIcon, packageClick } from "../mods/filer-pro/lib/bundles.js";
 import { openBundle, OPEN_BUNDLE_SCRIPT } from "../mods/filer-pro/lib/open.js";
 import { rowMenuItems, menuHeight } from "../mods/filer-pro/lib/menuitems.js";
 import { visibleRows } from "../mods/filer-pro/lib/tree.js";
@@ -162,4 +162,12 @@ test("openBundle follows a link to a real package and opens the target", async (
   await fs.symlink(`${dir}/Real.app`, `${dir}/Alias.app`);
   assert.equal((await openBundle(`${dir}/Alias.app`, deps)).ok, true);
   assert.deepEqual(await opened(), [`${dir}/Real.app`]);
+});
+
+test("packageClick: one press marks, the second press of a double click opens, a third does nothing", () => {
+  assert.equal(packageClick({ click_count: 1 }), "select");
+  assert.equal(packageClick({ click_count: 2 }), "open");
+  assert.equal(packageClick({ click_count: 3 }), null);
+  assert.equal(packageClick({}), "select", "keyboard activation and events without a count are one click");
+  assert.equal(packageClick(undefined), "select");
 });

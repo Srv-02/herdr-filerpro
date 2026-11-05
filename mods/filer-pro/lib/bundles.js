@@ -45,3 +45,12 @@ export function sortsAsFolder(entry) {
 export function bundleIcon(name, dark) {
   return icon(`package.${ICON_AS[bundleExt(name)] ?? "file"}`, false, false, dark);
 }
+
+// A click on a package row shown as a file (on_click's ClickEvent): "select" marks the row, "open" starts it, null
+// does nothing. Like the Finder, only a double click opens: GPUI reports it as two clicks, click_count 1 and then 2,
+// so the first press marks and the second opens; a third press of a triple click does not start it again.
+// Keyboard activation counts as one click. Open in the row menu starts a package directly.
+export function packageClick(event) {
+  const n = typeof event?.click_count === "number" ? event.click_count : 1;
+  return n <= 1 ? "select" : n === 2 ? "open" : null;
+}

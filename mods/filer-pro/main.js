@@ -14,7 +14,7 @@ import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
 import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
-import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
+import { markBundles, treeDir, sortsAsFolder, bundleIcon, packageClick } from "./lib/bundles.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
@@ -668,7 +668,7 @@ export default class FilerPro extends View {
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
     if (!path || !cx) return;
-    // A macOS package is a folder: the viewer never reads it as a file (a click opens it, see rows()).
+    // A macOS package is a folder: the viewer never reads it as a file (a double click opens it, see rows()).
     if (this.entryAt(path)?.bundle) {
       this.fileError = "This is a package: use Open, or Show Package Contents";
       cx.notify();
@@ -876,9 +876,12 @@ export default class FilerPro extends View {
       .child(this.viewer(t));
   }
 
-  // A click on a macOS package (local only): opens it like a double click in the Finder (lib/open.js openBundle).
-  openPackage(path) {
-    openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
+  // A click on a macOS package (local only, lib/bundles.js packageClick): a single click marks the row as the tree marks
+  // the last opened file; a double click opens it like the Finder does (lib/open.js openBundle).
+  clickPackage(path, event, cx) {
+    const action = packageClick(event);
+    if (action === "select") { this.lastOpened = path; cx.notify(); }
+    else if (action === "open") openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
   }
 
   // Cmd+click: remote rows are downloaded and shown in the Finder, local rows are only shown there.
@@ -908,7 +911,7 @@ export default class FilerPro extends View {
       const menuState = { paste: { enabled: false }, isDir: entry.dir, bundle, contents };
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
-        .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : dir ? this.toggle(path, cx) : bundle ? this.openPackage(path) : this.show(path, cx))
+        .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : dir ? this.toggle(path, cx) : bundle ? this.clickPackage(path, e, cx) : this.show(path, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });

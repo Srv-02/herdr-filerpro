@@ -105,18 +105,49 @@ test("local tree on macOS: packages are file rows among the files, developer pac
   assert.equal(iconOf(pkg), "mods/filer-pro/icons/zip.svg");
 });
 
-test("a click on a package opens it with open (resolved, checked), it neither expands nor previews", async () => {
+test("a single click on a package only marks its row; it neither opens, expands nor previews", async () => {
   const { log } = host();
   const cx = fakeCx();
   const self = await loaded(cx);
   log.execs.length = 0;
-  handler(byId(self.render(cx), "file-Example.app"), "on_click")({ modifiers: {} }, cx);
+  handler(byId(self.render(cx), "file-Example.app"), "on_click")({ modifiers: {}, click_count: 1 }, cx);
   await settle();
-  assert.deepEqual(execsOf(log, OPEN_BUNDLE_SCRIPT).map((e) => e.args), [["-c", OPEN_BUNDLE_SCRIPT, "sh", `${ROOT}/Example.app`, "open"]]);
-  assert.equal(log.execs.length, 1, "nothing else ran");
+  assert.deepEqual(log.execs, [], "nothing ran");
+  assert.equal(self.lastOpened, "Example.app", "the row is marked");
+  assert.deepEqual(byId(self.render(cx), "file-Example.app").calls.filter(([k]) => k === "bg"), [["bg", "selected"]]);
   assert.equal(self.folders.has("Example.app"), false);
   assert.equal(self.file, null, "the viewer stays closed");
   assert.deepEqual(log.reads, [], "the package is never read as a file");
+});
+
+test("a double click on a package opens it with open (resolved, checked), once", async () => {
+  const { log } = host();
+  const cx = fakeCx();
+  const self = await loaded(cx);
+  log.execs.length = 0;
+  // GPUI reports a double click as two clicks: click_count 1, then 2.
+  const row = () => handler(byId(self.render(cx), "file-Example.app"), "on_click");
+  row()({ modifiers: {}, click_count: 1 }, cx);
+  row()({ modifiers: {}, click_count: 2 }, cx);
+  await settle();
+  assert.deepEqual(execsOf(log, OPEN_BUNDLE_SCRIPT).map((e) => e.args), [["-c", OPEN_BUNDLE_SCRIPT, "sh", `${ROOT}/Example.app`, "open"]]);
+  assert.equal(log.execs.length, 1, "nothing else ran");
+  // A third press of a triple click does not start it a second time.
+  row()({ modifiers: {}, click_count: 3 }, cx);
+  await settle();
+  assert.equal(log.execs.length, 1);
+  assert.equal(self.folders.has("Example.app"), false);
+  assert.equal(self.file, null);
+});
+
+test("files and folders still act on a single click", async () => {
+  host();
+  const cx = fakeCx();
+  const self = await loaded(cx);
+  handler(byId(self.render(cx), "file-src"), "on_click")({ modifiers: {}, click_count: 1 }, cx);
+  assert.equal(self.folders.has("src"), true, "a folder expands");
+  handler(byId(self.render(cx), "file-a.txt"), "on_click")({ modifiers: {}, click_count: 1 }, cx);
+  assert.equal(self.file, "a.txt", "a file opens in the viewer");
 });
 
 test("Cmd+click on a package still reveals it in the Finder", async () => {
@@ -124,7 +155,7 @@ test("Cmd+click on a package still reveals it in the Finder", async () => {
   const cx = fakeCx();
   const self = await loaded(cx);
   log.execs.length = 0;
-  handler(byId(self.render(cx), "file-Example.app"), "on_click")({ modifiers: { platform: true } }, cx);
+  handler(byId(self.render(cx), "file-Example.app"), "on_click")({ modifiers: { platform: true }, click_count: 1 }, cx);
   assert.deepEqual(log.execs.map((e) => [e.cmd, e.args]), [["open", ["-R", `${ROOT}/Example.app`]]]);
 });
 
@@ -211,7 +242,7 @@ test("menu: Show Package Contents asks the panel to expand the package, Hide col
   assert.match(iconOf(byId(tree, "file-Example.app")), /-open\.svg$/, "an open folder icon");
   assert.ok(log.execs.some((e) => e.args[1] === LIST_SCRIPT && e.args[3] === `${ROOT}/Example.app`), "contents listed");
 
-  // Collapsing with the chevron (a click on the row) turns it back into a file row; the next click opens it again.
+  // Collapsing with the chevron (a click on the row) turns it back into a file row; a double click opens it again.
   handler(byId(tree, "file-Example.app"), "on_click")({ modifiers: {} }, cx);
   assert.equal(self.packages.has("Example.app"), false);
   assert.equal(self.folders.has("Example.app"), false);
