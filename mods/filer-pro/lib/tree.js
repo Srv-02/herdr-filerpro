@@ -43,7 +43,8 @@ export const ROW_H = 28, TREE_PAD = 6;
 
 // The rows of the tree in display order: the entries of "" and, depth first, of every open folder.
 // Stops at `limit` rows; a folder deeper than `maxDepth` is not descended into (rows up to depth maxDepth show).
-export function visibleRows(entries, folders, { limit = 5000, maxDepth = 40 } = {}) {
+// isDir(entry, path): does the row act as a folder (a macOS package only while its contents are shown, lib/bundles.js).
+export function visibleRows(entries, folders, { limit = 5000, maxDepth = 40, isDir = (entry) => entry.dir } = {}) {
   const out = [];
   const walk = (prefix, depth) => {
     if (out.length >= limit || depth > maxDepth) return;
@@ -51,7 +52,7 @@ export function visibleRows(entries, folders, { limit = 5000, maxDepth = 40 } = 
       if (out.length >= limit) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       out.push({ path, entry, depth });
-      if (entry.dir && folders.has(path)) walk(path, depth + 1);
+      if (isDir(entry, path) && folders.has(path)) walk(path, depth + 1);
     }
   };
   walk("", 0);
