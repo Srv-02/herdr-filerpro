@@ -5,7 +5,7 @@
 // Everything in here may import its own files statically; the folder is the unit of removal.
 import { div, image } from "gpui-kit";
 import { v_flex, TextView } from "gpui-base";
-import { safeLink } from "./prepare.js";
+import { safeLink, noteText, PREVIEW_MAX_CHARS } from "./prepare.js";
 import { fit } from "./images.js";
 
 export { prepare, prepareAsync } from "./prepare.js";
@@ -16,7 +16,6 @@ export { createPdfs } from "./pdf.js";
 export { colorKey } from "./mermaid.js";
 
 export const WIDTH_STEP = 32;
-const NOTE = "Preview is shortened (first 200,000 characters, long lines cut) · open Source for the whole file";
 
 // Document links are untrusted: only web links open, and only on a click.
 const onLink = (url, cx) => { const target = safeLink(url); if (target) cx.open_url(target); };
@@ -46,7 +45,7 @@ function picture(doc, width, onWidth) {
     .child(div().id("files-image").flex_none().child(image(doc.path).w(w).h(h)));
 }
 
-const note = (t) => div().flex_none().text_size(11).text_color(t.dim).child(NOTE);
+const note = (t, doc) => div().flex_none().text_size(11).text_color(t.dim).child(noteText(doc.limit ?? PREVIEW_MAX_CHARS));
 
 /**
  * The element for a prepared document. `width` is the last reported width (in 32 px steps); `onWidth(width, cx)`
@@ -58,12 +57,12 @@ export function view(doc, { t, font, file, width }, { onWidth }) {
     const part = doc.parts[0] ?? { kind: doc.kind, text: "" };
     return v_flex().id("files-preview").flex_1().min_h(0).px(16).py(10).gap(6)
       .child(text(part.kind, `preview-${file}`, part.text).scrollable(true).flex_1().min_h(0))
-      .when(doc.truncated, (el) => el.child(note(t)));
+      .when(doc.truncated, (el) => el.child(note(t, doc)));
   }
   return v_flex().id("files-preview").flex_1().min_h(0).overflow_y_scrollbar().px(16).py(10).gap(10)
     .on_size_change((size, cx) => onWidth(Math.floor(size.width / WIDTH_STEP) * WIDTH_STEP, cx))
     .children(doc.parts.map((p, i) => (p.kind === "mermaid" ? diagram(p, i, t, font, width) : text("markdown", `preview-${file}-${i}`, p.text))))
-    .when(doc.truncated, (el) => el.child(note(t)));
+    .when(doc.truncated, (el) => el.child(note(t, doc)));
 }
 
 /** The header buttons: Preview/Source (names the view you switch to) and Open in browser (local HTML only). */

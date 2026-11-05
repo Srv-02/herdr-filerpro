@@ -22,7 +22,13 @@ dir=$1 mode=$2 target=$3 src=$4 dest=$5 temp=$6 status=$7 trash=$8
 CP=${FILER_PRO_CP:-cp}
 SCP=${FILER_PRO_SCP:-scp}
 SSH=${FILER_PRO_SSH:-ssh}
-SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+# SSH options from the settings (jobs.js passes them via env only when they differ from the defaults). SSH_OPTS is
+# word-split into the command line, so only digits are accepted; anything else means the default.
+num() { case $1 in ''|*[!0-9]*) R=$2 ;; *) R=$1 ;; esac; }
+num "${FILER_PRO_SSH_CONNECT_TIMEOUT-}" 15; ssh_ct=$R
+num "${FILER_PRO_SSH_ALIVE_INTERVAL-}" 15; ssh_ai=$R
+num "${FILER_PRO_SSH_ALIVE_COUNT-}" 4; ssh_ac=$R
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=$ssh_ct -o ServerAliveInterval=$ssh_ai -o ServerAliveCountMax=$ssh_ac"
 
 # Relative paths get "./" so a leading "-" can never be read as an option. Sets R, no $(...): that would
 # drop trailing newlines, and "foo<newline>" would become its neighbour "foo".

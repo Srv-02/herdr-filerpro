@@ -1,7 +1,9 @@
-import { splitCommand, TERMINAL_EDITORS, GUI_EDITORS, DEFAULT_TERMINAL_EDITOR, DEFAULT_GUI_EDITOR } from "./editors.js";
+import { TERMINAL_EDITORS, GUI_EDITORS, DEFAULT_TERMINAL_EDITOR, DEFAULT_GUI_EDITOR } from "./editors.js";
+import { numbers, terminalProblem, guiProblem, remoteProblem, validateField } from "./settings.js";
 
 // Config: appHome()/filer-pro.json. Keys: download_folder, preview, mermaid, perf, update_check, terminal_editor,
-// terminal_editors, gui_editor, gui_editors. A missing or broken file, or a value of the wrong type, means the default.
+// terminal_editors, gui_editor, gui_editors, node_path, svg_check and the numbers of lib/settings.js (NUMBERS).
+// A missing or broken file, or a value of the wrong type, means the default; a number out of range is clamped.
 
 const trimmed = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
 
@@ -19,14 +21,14 @@ function entries(list, check) {
 
 // terminal_editors: [{ name, command }]; command: the program and its own arguments, split without a shell.
 // The path is always appended as its own word, so a command with {path} is refused (it would get the file twice).
-const terminalEntry = (raw, name) => (typeof raw.command === "string" && splitCommand(raw.command) && !raw.command.includes("{path}") ? { name, command: raw.command.trim() } : null);
+const terminalEntry = (raw, name) => (terminalProblem(raw) == null ? { name, command: raw.command.trim() } : null);
 
 // gui_editors: [{ name, local, remote? }]; each template needs {path} or {path_uri}; local must not use {target}
 // (a local file has none); a missing or broken remote is null (this editor then cannot open files on a machine).
 function guiEntry(raw, name) {
-  const usable = (t) => typeof t === "string" && splitCommand(t) != null && /\{path(_uri)?\}/.test(t);
-  if (!usable(raw.local) || raw.local.includes("{target}")) return null;
-  return { name, local: raw.local.trim(), remote: usable(raw.remote) ? raw.remote.trim() : null };
+  if (guiProblem({ local: raw.local }) != null) return null;
+  const remote = typeof raw.remote === "string" && raw.remote.trim() !== "" && remoteProblem(raw.remote) == null ? raw.remote.trim() : null;
+  return { name, local: raw.local.trim(), remote };
 }
 
 // The chosen name if a shipped or own entry has it, else the default.
@@ -54,7 +56,8 @@ export async function loadConfig(readTextFile, appHome, home) {
     folder = null; cfg = null;
   }
   const flag = (key, fallbackValue) => (cfg && typeof cfg[key] === "boolean" ? cfg[key] : fallbackValue);
-  const flags = { preview: flag("preview", true), mermaid: flag("mermaid", true), perf: flag("perf", false), update_check: flag("update_check", true), ...editors(cfg) };
+  const flags = { preview: flag("preview", true), mermaid: flag("mermaid", true), perf: flag("perf", false), update_check: flag("update_check", true), ...editors(cfg),
+    node_path: validateField("node_path", typeof cfg?.node_path === "string" ? cfg.node_path : "").value ?? "", svg_check: flag("svg_check", true), ...numbers(cfg) };
   if (folder == null) return { download_folder: fallback, ...flags };
   if (folder === "~" || folder.startsWith("~/")) folder = home() + folder.slice(1);
   return { download_folder: folder, ...flags };

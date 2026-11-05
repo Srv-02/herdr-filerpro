@@ -187,3 +187,23 @@ test("exit code 1 with a finished json is a success (another run was faster)", a
   await f.make().renderAll(parts, theme, () => true, () => {});
   assert.deepEqual(parts[0].diagram, { path: `data/filer-pro/diagrams/${keyOf("a")}.svg`, width: 7, height: 3 });
 });
+
+test("settings: maxDiagrams and maxChars per run", async () => {
+  const f = fake(), parts = [part("x".repeat(600)), part("a"), part("b"), part("c")];
+  await f.make().renderAll(parts, theme, () => true, () => {}, { maxDiagrams: 2, maxChars: 500 });
+  assert.deepEqual(parts[0].diagram, { error: "Diagram too large (limit 500 characters)" });
+  assert.deepEqual(parts[3].diagram, { error: "Too many diagrams (limit 2)" });
+  assert.equal(f.execCalls.length, 2);
+});
+
+test("settings: a configured node path is the only one tried, also after another path worked", async () => {
+  const f = fake((call) => { if (call.cmd !== "/opt/n/node") throw new Error("not found"); return { code: 0, stdout: "", stderr: "" }; });
+  const d = f.make(), parts = [part("a")];
+  await d.renderAll(parts, theme, () => true, () => {}, { node: "/opt/n/node" });
+  assert.deepEqual(f.execCalls.map((c) => c.cmd), ["/opt/n/node"]);
+  assert.ok(parts[0].diagram.path);
+  const g = fake(() => { throw new Error("spawn failed"); }), more = [part("b"), part("c")];
+  await g.make().renderAll(more, theme, () => true, () => {}, { node: "/missing/node" });
+  assert.deepEqual(g.execCalls.map((c) => c.cmd), ["/missing/node"], "not once per diagram");
+  assert.deepEqual(more.map((p) => p.diagram), [{ error: "node not found at /missing/node" }, { error: "node not found at /missing/node" }]);
+});

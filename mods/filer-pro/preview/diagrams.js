@@ -17,8 +17,18 @@ export function createDiagrams({ exec, readTextFile, writeFile, mkdir, unlink, a
 
   const ensureFolder = () => (folder ??= mkdir(`${appHome()}/${DATA}/diagrams`, { recursive: true }));
 
-  // Runs the first Node that exec accepts; the working one is remembered for this instance.
-  async function runNode(args) {
+  // Runs the first Node that exec accepts; the working one is remembered for this instance. A configured path
+  // (setting node_path) is the only one tried; it is not remembered, so a changed setting applies to the next run.
+  async function runNode(args, configured) {
+    if (configured) {
+      if (noNode) throw new Error(`node not found at ${configured}`);
+      try { return await exec(configured, args, { on: null }); }
+      catch (e) {
+        if (timedOut(e)) throw new Error("render timed out");
+        noNode = true;
+        throw new Error(`node not found at ${configured}`);
+      }
+    }
     if (noNode) throw new Error(NO_NODE);
     const order = node ? [node] : NODE_CANDIDATES;
     for (const cmd of order) {
@@ -35,7 +45,7 @@ export function createDiagrams({ exec, readTextFile, writeFile, mkdir, unlink, a
     throw new Error(NO_NODE);
   }
 
-  async function renderOne(source, theme) {
+  async function renderOne(source, theme, configured) {
     // The file name is a short, non-cryptographic hash. The .json carries the full key, so a collision
     // (another source with the same name) is never shown as a cache hit.
     const full = JSON.stringify([RENDER_VERSION, source, colorsFor(theme), FONT]), key = shortHash(full);
@@ -53,7 +63,7 @@ export function createDiagrams({ exec, readTextFile, writeFile, mkdir, unlink, a
     await writeFile(input, source);
     const t0 = now();
     let r, failure = null;
-    try { r = await runNode([`${appHome()}/${BASE}/bin/render-mermaid.mjs`, input, base, JSON.stringify(colorsFor(theme))]); }
+    try { r = await runNode([`${appHome()}/${BASE}/bin/render-mermaid.mjs`, input, base, JSON.stringify(colorsFor(theme))], configured); }
     catch (e) { failure = e; }
     finally { perf?.sample("mermaid.exec", now() - t0); }
     if (failure || r.code !== 0) {
@@ -72,22 +82,23 @@ export function createDiagrams({ exec, readTextFile, writeFile, mkdir, unlink, a
   /**
    * Draws every mermaid part in order, one at a time. Sets `part.diagram` to { loading: true }, then to
    * { path, width, height } or { error }. `current()` is asked before each diagram and after its result:
-   * false stops the run and drops the result. `onChange()` follows each finished diagram.
+   * false stops the run and drops the result. `onChange()` follows each finished diagram. `limits` from the settings:
+   * { maxDiagrams, maxChars, node } (max_diagrams, max_diagram_chars, node_path; "" or missing node: the candidates).
    */
-  async function renderAll(parts, theme, current, onChange) {
+  async function renderAll(parts, theme, current, onChange, { maxDiagrams = MAX_DIAGRAMS, maxChars = MAX_DIAGRAM_CHARS, node: configured = "" } = {}) {
     let started = 0;
     noNode = false;
     const todo = [];
     for (const p of parts) {
       if (p.kind !== "mermaid") continue;
-      if (p.text.length > MAX_DIAGRAM_CHARS) p.diagram = { error: `Diagram too large (limit ${MAX_DIAGRAM_CHARS.toLocaleString("en-US")} characters)` };
-      else if (++started > MAX_DIAGRAMS) p.diagram = { error: `Too many diagrams (limit ${MAX_DIAGRAMS})` };
+      if (p.text.length > maxChars) p.diagram = { error: `Diagram too large (limit ${maxChars.toLocaleString("en-US")} characters)` };
+      else if (++started > maxDiagrams) p.diagram = { error: `Too many diagrams (limit ${maxDiagrams})` };
       else { p.diagram = { loading: true }; todo.push(p); }
     }
     for (const p of todo) {
       if (!current()) return;
       let result;
-      try { result = await renderOne(p.text, theme); }
+      try { result = await renderOne(p.text, theme, configured); }
       catch (e) { result = { error: oneLine(e?.message ?? e) ?? "render failed" }; }
       if (!current()) return;
       p.diagram = result;

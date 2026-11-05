@@ -19,8 +19,11 @@ test("row menu lists fifteen entries in five groups, Open first and Delete last"
   assert.equal(items.find((i) => i.action === "edit_terminal").id, "filer-pro-menu-edit-terminal");
   assert.ok(items.filter((i) => !i.separator).every((i) => i.enabled === true));
 });
-test("root menu has New Folder and Paste only", () => {
-  assert.deepEqual(rootMenuItems(on).map((i) => [i.id, i.label, i.action, i.enabled]), [["filer-pro-menu-new-folder", "New Folder…", "new_folder", true], ["filer-pro-menu-paste", "Paste", "paste", true]]);
+test("root menu has New Folder and Paste, then Settings after a separator", () => {
+  assert.deepEqual(rootMenuItems(on).map((i) => (i.separator ? "|" : [i.id, i.label, i.action, i.enabled])), [
+    ["filer-pro-menu-new-folder", "New Folder…", "new_folder", true], ["filer-pro-menu-paste", "Paste", "paste", true], "|",
+    ["filer-pro-menu-settings", "Settings…", "settings", true],
+  ]);
 });
 test("paste in the root menu is dimmed without clipboard", () => {
   assert.equal(rootMenuItems(off).find((i) => i.action === "paste").enabled, false);
@@ -57,6 +60,6 @@ test("Show in Finder is dimmed on a machine for files and folders, Open and Open
 test("menu height matches the item count", () => {
   assert.equal(menuHeight(rowMenuItems(on)), 460);
   assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 460);
-  assert.equal(menuHeight(rootMenuItems(on)), 68);
+  assert.equal(menuHeight(rootMenuItems(on)), 103);
   assert.equal(MENU_WIDTH, 200);
 });

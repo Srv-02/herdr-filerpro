@@ -737,3 +737,24 @@ test("transfer.sh carries MOUNT_FN unchanged and both judge the same cases alike
   }
   assert.deepEqual(hits, [1, 1, 0, 1, 1, 0, 1, 1, 0, ci, ci, ci, 0]);
 });
+
+// Settings: FILER_PRO_SSH_* set the ssh options of scp and ssh; anything but digits falls back to the default, because
+// the options are word-split into the command line (a value like "15 -o ProxyCommand=x" must never become options).
+test("SSH options come from FILER_PRO_SSH_*; non-digit values fall back to the defaults", () => {
+  const d = setup();
+  const log = path.join(d, "scp.log"), wrap = path.join(d, "scp-wrap");
+  fs.writeFileSync(wrap, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${path.join(root, "test/fake/scp")}' "$@"\n`, { mode: 0o755 });
+  const once = (name, env) => {
+    fs.writeFileSync(path.join(d, "src", name), "x");
+    fs.rmSync(log, { force: true });
+    const r = run(args(d, "down", "new", name), { FILER_PRO_SCP: wrap, ...env });
+    assert.equal(r.status, 0, r.stderr);
+    return fs.readFileSync(log, "utf8");
+  };
+  assert.match(once("a.txt", {}), /-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 /);
+  assert.match(once("b.txt", { FILER_PRO_SSH_CONNECT_TIMEOUT: "30", FILER_PRO_SSH_ALIVE_INTERVAL: "5", FILER_PRO_SSH_ALIVE_COUNT: "9" }),
+    /-o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=5 -o ServerAliveCountMax=9 /);
+  const bad = once("c.txt", { FILER_PRO_SSH_CONNECT_TIMEOUT: "15 -o ProxyCommand=x", FILER_PRO_SSH_ALIVE_INTERVAL: "", FILER_PRO_SSH_ALIVE_COUNT: "-1" });
+  assert.match(bad, /-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 /);
+  assert.doesNotMatch(bad, /ProxyCommand/);
+});

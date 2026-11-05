@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../mods/filer-pro/lib/config.js";
+import { numbers } from "../mods/filer-pro/lib/settings.js";
 
 const home = () => "/home/u";
 const appHome = () => "/home/u/.config/herdr-app";
@@ -24,6 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
+    node_path: "", svg_check: true, ...numbers(null),
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -101,4 +103,15 @@ test("update_check is on by default and off only with false", async () => {
   assert.equal((await loadConfig(reader("{nope"), appHome, home)).update_check, true);
   assert.equal((await loadConfig(reader('{"update_check":"no"}'), appHome, home)).update_check, true);
   assert.equal((await loadConfig(reader('{"update_check":false}'), appHome, home)).update_check, false);
+});
+
+test("settings dialog keys: numbers clamped or defaulted, node_path absolute or automatic, svg_check off only with false", async () => {
+  let c = await load({ list_per_folder: 20000, tree_depth: "7", node_path: "/opt/n/node", svg_check: false });
+  assert.deepEqual([c.list_per_folder, c.tree_depth, c.node_path, c.svg_check], [10000, 40, "/opt/n/node", false]);
+  c = await load({ node_path: "node", svg_check: "no" });
+  assert.deepEqual([c.node_path, c.svg_check], ["", true]);
+  c = await load({ node_path: "  /usr/bin/node  " });
+  assert.equal(c.node_path, "/usr/bin/node");
+  c = await loadConfig(reader("{nope"), appHome, home);
+  assert.deepEqual([c.list_total, c.svg_check, c.node_path], [5000, true, ""]);
 });

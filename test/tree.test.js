@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H } from "../mods/filer-pro/lib/tree.js";
+import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, LIST_SCRIPT, psListCommand, limitText } from "../mods/filer-pro/lib/tree.js";
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkTmpSync } from "./tmp-helper.js";
 
 test("pruneFolder drops a vanished folder and everything below it, nothing else", () => {
   const folders = new Set(["a", "a/b", "a/b/c", "ab", "d"]);
@@ -73,4 +77,26 @@ test("visibleRows: folders deeper than maxDepth are not descended into", () => {
 
 test("ROW_H is the 28px row height of the tree", () => {
   assert.equal(ROW_H, 28);
+});
+
+test("LIST_SCRIPT stops one entry past the per-folder limit given as $2", () => {
+  const d = mkTmpSync("filer-pro-list-");
+  try {
+    for (let i = 0; i < 15; i++) fs.writeFileSync(path.join(d, `f${i}`), "");
+    const count = (limit) => spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, String(limit)], { encoding: "utf8" }).stdout.split("\0").filter(Boolean).length / 2;
+    assert.equal(count(10), 11);
+    assert.equal(count(500), 15);
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test("psListCommand asks for one entry past the limit and quotes the path", () => {
+  const cmd = psListCommand("C:\\it's", 500);
+  assert.match(cmd, /Select-Object -First 501 /);
+  assert.ok(cmd.endsWith("'C:\\it''s'"));
+  assert.match(psListCommand("C:\\x", 20), /-First 21 /);
+});
+
+test("limitText names the configured numbers", () => {
+  assert.equal(limitText(500, 5000), "File list limited to 500 entries per folder and 5,000 total");
+  assert.equal(limitText(1200, 20000), "File list limited to 1,200 entries per folder and 20,000 total");
 });

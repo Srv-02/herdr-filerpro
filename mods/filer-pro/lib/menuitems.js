@@ -34,7 +34,7 @@ export function rowMenuItems(state) {
 }
 
 export function rootMenuItems(state) {
-  return [entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled)];
+  return [entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), SEPARATOR, entry("settings", "Settings…")];
 }
 
 export function menuHeight(items) {
