@@ -43,9 +43,9 @@ test("settings: a wrong type or a fraction falls back to the default, an integer
 test("settings: every dialog key is listed once with a section, a label and a help line; perf and the editor lists are not", () => {
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
-  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
+  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "double_click_files", "double_click_apps", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
   for (const k of ["perf", "terminal_editors", "gui_editors"]) assert.ok(!keys.includes(k), k);
-  const sections = ["Updates", "Downloads", "Preview", "Security", ...ADVANCED];
+  const sections = ["Updates", "Downloads", "File list", "Preview", "Security", ...ADVANCED];
   for (const s of SETTINGS) assert.ok(s.label && s.help && sections.includes(s.section), s.key);
   for (const s of NUMBERS) assert.ok(ADVANCED.includes(s.section) && s.unit, s.key);
 });
@@ -58,6 +58,18 @@ test("settings: labels and help lines of the spec", () => {
   assert.equal(by.pdf_remote_max_mb.help, "Bigger PDFs show a Load button first. They have to be copied over the network.");
   assert.equal(by.ssh_alive_count.unit, "missed checks");
   assert.equal(by.node_path.section, "Preview limits");
+});
+
+test("settings: the two double click switches of issue #21, in the visible File list group, not in Advanced", () => {
+  const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+  assert.deepEqual([by.double_click_files.kind, by.double_click_files.default, by.double_click_files.section], ["bool", false, "File list"]);
+  assert.deepEqual([by.double_click_apps.kind, by.double_click_apps.default, by.double_click_apps.section], ["bool", true, "File list"]);
+  assert.equal(by.double_click_files.label, "Open files with a double click");
+  assert.equal(by.double_click_files.help, "A single click only marks a file. Folders still open with a single click.");
+  assert.equal(by.double_click_apps.label, "Open apps with a double click");
+  assert.equal(by.double_click_apps.help, "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident.");
+  assert.ok(!ADVANCED.includes("File list"), "one File list heading in the dialog; the Advanced numbers are File list limits");
+  assert.equal(by.list_per_folder.section, "File list limits");
 });
 
 test("group is the one from lib/numbers.js (settings re-exports it for the dialog)", () => {
