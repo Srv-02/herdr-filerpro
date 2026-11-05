@@ -28,9 +28,9 @@ export const NUMBERS = Object.freeze([
   int("image_cache_mb", 50, 10, 5000, "Disk space for the image cache", "Images and PDF pages are kept here so they open faster next time.", "Preview limits", "MB"),
   int("max_diagrams", 20, 1, 100, "Diagrams per file", "Diagrams after this number stay as code.", "Preview limits", "diagrams"),
   int("max_diagram_chars", 20000, 1000, 200000, "Largest diagram", "Bigger diagrams stay as code.", "Preview limits", "characters"),
-  int("ssh_connect_timeout", 15, 1, 300, "Give up connecting after", "How long to wait for an SSH machine to answer.", "Transfers & connections", "seconds"),
-  int("ssh_alive_interval", 15, 1, 300, "Check the connection every", "Keeps long transfers from being dropped by routers.", "Transfers & connections", "seconds"),
-  int("ssh_alive_count", 4, 1, 100, "Drop the connection after", "Missed checks in a row before a transfer counts as disconnected.", "Transfers & connections", "missed checks"),
+  int("ssh_connect_timeout", 15, 1, 300, "Give up connecting after", "How long to wait for an SSH machine to answer, for transfers and previews.", "Transfers & connections", "seconds"),
+  int("ssh_alive_interval", 15, 1, 300, "Check the connection every", "Keeps long transfers and preview downloads from being dropped by routers.", "Transfers & connections", "seconds"),
+  int("ssh_alive_count", 4, 1, 100, "Drop the connection after", "Missed checks in a row before a transfer or preview download counts as disconnected.", "Transfers & connections", "missed checks"),
   int("stall_seconds", 120, 10, 3600, "Stop a stuck transfer after", "A transfer that makes no progress this long is stopped.", "Transfers & connections", "seconds"),
   int("keep_done_seconds", 10, 0, 3600, "Keep finished transfers visible for", "Set to 0 to hide them right away.", "Transfers & connections", "seconds"),
 ].map((s) => Object.freeze(s)));
