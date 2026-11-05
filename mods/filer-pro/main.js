@@ -8,7 +8,7 @@ import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
 import { claim, processRequest, handleRequest, closeAnswer, panelPlan, answerShow, openResult, modeResult } from "./lib/requests.js";
 import { loadConfig } from "./lib/config.js";
 import { editInTerminal, openInEditor } from "./lib/editors.js";
-import { createUpdateGate, updateCheck, fetchLatest, localVersion, updateHint } from "./lib/update.js";
+import { createUpdateGate, updateCheck, fetchLatest, fetchRelease, localVersion, updateHint } from "./lib/update.js";
 import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
@@ -31,7 +31,7 @@ import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
 import { transfersBar } from "./ui/bar.js";
 import { menuView } from "./ui/menu.js";
 import { conflictView } from "./ui/conflict.js";
-import { createSettingsDialog, settingsView, submitSettings } from "./ui/settings.js";
+import { createSettingsDialog, settingsView, submitSettings, tilde } from "./ui/settings.js";
 
 // The preview lives in ./preview/ and is only ever loaded here, with import(): a deleted or broken folder
 // gives null and files open as plain source. A failure is not remembered, so putting the folder back works at the next click.
@@ -172,8 +172,8 @@ export default class FilerPro extends View {
     this.reloadConfig(cx);
   }
 
-  // Opens the settings dialog with a snapshot of the config: the parsed file (own editors as written, unknown keys)
-  // and what loadConfig made of it. The dialog's init reads it from shared, synchronously.
+  // Opens the settings dialog with a snapshot of the config: the parsed file (unknown keys, ~/ as written), what
+  // loadConfig made of it, the installed version and the config path to show. The dialog's init reads it from shared, synchronously.
   async openSettings() {
     let raw = null, broken = false;
     try {
@@ -182,7 +182,8 @@ export default class FilerPro extends View {
       broken = text != null && (raw === null || typeof raw !== "object" || Array.isArray(raw));
     } catch { broken = true; raw = null; }
     const config = await loadConfig(readTextFile, appHome, home);
-    setShared("filer-pro.settings", { config, raw: broken ? null : raw, broken });
+    const version = await this.readVersion();
+    setShared("filer-pro.settings", { config, raw: broken ? null : raw, broken, version, home: home(), configPath: tilde(`${appHome()}/filer-pro.json`, home()) });
     openOverlay({ mod: "filer-pro", props: { view: "settings" }, kind: "dialog", modal: true, width: 620, height: 0.86 });
   }
 
@@ -437,7 +438,9 @@ export default class FilerPro extends View {
           setShared("filer-pro.config", { at: Date.now() }); // every panel copy reads the config again (checkConfig)
           close();
         }),
-      });
+        onCheck: (cx) => this.checkNow(cx),
+        onChoose: (cx) => this.chooseDownloadFolder(cx),
+      }, shared("filer-pro.update"));
     }
     if (p.view === "rename" || p.view === "mkdir") return nameView(t, this.dialog, { onCancel: close, onSubmit: (name, cx) => this.submitName(name, cx) });
     if (p.view === "file") return this.fileOverlay(t, cx);
@@ -446,6 +449,40 @@ export default class FilerPro extends View {
     return conflictView(t, pending, { all: this.all }, {
       onChoose: (choice) => { setShared("filer-pro.answer", { batch: pending.batch, choice, apply_to_all: this.all === true }); close(); },
       onToggleAll: (cx) => { this.all = !this.all; cx.notify(); },
+    });
+  }
+
+  // Settings dialog, Check now: one request to GitHub from this copy, also with the daily check off (a click asks
+  // for it). A result is stored in shared filer-pro.update for the panels while the daily check is on (the lease
+  // holder's next pass then sees a fresh check); a failure keeps the last known release.
+  checkNow(cx, fetchFn = globalThis.fetch) {
+    const s = this.settings;
+    if (!s || s.check.phase === "checking") return;
+    s.check = { phase: "checking" };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await fetchRelease(fetchFn, (ms) => cx.sleep(ms));
+      if (r.error) s.check = { phase: "failed" };
+      else {
+        const state = { at: Date.now(), local: s.version, latest: r.tag };
+        if (s.version && shared("filer-pro.settings")?.config?.update_check !== false) setShared("filer-pro.update", state);
+        s.check = { phase: "done", state };
+      }
+      cx.notify();
+    });
+  }
+
+  // Settings dialog, Choose…: the system folder picker; a folder in the home folder is written with ~/.
+  chooseDownloadFolder(cx) {
+    const f = this.settings?.fields.download_folder;
+    if (!f) return;
+    cx.spawn(async (cx) => {
+      const dir = await pickFolder({ prompt: "Choose" }).catch(() => null);
+      if (!dir) return;
+      f.value = tilde(dir, this.settings.home);
+      f.input.set_value(f.value);
+      f.error = null;
+      cx.notify();
     });
   }
 
@@ -773,6 +810,14 @@ export default class FilerPro extends View {
       .on_click((_e, cx) => onClick(cx)).child(child);
   }
 
+  // The Settings button in the panel header while no file is open: a gear in a 24px hit area, muted at rest.
+  gear(t) {
+    return div().id("files-settings").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).tooltip("Settings").accessibility_label("Settings")
+      .on_click(() => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })); })
+      .child(svg(`${BASE}/settings.svg`).size(14).text_color(t.muted));
+  }
+
   // The fullscreen dialog (props view "file"): the same header buttons and viewer as the panel, plus Close. Esc closes a
   // dialog through the app; the root hears it too in case the editor holds the keyboard (as the name dialog does).
   fileOverlay(t, cx) {
@@ -853,7 +898,7 @@ export default class FilerPro extends View {
         .child(div().font_semibold().child("Filer Pro"))
         .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
-        .when(!this.file, el => el.child(this.tool("files-settings", "Settings", t, () => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })); }).flex_none()))
+        .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
         .when(Boolean(this.file), el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t,
           () => openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.on, root: this.root, path: this.file, mode: this.doc ? this.mode : "preview", page: this.page, pages: this.pages, force: this.force }, kind: "dialog", width: 0.86, height: 0.9 })))))

@@ -30,10 +30,10 @@ const make = (names) => names.map((n) => `export const ${n} = () => globalThis._
 const STUBS = {
   herdr: stub(["spaces", "panes", "focused", "exec", "hc", "readTextFile", "writeTextFile", "watchFolder", "theme", "settings", "window", "shared", "setShared", "notify", "props", "appHome", "home", "nextCommand", "openOverlay", "closeOverlay", "pickFolder", "run", "layout"]),
   "gpui-kit": `export class View {}; ${make(["div", "svg", "image"])}`,
-  "gpui-base": `${make(["v_flex", "h_flex", "TextView"])} export const Input = { new: () => globalThis.__make("input") };
+  "gpui-base": `${make(["v_flex", "h_flex", "TextView"])} export const Input = { new: () => globalThis.__make("input") }, Scrollbar = { vertical: () => globalThis.__make("scrollbar") };
 export class Editor { static new() { return globalThis.__make("editor"); } } export class EditorState {}
 export class InputState { static new(o) { const s = new InputState(); s.v = o.value; s.handlers = {}; return s; }
-  on(ev, fn) { this.handlers[ev] = fn; } value() { return this.v; } focus() {} type(v, cx) { this.v = v; this.handlers.change?.({}, cx); } }`,
+  on(ev, fn) { this.handlers[ev] = fn; } value() { return this.v; } set_value(v) { this.v = v; } focus() {} type(v, cx) { this.v = v; this.handlers.change?.({}, cx); } }`,
   "fs/promises": `${stub(["exists"])} export const readFile = async () => "", writeFile = async () => {}, mkdir = readFile, unlink = readFile, stat = readFile;`,
 };
 const hooks = `export async function resolve(s, c, next) { return s in ${JSON.stringify(STUBS)} ? { url: "stub:" + s, shortCircuit: true } : next(s, c); }
@@ -64,7 +64,7 @@ function host({ files = {}, store = {}, platform = "macos", props = {} } = {}) {
 }
 function fakeCx() {
   const timers = [];
-  const cx = { notify() {}, sleep: never, focus_handle: () => ({}), stop_propagation() {}, timer: { every: (ms, fn) => timers.push({ ms, fn }), after() {} },
+  const cx = { notify() {}, sleep: never, focus_handle: () => ({ focus() {} }), stop_propagation() {}, timer: { every: (ms, fn) => timers.push({ ms, fn }), after() {} },
     spawn: (fn) => { const p = Promise.resolve().then(() => fn(cx)); p.catch(() => {}); return p; } };
   return { cx, timers };
 }
@@ -186,6 +186,9 @@ test("settings: openSettings stores a snapshot and opens the modal dialog; a bro
   assert.deepEqual(snap.raw, { x: 1, terminal_editors: [{ name: "n", command: "nvim" }] });
   assert.equal(snap.broken, false);
   assert.equal(snap.config.list_total, 5000);
+  assert.equal(snap.version, null, "no mod.json in this fake: no version");
+  assert.equal(snap.configPath, "/app/filer-pro.json", "outside the home folder the path stays absolute");
+  assert.equal(snap.home, "/home/u");
   assert.deepEqual(h.log.overlays[0], { mod: "filer-pro", props: { view: "settings" }, kind: "dialog", modal: true, width: 620, height: 0.86 });
   for (const text of ["{nope", "[1]"]) {
     const b = host({ files: { "/app/filer-pro.json": text } });
@@ -208,13 +211,17 @@ test("settings: the free-area menu opens the dialog and then closes itself", asy
   assert.deepEqual(h.log.closed, ["menu1"]);
 });
 
-test("settings: the panel header has a Settings button while no file is open", async () => {
+test("settings: the panel header has a gear with the tooltip Settings while no file is open", async () => {
   const h = host();
   const self = panel({});
   Object.assign(self, { reload: { signal: () => false, take: () => false }, saved: new Map(), jobs: {}, perf: null, root: "/data", on: null, file: null, marks: {} });
   self.context = { key: JSON.stringify({ cwd: "/data", on: null, space: "s1" }), cwd: "/data", on: null };
   const { cx } = fakeCx();
-  click(byId(self.render(cx), "files-settings"), cx);
+  const gear = byId(self.render(cx), "files-settings");
+  assert.ok(gear.calls.some(([k, a]) => k === "tooltip" && a === "Settings"), "tooltip");
+  assert.ok(gear.kids.some((k) => k.kind === "svg" && k.calls.some(([m, a]) => m === "size" && a === 14)), "a 14px icon");
+  assert.ok(!texts(gear).includes("Settings"), "no text button any more");
+  click(gear, cx);
   await settle();
   assert.equal(h.log.overlays[0].props.view, "settings");
   self.file = "a.txt";
@@ -251,7 +258,8 @@ test("settings dialog in main.js: an invalid field writes nothing and keeps the 
   assert.deepEqual(h.log.writes, []);
   assert.deepEqual(h.log.closed, []);
   assert.equal(h.store["filer-pro.config"], undefined);
-  assert.ok(texts(self.overlayView(cx)).includes("Must be a whole number"));
+  assert.ok(texts(self.overlayView(cx)).includes("Enter a whole number."));
+  assert.equal(self.settings.advanced, true, "a wrong field in Advanced opens it");
 });
 
 test("settings: preview limits travel per call (source guard and loadLimits)", async () => {
@@ -277,4 +285,67 @@ test("settings: a file holding null is broken; non-default list settings reload 
   self.init({}, cx);
   await settle();
   assert.equal(self.refreshedAt, 0);
+});
+
+// The settings overlay of main.js on a fake host, opened through openSettings like the real one.
+async function dialog(files = {}, store = {}) {
+  const h = host({ props: { overlay: "dlg1", view: "settings" }, files: { "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}', ...files }, store });
+  const { cx } = fakeCx();
+  await panel({}).openSettings();
+  const self = Object.create(FilerPro.prototype);
+  self.init({}, cx);
+  return { h, cx, self };
+}
+
+test("settings dialog: Check now asks GitHub, shows a newer release, and stores it for the panels", async () => {
+  const { h, cx, self } = await dialog();
+  assert.equal(self.settings.version, "1.0.0");
+  const calls = [];
+  let answer;
+  const fetchFn = (url) => { calls.push(url); return new Promise((r) => { answer = r; }); };
+  self.checkNow(cx, fetchFn);
+  assert.equal(self.settings.check.phase, "checking");
+  assert.ok(texts(self.overlayView(cx)).includes("Asking GitHub for the latest version…"));
+  self.checkNow(cx, fetchFn);
+  await settle();
+  assert.equal(calls.length, 1, "one request while checking");
+  answer({ status: 200, json: async () => ({ tag_name: "v1.1.0" }) });
+  await settle();
+  assert.equal(h.store["filer-pro.update"].latest, "v1.1.0");
+  assert.equal(h.store["filer-pro.update"].local, "1.0.0");
+  const out = texts(self.overlayView(cx));
+  assert.ok(out.includes("Version 1.1.0 is available."));
+  assert.ok(out.includes("What’s new in 1.1.0"));
+});
+
+test("settings dialog: Check now offline shows the failure and keeps the last known release", async () => {
+  const known = { at: 5, local: "1.0.0", latest: "v1.0.0" };
+  const { h, cx, self } = await dialog({}, { "filer-pro.update": known });
+  self.checkNow(cx, async () => { throw new Error("offline"); });
+  await settle();
+  assert.equal(self.settings.check.phase, "failed");
+  assert.equal(h.store["filer-pro.update"], known);
+  assert.ok(texts(self.overlayView(cx)).includes("Could not reach GitHub. Check your connection and try again."));
+  assert.ok(texts(self.overlayView(cx)).includes("Try again"));
+});
+
+test("settings dialog: with the daily check off, Check now answers in the dialog but stores nothing", async () => {
+  const { h, cx, self } = await dialog({ "/app/filer-pro.json": '{"update_check": false}' });
+  self.checkNow(cx, async () => ({ status: 200, json: async () => ({ tag_name: "v1.0.0" }) }));
+  await settle();
+  assert.equal(h.store["filer-pro.update"], undefined);
+  assert.ok(texts(self.overlayView(cx)).some((x) => x.startsWith("You’re up to date. Last checked today at ")));
+});
+
+test("settings dialog: Choose… puts the picked folder into the field, with ~/ inside the home folder", async () => {
+  const { cx, self } = await dialog();
+  globalThis.__impl.pickFolder = async () => "/home/u/Inbox";
+  self.chooseDownloadFolder(cx);
+  await settle();
+  assert.equal(self.settings.fields.download_folder.value, "~/Inbox");
+  assert.equal(self.settings.fields.download_folder.input.value(), "~/Inbox");
+  globalThis.__impl.pickFolder = async () => null;
+  self.chooseDownloadFolder(cx);
+  await settle();
+  assert.equal(self.settings.fields.download_folder.value, "~/Inbox", "cancel keeps the field");
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SETTINGS, NUMBERS, numbers, validateField, terminalProblem, guiProblem, editorSlots, saveSettings, changedEdits } from "../mods/filer-pro/lib/settings.js";
+import { SETTINGS, NUMBERS, numbers, validateField, terminalProblem, guiProblem, saveSettings, changedEdits, group, ADVANCED } from "../mods/filer-pro/lib/settings.js";
 import { PREVIEW_MAX_CHARS, MAX_DIAGRAMS, MAX_DIAGRAM_CHARS } from "../mods/filer-pro/preview/prepare.js";
 import { MAX_IMAGE, CACHE_LIMIT } from "../mods/filer-pro/preview/images.js";
 import { MAX_PDF_LOCAL, MAX_PDF_REMOTE } from "../mods/filer-pro/preview/pdf.js";
@@ -39,31 +39,48 @@ test("settings: a wrong type or a fraction falls back to the default, an integer
   assert.equal(n.stall_seconds, 120);
 });
 
-test("settings: every key is listed once with a section and a label", () => {
+test("settings: every dialog key is listed once with a section, a label and a help line; perf and the editor lists are not", () => {
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
-  for (const k of ["download_folder", "preview", "mermaid", "perf", "update_check", "node_path", "svg_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
-  for (const s of SETTINGS) assert.ok(s.label && s.section, s.key);
+  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
+  for (const k of ["perf", "terminal_editors", "gui_editors"]) assert.ok(!keys.includes(k), k);
+  const sections = ["Updates", "Downloads", "Preview", "Security", ...ADVANCED];
+  for (const s of SETTINGS) assert.ok(s.label && s.help && sections.includes(s.section), s.key);
+  for (const s of NUMBERS) assert.ok(ADVANCED.includes(s.section) && s.unit, s.key);
+});
+
+test("settings: labels and help lines of the spec", () => {
+  const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+  assert.equal(by.update_check.label, "Check for updates automatically");
+  assert.equal(by.update_check.help, "Once a day, Filer Pro asks GitHub whether a new version exists. Nothing about you or your files is sent, but GitHub sees your IP address.");
+  assert.equal(by.svg_check.label, "Check SVG images before showing them");
+  assert.equal(by.pdf_remote_max_mb.help, "Bigger PDFs show a Load button first. They have to be copied over the network.");
+  assert.equal(by.ssh_alive_count.unit, "missed checks");
+  assert.equal(by.node_path.section, "Preview limits");
+});
+
+test("group: thousands with commas, without Intl", () => {
+  assert.deepEqual([0, 10, 999, 1000, 10000, 2000000].map(group), ["0", "10", "999", "1,000", "10,000", "2,000,000"]);
 });
 
 test("validateField: numbers must be whole and in range", () => {
   assert.deepEqual(validateField("list_per_folder", " 800 "), { value: 800 });
-  assert.deepEqual(validateField("list_per_folder", "8e2"), { error: "Must be a whole number" });
-  assert.deepEqual(validateField("list_per_folder", "-5"), { error: "Must be a whole number" });
-  assert.deepEqual(validateField("list_per_folder", ""), { error: "Must be a whole number" });
-  assert.deepEqual(validateField("list_per_folder", "1.5"), { error: "Must be a whole number" });
-  assert.deepEqual(validateField("list_per_folder", "5"), { error: "Must be between 10 and 10,000" });
+  assert.deepEqual(validateField("list_per_folder", "8e2"), { error: "Enter a whole number." });
+  assert.deepEqual(validateField("list_per_folder", "-5"), { error: "Enter a whole number." });
+  assert.deepEqual(validateField("list_per_folder", ""), { error: "Enter a whole number." });
+  assert.deepEqual(validateField("list_per_folder", "1.5"), { error: "Enter a whole number." });
+  assert.deepEqual(validateField("list_per_folder", "5"), { error: "Enter a number from 10 to 10,000." });
   assert.deepEqual(validateField("keep_done_seconds", "0"), { value: 0 });
-  assert.deepEqual(validateField("ssh_connect_timeout", "15 -o ProxyCommand=x"), { error: "Must be a whole number" });
+  assert.deepEqual(validateField("ssh_connect_timeout", "15 -o ProxyCommand=x"), { error: "Enter a whole number." });
 });
 
 test("validateField: download folder must not be empty, node path is empty or absolute", () => {
   assert.deepEqual(validateField("download_folder", "  ~/Inbox "), { value: "~/Inbox" });
-  assert.deepEqual(validateField("download_folder", "   "), { error: "Must not be empty" });
+  assert.deepEqual(validateField("download_folder", "   "), { error: "Enter a folder." });
   assert.deepEqual(validateField("node_path", " "), { value: "" });
   assert.deepEqual(validateField("node_path", "/opt/node/bin/node"), { value: "/opt/node/bin/node" });
-  assert.deepEqual(validateField("node_path", "node"), { error: "Must be an absolute path, or empty for automatic" });
-  assert.deepEqual(validateField("node_path", "/a\nb"), { error: "Must be an absolute path, or empty for automatic" });
+  assert.deepEqual(validateField("node_path", "node"), { error: "Enter a full path that starts with /, or leave it empty." });
+  assert.deepEqual(validateField("node_path", "/a\nb"), { error: "Enter a full path that starts with /, or leave it empty." });
   assert.deepEqual(validateField("preview", true), { value: true });
   assert.deepEqual(validateField("preview", "yes"), { error: "Must be on or off" });
 });
@@ -79,21 +96,6 @@ test("terminalProblem and guiProblem name the reason", () => {
   assert.equal(guiProblem({ local: "ed {target} {path}" }), "Local command must not use {target}");
   assert.equal(guiProblem({ local: "ed {path}", remote: "ed 'x" }), "Remote command: Unbalanced quote");
   assert.equal(guiProblem({ local: "ed {path}", remote: "ed --ssh {target}" }), "Remote command needs {path} or {path_uri}");
-});
-
-test("editorSlots: empty slots are dropped, each broken slot gets its reason, names must be unique, the choice must exist", () => {
-  const ok = editorSlots("terminal", [{ name: " nvim ", command: "nvim -u NONE" }, { name: "", command: "" }], "nvim");
-  assert.deepEqual(ok, { value: { list: [{ name: "nvim", command: "nvim -u NONE" }], choice: "nvim" }, errors: [null, null], choiceError: null });
-  const bad = editorSlots("terminal", [{ name: "", command: "x" }, { name: "a", command: "a" }, { name: "a", command: "b" }, { name: "c", command: "c {path}" }], "zzz");
-  assert.deepEqual(bad.errors, ["Name is required", null, "Duplicate name", "Must not contain {path} (the path is appended)"]);
-  assert.equal(bad.choiceError, "Pick an editor from the list");
-  assert.equal(bad.value, null);
-  const shipped = editorSlots("gui", [{ name: "", local: "", remote: "" }], "Zed");
-  assert.deepEqual(shipped, { value: { list: [], choice: "Zed" }, errors: [null], choiceError: null });
-  const gui = editorSlots("gui", [{ name: "Mine", local: "m {path}", remote: " " }], "Mine");
-  assert.deepEqual(gui.value, { list: [{ name: "Mine", local: "m {path}" }], choice: "Mine" });
-  // A choice that names a broken own entry is refused too.
-  assert.equal(editorSlots("gui", [{ name: "Mine", local: "m" }], "Mine").choiceError, "Pick an editor from the list");
 });
 
 test("changedEdits: only fields that differ from the values shown at open", () => {
@@ -151,7 +153,7 @@ test("saveSettings: a broken or non-object file is never overwritten", async () 
   for (const text of ["{nope", "[1,2]", "null", '"x"']) {
     const f = file(text);
     const out = await saveSettings({ list_total: 6000 }, io(f));
-    assert.deepEqual(out, { ok: false, error: "filer-pro.json is not a valid JSON object; fix or remove it first" }, text);
+    assert.deepEqual(out, { ok: false, broken: true, error: "filer-pro.json is not a valid JSON object; fix or remove it first" }, text);
     assert.deepEqual(f.writes, []);
   }
 });

@@ -1,46 +1,51 @@
-// Every user-facing setting of appHome()/filer-pro.json in one place: kind, default, range, label, section. Pure.
+// Every setting of the dialog in one place: kind, default, range, label, help line, section and unit. Pure.
 // lib/config.js reads with it (wrong type: default, integer out of range: clamped), ui/settings.js shows and checks
-// with it, and saveSettings writes the changed keys back without touching anything else in the file.
-import { splitCommand, TERMINAL_EDITORS, GUI_EDITORS } from "./editors.js";
+// with it, and saveSettings writes the changed keys back without touching anything else in the file. Not listed:
+// the editor lists (config file only) and perf (a developer switch, config file only); lib/config.js reads both.
+import { splitCommand } from "./editors.js";
 
-const int = (key, def, min, max, label, section, unit = "") => ({ key, kind: "int", default: def, min, max, label, section, unit });
-const bool = (key, def, label, section) => ({ key, kind: "bool", default: def, label, section });
+const int = (key, def, min, max, label, help, section, unit) => ({ key, kind: "int", default: def, min, max, label, help, section, unit });
+const bool = (key, def, label, help, section) => ({ key, kind: "bool", default: def, label, help, section });
+
+// 10000 -> "10,000", without Intl (the host's engine need not have it).
+export const group = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+// The Advanced part of the dialog, in this order.
+export const ADVANCED = Object.freeze(["File list", "Preview limits", "Transfers & connections"]);
 
 // Numbers: whole numbers in units a person types (MB, seconds); the code converts where it uses them.
 // Defaults are the values the mod had as constants before they became settings.
 export const NUMBERS = Object.freeze([
-  int("list_per_folder", 500, 10, 10000, "Entries per folder", "File list"),
-  int("list_total", 5000, 100, 20000, "Entries in total", "File list"),
-  int("tree_depth", 40, 1, 200, "Folder depth", "File list", "levels"),
-  int("refresh_seconds", 10, 2, 3600, "Refresh every", "File list", "s"),
-  int("source_max_chars", 400000, 10000, 5000000, "Source view shows at most", "Preview", "characters"),
-  int("preview_max_chars", 200000, 10000, 2000000, "Preview shows at most", "Preview", "characters"),
-  int("image_max_mb", 20, 1, 500, "Largest image", "Preview", "MB"),
-  int("image_cache_mb", 50, 10, 5000, "Image cache", "Preview", "MB"),
-  int("pdf_local_max_mb", 100, 1, 2000, "Largest PDF on this computer", "Preview", "MB"),
-  int("pdf_remote_max_mb", 20, 1, 500, "Largest PDF on a machine", "Preview", "MB"),
-  int("max_diagrams", 20, 1, 100, "Mermaid diagrams per file", "Preview"),
-  int("max_diagram_chars", 20000, 1000, 200000, "Characters per diagram", "Preview"),
-  int("ssh_connect_timeout", 15, 1, 300, "SSH ConnectTimeout", "Transfers", "s"),
-  int("ssh_alive_interval", 15, 1, 300, "SSH ServerAliveInterval", "Transfers", "s"),
-  int("ssh_alive_count", 4, 1, 100, "SSH ServerAliveCountMax", "Transfers"),
-  int("stall_seconds", 120, 10, 3600, "A transfer is stalled after", "Transfers", "s"),
-  int("keep_done_seconds", 10, 0, 3600, "Finished transfers stay visible for", "Transfers", "s"),
+  int("list_per_folder", 500, 10, 10000, "Files shown per folder", "Bigger folders are cut off with a note.", "File list", "files"),
+  int("list_total", 5000, 100, 20000, "Files shown in total", "Across all open folders together.", "File list", "files"),
+  int("tree_depth", 40, 1, 200, "Deepest folder level", "Folders nested deeper than this are not listed.", "File list", "levels"),
+  int("refresh_seconds", 10, 2, 3600, "Look for changes every", "The list also updates right after your own actions.", "File list", "seconds"),
+  int("preview_max_chars", 200000, 10000, 2000000, "Longest formatted preview", "Longer Markdown and HTML files are cut off.", "Preview limits", "characters"),
+  int("source_max_chars", 400000, 10000, 5000000, "Longest plain text view", "Longer text is cut off.", "Preview limits", "characters"),
+  int("image_max_mb", 20, 1, 500, "Show images right away up to", "Bigger images show a Load button first.", "Preview limits", "MB"),
+  int("pdf_local_max_mb", 100, 1, 2000, "Show PDFs on this Mac right away up to", "Bigger PDFs show a Load button first.", "Preview limits", "MB"),
+  int("pdf_remote_max_mb", 20, 1, 500, "Show PDFs on SSH machines right away up to", "Bigger PDFs show a Load button first. They have to be copied over the network.", "Preview limits", "MB"),
+  int("image_cache_mb", 50, 10, 5000, "Disk space for the image cache", "Images and PDF pages are kept here so they open faster next time.", "Preview limits", "MB"),
+  int("max_diagrams", 20, 1, 100, "Diagrams per file", "Diagrams after this number stay as code.", "Preview limits", "diagrams"),
+  int("max_diagram_chars", 20000, 1000, 200000, "Largest diagram", "Bigger diagrams stay as code.", "Preview limits", "characters"),
+  int("ssh_connect_timeout", 15, 1, 300, "Give up connecting after", "How long to wait for an SSH machine to answer.", "Transfers & connections", "seconds"),
+  int("ssh_alive_interval", 15, 1, 300, "Check the connection every", "Keeps long transfers from being dropped by routers.", "Transfers & connections", "seconds"),
+  int("ssh_alive_count", 4, 1, 100, "Drop the connection after", "Missed checks in a row before a transfer counts as disconnected.", "Transfers & connections", "missed checks"),
+  int("stall_seconds", 120, 10, 3600, "Stop a stuck transfer after", "A transfer that makes no progress this long is stopped.", "Transfers & connections", "seconds"),
+  int("keep_done_seconds", 10, 0, 3600, "Keep finished transfers visible for", "Set to 0 to hide them right away.", "Transfers & connections", "seconds"),
 ].map((s) => Object.freeze(s)));
 
 export const SETTINGS = Object.freeze([
-  Object.freeze({ key: "download_folder", kind: "text", default: "~/Downloads", label: "Download folder", section: "General" }),
-  bool("preview", true, "Preview Markdown, HTML, images and PDFs", "General"),
-  bool("mermaid", true, "Draw Mermaid diagrams", "General"),
-  bool("update_check", true, "Check for updates once a day", "General"),
-  bool("perf", false, "Write render timings (perf.jsonl; takes effect after a restart)", "General"),
-  Object.freeze({ key: "node_path", kind: "path", default: "", label: "Node for Mermaid (empty: automatic)", section: "Preview" }),
+  bool("update_check", true, "Check for updates automatically", "Once a day, Filer Pro asks GitHub whether a new version exists. Nothing about you or your files is sent, but GitHub sees your IP address.", "Updates"),
+  Object.freeze({ key: "download_folder", kind: "text", default: "~/Downloads", label: "Download folder", help: "Where Download and Download to… put files.", section: "Downloads" }),
+  bool("preview", true, "Show previews", "Markdown, HTML, images and PDFs open formatted. Turn off to always see the raw text.", "Preview"),
+  bool("mermaid", true, "Draw diagrams", "Turns Mermaid code in Markdown files into diagrams. Needs Node.js.", "Preview"),
+  bool("svg_check", true, "Check SVG images before showing them", "Recommended. Blocks SVG files that try to load content from the internet.", "Security"),
   ...NUMBERS,
-  bool("svg_check", true, "Check SVG files before drawing them (recommended)", "Security"),
+  Object.freeze({ key: "node_path", kind: "path", default: "", label: "Node.js for diagrams", help: "Leave empty to find Node.js automatically. Otherwise the full path, for example /opt/homebrew/bin/node.", section: "Preview limits" }),
 ]);
 
 const BY_KEY = new Map(SETTINGS.map((s) => [s.key, s]));
-const fmt = (n) => n.toLocaleString("en-US");
 
 // The numeric settings of a parsed config (null: all defaults). A wrong type or a fraction gives the default,
 // a whole number out of range the nearest bound.
@@ -60,15 +65,15 @@ export function validateField(key, input) {
   if (s.kind === "bool") return typeof input === "boolean" ? { value: input } : { error: "Must be on or off" };
   const text = typeof input === "string" ? input.trim() : "";
   if (s.kind === "int") {
-    if (!/^\d+$/.test(text)) return { error: "Must be a whole number" };
+    if (!/^\d+$/.test(text)) return { error: "Enter a whole number." };
     const n = Number(text);
-    return n >= s.min && n <= s.max ? { value: n } : { error: `Must be between ${fmt(s.min)} and ${fmt(s.max)}` };
+    return n >= s.min && n <= s.max ? { value: n } : { error: `Enter a number from ${group(s.min)} to ${group(s.max)}.` };
   }
   if (s.kind === "path") {
     if (text === "") return { value: "" };
-    return text.startsWith("/") && !/[\0\n\r]/.test(text) ? { value: text } : { error: "Must be an absolute path, or empty for automatic" };
+    return text.startsWith("/") && !/[\0\n\r]/.test(text) ? { value: text } : { error: "Enter a full path that starts with /, or leave it empty." };
   }
-  return text === "" ? { error: "Must not be empty" } : { value: text };
+  return text === "" ? { error: "Enter a folder." } : { value: text };
 }
 
 const hasPath = (t) => /\{path(_uri)?\}/.test(t);
@@ -98,27 +103,6 @@ export function remoteProblem(remote) {
   return hasPath(remote) ? null : "Remote command needs {path} or {path_uri}";
 }
 
-// The editor slots of the dialog: kind "terminal" ({ name, command }) or "gui" ({ name, local, remote }).
-// -> { value: { list, choice } | null, errors: [reason | null per slot], choiceError }. A slot with every field empty is dropped.
-export function editorSlots(kind, slots, choice) {
-  const fields = kind === "terminal" ? ["name", "command"] : ["name", "local", "remote"];
-  const shipped = kind === "terminal" ? TERMINAL_EDITORS : GUI_EDITORS;
-  const list = [], errors = [], seen = new Set();
-  for (const slot of slots) {
-    if (fields.every((f) => !filled(slot[f]))) { errors.push(null); continue; }
-    const name = filled(slot.name) ? slot.name.trim() : null;
-    const problem = name == null ? "Name is required" : seen.has(name) ? "Duplicate name" : kind === "terminal" ? terminalProblem(slot) : guiProblem(slot);
-    errors.push(problem);
-    if (name != null) seen.add(name);
-    if (problem) continue;
-    list.push(kind === "terminal" ? { name, command: slot.command.trim() } : { name, local: slot.local.trim(), ...(filled(slot.remote) ? { remote: slot.remote.trim() } : {}) });
-  }
-  const pick = typeof choice === "string" ? choice.trim() : "";
-  const choiceError = list.some((e) => e.name === pick) || (!seen.has(pick) && shipped.some((e) => e.name === pick)) ? null : "Pick an editor from the list";
-  const bad = errors.some(Boolean) || choiceError;
-  return { value: bad ? null : { list, choice: pick }, errors, choiceError };
-}
-
 // The keys whose value differs from the one shown when the dialog opened (deep, by JSON). Only these are written,
 // so a key someone else changed in the file meanwhile keeps their value.
 export function changedEdits(initial, current) {
@@ -129,7 +113,7 @@ export function changedEdits(initial, current) {
 
 // Read-modify-write of the config file: re-read, apply `edits` (key -> value) onto the parsed object, write only if the
 // file is still what was read (writeTextFile's `expected`; null: only if it does not exist), else read again. A file
-// that is not a JSON object is never overwritten. -> { ok: true } or { ok: false, error }.
+// that is not a JSON object is never overwritten. -> { ok: true } or { ok: false, error, broken? } (broken: not a JSON object).
 export async function saveSettings(edits, { readTextFile, writeTextFile, path, tries = 3 }) {
   if (!Object.keys(edits).length) return { ok: true };
   // A file that cannot be read counts as missing: the write then only creates it (expected null), never overwrites it.
@@ -139,7 +123,7 @@ export async function saveSettings(edits, { readTextFile, writeTextFile, path, t
     const text = await read();
     let obj;
     try { obj = text === null ? {} : JSON.parse(text); } catch { obj = null; }
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "filer-pro.json is not a valid JSON object; fix or remove it first" };
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, broken: true, error: "filer-pro.json is not a valid JSON object; fix or remove it first" };
     const next = JSON.stringify({ ...obj, ...edits }, null, 2) + "\n";
     try {
       await writeTextFile(path, next, text);

@@ -43,3 +43,16 @@ test("the README names credits, preview, turning off and removing", () => {
   for (const s of ["herdr-files-plus", "jjongkwann", "## Preview", '"mermaid": false', '"preview": false', '"perf": true', "mods/filer-pro/preview/", "data/filer-pro/diagrams", "data/filer-pro/loads", "PDF", "osascript", "beautiful-mermaid", "elkjs", "entities"])
     assert.ok(r.includes(s), s);
 });
+
+test("the settings glyphs are small Lucide SVGs in currentColor, each named in the notices", () => {
+  const root = read("THIRD_PARTY_NOTICES.md");
+  for (const name of ["settings", "check", "coffee", "external-link", "info", "loader-circle", "shield-exclamation-point", "github"]) {
+    const svg = read(`mods/filer-pro/${name}.svg`);
+    assert.ok(svg.length < 2048, `${name}: small`);
+    assert.match(svg, /viewBox="0 0 24 24"/, name);
+    assert.match(svg, /stroke="currentColor"/, name);
+    assert.doesNotMatch(svg, /fill="#|<script|href=/i, name);
+    assert.ok(root.includes(`mods/filer-pro/${name}.svg`), `${name} in the notices`);
+  }
+  assert.ok(root.includes("tag 0.544.0") && root.includes("Lucide Contributors 2025"), "the older tag of github.svg");
+});

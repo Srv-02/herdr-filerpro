@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  RELEASES_API, UPDATE_INTERVAL_MS, parseVersion, compareVersions, localVersion, releaseUrl, checkDue, fetchLatest, updateCheck, updateHint, createUpdateGate, ATTEMPT_MS,
+  RELEASES_API, UPDATE_INTERVAL_MS, parseVersion, compareVersions, localVersion, releaseUrl, checkDue, fetchLatest, fetchRelease, updateCheck, updateHint, createUpdateGate, ATTEMPT_MS,
 } from "../mods/filer-pro/lib/update.js";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -79,6 +79,21 @@ test("fetchLatest asks the GitHub API with Accept and User-Agent and returns the
 test("fetchLatest reads the body with text() when the response has it", async () => {
   assert.equal(await fetchLatest(fakeFetch({ status: 200, text: async () => '{"tag_name":"v1.0.1"}' }).fn, never), "v1.0.1");
   assert.equal(await fetchLatest(fakeFetch({ status: 200, text: async () => "<html>" }).fn, never), null);
+});
+
+test("fetchRelease tells no release (tag null) apart from a failed request (error)", async () => {
+  assert.deepEqual(await fetchRelease(fakeFetch(ok({ tag_name: "v1.2.0" })).fn, never), { tag: "v1.2.0" });
+  assert.deepEqual(await fetchRelease(fakeFetch({ status: 404, ok: false, json: async () => ({}) }).fn, never), { tag: null });
+  const failed = {
+    "403 (rate limit)": { status: 403, ok: false, json: async () => ({}) },
+    "offline": new Error("network down"),
+    "malformed JSON": { status: 200, ok: true, json: async () => { throw new SyntaxError("bad"); } },
+    "tag not a version": ok({ tag_name: "nightly" }),
+    "no response": undefined,
+  };
+  for (const [name, res] of Object.entries(failed)) assert.ok((await fetchRelease(fakeFetch(res).fn, never)).error, name);
+  assert.ok((await fetchRelease(() => never(), async () => {})).error, "timeout");
+  assert.ok((await fetchRelease(null, never)).error, "no fetch in this runtime");
 });
 
 test("fetchLatest is null for no release, rate limit, errors, malformed JSON, a bad tag and a hanging request", async () => {

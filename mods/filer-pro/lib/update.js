@@ -51,18 +51,26 @@ export function checkDue(state, local, now) {
   return state.local !== local || state.at > now || now - state.at >= UPDATE_INTERVAL_MS;
 }
 
-// One request; the tag_name of the latest release, or null (no release yet, rate limit, offline, bad JSON, timeout).
-export async function fetchLatest(fetchFn, sleep) {
-  if (typeof fetchFn !== "function") return null;
+// One request to the latest release: { tag } (null: no release yet, a 404) or { error } (offline, rate limit,
+// bad JSON, a tag that is not semver, timeout). The dialog's Check now tells these apart; the daily check does not.
+export async function fetchRelease(fetchFn, sleep) {
+  if (typeof fetchFn !== "function") return { error: "fetch is not available" };
   const ask = (async () => {
     const res = await fetchFn(RELEASES_API, { headers: { Accept: "application/vnd.github+json", "User-Agent": "filer-pro-update-check" } });
-    if (res?.status !== 200) return null;
+    if (res?.status === 404) return { tag: null };
+    if (res?.status !== 200) return { error: `GitHub answered ${res?.status}` };
     const body = typeof res.text === "function" ? JSON.parse(await res.text()) : await res.json();
     const tag = body?.tag_name;
-    return parseVersion(tag) ? tag : null;
-  })().catch(() => null);
-  const timeout = Promise.resolve().then(() => sleep(FETCH_TIMEOUT_MS)).then(() => null, () => null);
+    return parseVersion(tag) ? { tag } : { error: "no version in the answer" };
+  })().catch((e) => ({ error: String(e?.message ?? e) }));
+  const late = () => ({ error: "timed out" });
+  const timeout = Promise.resolve().then(() => sleep(FETCH_TIMEOUT_MS)).then(late, late);
   return Promise.race([ask, timeout]);
+}
+
+// The tag_name of the latest release, or null (no release yet, rate limit, offline, bad JSON, timeout).
+export async function fetchLatest(fetchFn, sleep) {
+  return (await fetchRelease(fetchFn, sleep)).tag ?? null;
 }
 
 // The decision of one lease-holder pass. `request` says whether fetch ran; `state` is present when
