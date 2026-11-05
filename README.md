@@ -85,10 +85,10 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 `~/.config/herdr-app/filer-pro.json`:
 
 ```json
-{ "download_folder": "~/Downloads", "preview": true, "mermaid": true, "perf": false }
+{ "download_folder": "~/Downloads", "preview": true, "mermaid": true, "perf": false, "update_check": true }
 ```
 
-`{ "preview": false }` turns the preview off (source view only), `{ "mermaid": false }` leaves Mermaid fences as code. `{ "perf": true }` writes render timings to `~/.config/herdr-app/data/filer-pro/perf.jsonl`.
+`{ "preview": false }` turns the preview off (source view only), `{ "mermaid": false }` leaves Mermaid fences as code. `{ "perf": true }` writes render timings to `~/.config/herdr-app/data/filer-pro/perf.jsonl`. `{ "update_check": false }` turns the update check off (see [Updates](#updates)).
 
 To remove only the preview, delete `mods/filer-pro/preview/` from the installed mod. Files then open as source. The caches `data/filer-pro/diagrams/`, `data/filer-pro/images/` and `data/filer-pro/loads/` under `~/.config/herdr-app/` can go too.
 
@@ -97,7 +97,13 @@ To remove only the preview, delete `mods/filer-pro/preview/` from the installed 
 - **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit) and `node` (Mermaid).
 - **Files:** it lists and changes files wherever you browse and act, locally and on your machines. Its own data lives in `~/.config/herdr-app/filer-pro.json`, `~/.config/herdr-app/data/filer-pro/` and `~/.config/herdr-app/filer-pro/`.
 - **Automation folder:** the mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). Anything that can write to that folder can drive the mod.
-- **Network:** only SSH to the machines you added to Herdr. Documents never load remote content.
+- **Network:** SSH to the machines you added to Herdr, and at most one request per day to GitHub for the update check (off with `"update_check": false`). Documents never load remote content.
+
+### Updates
+
+The installed version is in `mods/filer-pro/mod.json`. Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the panel header shows `● <version> available`, which opens the release page. Nothing is downloaded or installed; to update, install the new version as described above.
+
+Privacy: the request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address. To turn it off, set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`; then no request is made at all, and a hint already shown disappears within an hour.
 
 ### Removing
 

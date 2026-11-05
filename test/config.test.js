@@ -21,11 +21,17 @@ test("reader that rejects gives the default", async () => {
   assert.equal((await loadConfig(async () => { throw new Error("x"); }, appHome, home)).download_folder, "/home/u/Downloads");
 });
 test("preview, mermaid, perf with defaults and type checks", async () => {
-  assert.deepEqual(await loadConfig(reader(null), appHome, home), { download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false });
+  assert.deepEqual(await loadConfig(reader(null), appHome, home), { download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
 });
 test("a broken file leaves the switches at the default", async () => {
   const c = await loadConfig(reader("{nope"), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [true, true, false]);
+});
+test("update_check is on by default and off only with false", async () => {
+  assert.equal((await loadConfig(reader(null), appHome, home)).update_check, true);
+  assert.equal((await loadConfig(reader("{nope"), appHome, home)).update_check, true);
+  assert.equal((await loadConfig(reader('{"update_check":"no"}'), appHome, home)).update_check, true);
+  assert.equal((await loadConfig(reader('{"update_check":false}'), appHome, home)).update_check, false);
 });
