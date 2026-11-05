@@ -47,7 +47,10 @@ const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true };
 
 // A fake host; `files` by path, shared values in `store`, every call logged.
 function host({ files = {}, store = {}, platform = "macos", props = {} } = {}) {
-  const log = { execs: [], writes: [], shared: [], overlays: [], closed: [], notes: [] };
+  const log = { execs: [], writes: [], shared: [], overlays: [], closed: [], notes: [], fetches: [] };
+  // A panel that init starts as lease holder runs the daily update pass with globalThis.fetch (main.js updatePass).
+  // GitHub answers at once with "no release": a real request would land in the store of a later test (issue #24).
+  globalThis.fetch = async (url) => { log.fetches.push(String(url)); return { status: 404 }; };
   globalThis.__impl = {
     props: () => props, appHome: () => "/app", home: () => "/home/u", window: () => ({ platform }),
     theme: () => new Proxy({}, { get: (_t, k) => String(k) }), settings: () => ({ dark: false, font_family: "mono" }),
