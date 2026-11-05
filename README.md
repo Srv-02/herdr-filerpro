@@ -92,7 +92,7 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 #### Settings dialog
 
-Every setting below can also be changed in **Settings** (the button in the panel header while no file is open, or right click the free area below the tree, `Settings…`). The dialog checks each value and shows what is wrong next to the field; nothing is written until every field is valid. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one).
+Every setting below can also be changed in **Settings** (the button in the panel header while no file is open, or right click the free area below the tree, `Settings…`). The dialog checks each value and shows what is wrong next to the field; nothing is written until every field is valid. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). Turning `update_check` off hides the update hint at once; turning it on again can take up to an hour until the first check, because the update pass runs at most hourly.
 
 A missing key means its default. In the file, a number of the wrong type (or with a fraction) means the default, a whole number out of range the nearest bound.
 
@@ -163,7 +163,7 @@ To remove only the preview, delete `mods/filer-pro/preview/` from the installed 
 
 The installed version is in `mods/filer-pro/mod.json`. Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the panel header shows `● <version> available`, which opens the release page. Nothing is downloaded or installed; to update, install the new version as described above.
 
-Privacy: the request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address. To turn it off, set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`; then no request is made at all, and a hint already shown disappears within an hour.
+Privacy: the request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address. To turn it off, set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`; then no request is made at all, and a hint already shown disappears within a second. If you turn it on again, the first check can take up to an hour.
 
 ### Removing
 

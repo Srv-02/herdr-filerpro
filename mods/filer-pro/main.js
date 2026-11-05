@@ -832,7 +832,8 @@ export default class FilerPro extends View {
     this.pollReload(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
-    const update = updateHint(shared("filer-pro.update"), this.version);
+    // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
+    const update = this.conf.update_check ? updateHint(shared("filer-pro.update"), this.version) : null;
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)

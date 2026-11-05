@@ -113,6 +113,19 @@ test("settings: list limits cut the entries, tree_depth stops the rows, the limi
   assert.ok(texts(self.render(cx)).includes("File list limited to 10 entries per folder and 100 total"));
 });
 
+test("settings: update_check false hides the update hint in the header at the next render", () => {
+  const release = { at: 1, local: "1.0.0", latest: "v9.9.9" };
+  const draw = (cfg) => {
+    host({ files: { "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' }, store: { "filer-pro.update": release } });
+    const self = panel(cfg);
+    Object.assign(self, { reload: { signal: () => false, take: () => false }, saved: new Map(), jobs: {}, perf: null, root: "/data", on: null, file: null, marks: {}, version: "1.0.0" });
+    self.context = { key: JSON.stringify({ cwd: "/data", on: null, space: "s1" }), cwd: "/data", on: null };
+    return texts(self.render(fakeCx().cx));
+  };
+  assert.ok(draw({ update_check: true }).includes("● 9.9.9 available"), "control: the hint shows while the check is on");
+  assert.ok(!draw({ update_check: false }).some((t) => String(t).includes("available")), "no hint once update_check is false");
+});
+
 test("settings: the refresh tick follows refresh_seconds, and a saved dialog reloads the config at once", async () => {
   const h = host({ files: { "/app/filer-pro.json": '{"refresh_seconds": 5}', "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' } });
   const { cx, timers } = fakeCx();
