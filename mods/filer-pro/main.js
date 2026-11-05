@@ -75,6 +75,13 @@ async function directory(path, on, perFolder) {
   return out;
 }
 
+// False once this build of the mod was reloaded or closed. Herdr ends an old build's async loop only at its next cx use
+// (AsyncContext throws then); a loop that only awaits nextCommand() or watchFolder() calls this after every wait, so it
+// stops instead of running on with the old code. cx.phase() is a plain read: no redraw, no side effect.
+function live(cx) {
+  try { cx.phase(); return true; } catch { return false; }
+}
+
 export default class FilerPro extends View {
   init(_props, cx) {
     if (props()?.overlay) {
@@ -103,10 +110,11 @@ export default class FilerPro extends View {
       if (panels !== shared("workspace.panels")) setShared("workspace.panels", panels);
       this.button = true;
       // `<mod>.<command>` reaches only shown copies: when the panel is hidden, this copy answers "reveal".
-      cx.spawn(async () => {
+      cx.spawn(async (cx) => {
         for (;;) {
           let command;
           try { command = await nextCommand(); } catch { await cx.sleep(1000); continue; }
+          if (!live(cx)) return;
           if (command === "reveal" && !panelShown(layout(), "filer-pro")) this.revealLast();
         }
       });
@@ -270,18 +278,22 @@ export default class FilerPro extends View {
       jobs.tick().catch(() => {}).then(() => { busy = false; });
     });
     cx.timer.every(300, () => this.checkAnswer());
-    cx.spawn(async () => {
+    // Both loops check cx after every wait (live): they would outlive a reload of the mod otherwise.
+    cx.spawn(async (cx) => {
       await exec("mkdir", ["-p", dir], { on: null }).catch(() => {});
+      if (!live(cx)) return;
       if (holding) scan().catch(() => {});
       for (;;) {
-        try { await watchFolder(dir); } catch { await nap(); continue; }
+        try { await watchFolder(dir); } catch { await nap(); if (!live(cx)) return; continue; }
+        if (!live(cx)) return;
         if (holding) scan().catch(() => {});
       }
     });
-    cx.spawn(async () => {
+    cx.spawn(async (cx) => {
       for (;;) {
         let command;
-        try { command = await nextCommand(); } catch { await nap(); continue; }
+        try { command = await nextCommand(); } catch { await nap(); if (!live(cx)) return; continue; }
+        if (!live(cx)) return;
         if (command === "scan" && holding) scan().catch(() => {});
         else if (command === "reveal") this.revealLast();
       }
