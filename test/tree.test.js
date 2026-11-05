@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pruneFolder, folderMissing, expandPath } from "../mods/filer-pro/lib/tree.js";
+import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H } from "../mods/filer-pro/lib/tree.js";
 
 test("pruneFolder drops a vanished folder and everything below it, nothing else", () => {
   const folders = new Set(["a", "a/b", "a/b/c", "ab", "d"]);
@@ -35,4 +35,42 @@ test("expandPath: the folder to open after a new folder, relative to the shown r
   assert.equal(expandPath({ machine: null, folder: "/other/a" }, "/r", null), null);
   assert.equal(expandPath(undefined, "/r", null), null);
   assert.equal(expandPath({ machine: null, folder: "/r/a" }, undefined, null), null);
+});
+
+const dir = (name) => ({ name, dir: true }), file = (name) => ({ name, dir: false });
+
+test("visibleRows: tree order, only open folders are descended into", () => {
+  const entries = new Map([["", [dir("a"), dir("b"), file("z.txt")]], ["a", [dir("c"), file("x.png")]], ["a/c", [file("y.md")]], ["b", [file("hidden")]]]);
+  const rows = visibleRows(entries, new Set(["a", "a/c"]));
+  assert.deepEqual(rows.map((r) => [r.path, r.depth]), [["a", 0], ["a/c", 1], ["a/c/y.md", 2], ["a/x.png", 1], ["b", 0], ["z.txt", 0]]);
+  assert.equal(rows[0].entry, entries.get("")[0], "the entry object itself is handed out");
+});
+
+test("visibleRows: an open folder without loaded entries adds no rows", () => {
+  assert.deepEqual(visibleRows(new Map([["", [dir("a")]]]), new Set(["a"])).map((r) => r.path), ["a"]);
+  assert.deepEqual(visibleRows(new Map(), new Set()), []);
+});
+
+test("visibleRows: stops at the total limit", () => {
+  const entries = new Map([["", [dir("a"), file("b"), file("c")]], ["a", [file("1"), file("2")]]]);
+  assert.deepEqual(visibleRows(entries, new Set(["a"]), { limit: 3 }).map((r) => r.path), ["a", "a/1", "a/2"]);
+  assert.equal(visibleRows(entries, new Set(["a"])).length, 5, "default limit 5000");
+});
+
+test("visibleRows: folders deeper than maxDepth are not descended into", () => {
+  const entries = new Map(), folders = new Set();
+  let prefix = "";
+  for (let i = 0; i < 45; i++) {
+    entries.set(prefix, [dir("d")]);
+    prefix = prefix ? `${prefix}/d` : "d";
+    folders.add(prefix);
+  }
+  const rows = visibleRows(entries, folders);
+  assert.equal(rows.length, 41, "depths 0..40 as in rows(): a call deeper than 40 returns at once");
+  assert.equal(rows.at(-1).depth, 40);
+  assert.equal(visibleRows(entries, folders, { maxDepth: 2 }).length, 3);
+});
+
+test("ROW_H is the 28px row height of the tree", () => {
+  assert.equal(ROW_H, 28);
 });
