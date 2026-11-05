@@ -238,6 +238,35 @@ test("the text label of every checkbox toggles it: the clickable element holds t
   assert.equal(self.perms.text, "775");
 });
 
+test("the special bit chips are toggles: click flips the bit, field and notes follow; read only they do nothing", async () => {
+  const { cx, view, self } = await dialog();
+  const chip = byId(view(), "filer-pro-perms-sticky");
+  assert.equal(textIn(chip), "sticky", "the chip shows its name");
+  assert.ok(!chip.calls.some(([k]) => k === "hover"), "no hover change");
+  assert.ok(chip.calls.some(([k, v]) => k === "role" && v === "check_box"));
+  assert.ok(chip.calls.some(([k, v]) => k === "accessibility_label" && v === "sticky, not checked"));
+  assert.equal(click(view(), "filer-pro-perms-sticky", cx), true);
+  assert.equal(self.perms.input.value(), "1644");
+  assert.match(notesText(view), /sets sticky/);
+  const on = byId(view(), "filer-pro-perms-sticky");
+  assert.ok(on.calls.some(([k, v]) => k === "accessibility_label" && v === "sticky, checked"));
+  assert.equal(textIn(on), "sticky", "the label stays visible when set");
+  assert.ok(on.calls.some(([k, v]) => k === "bg" && v === "accent"), "set: accent fill");
+  const ro = await dialog({ probe: nul("f", "0644", "0", "0", "root", "wheel", "501") });
+  assert.equal(click(ro.view(), "filer-pro-perms-setuid", ro.cx), false, "no click handler when read only");
+});
+
+test("Apply to enclosed items: no hover change, and the click target is only the box and its text", async () => {
+  const { view } = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true } });
+  const root = view(), row = byId(root, "filer-pro-perms-recursive");
+  const names = row.calls.map(([k]) => k);
+  assert.ok(!names.includes("hover"), "no hover style");
+  for (const k of ["flex_1", "w_full", "w", "px", "ml"]) assert.ok(!names.includes(k), `no ${k}: the row sizes to its content`);
+  assert.ok(names.includes("flex_none"));
+  const slot = [...walk(root)].find((e) => e.kids?.includes(row));
+  assert.equal(slot.kind, "h_flex", "the footer slot is a row, so the target is not stretched to its width");
+});
+
 // The fixed heights of the dialog's parts (h(...) on the root's children), plus padding and gaps.
 function footprint(root) {
   const h = (el) => el.calls.find(([k]) => k === "h")?.[1];

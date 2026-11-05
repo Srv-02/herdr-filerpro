@@ -2,7 +2,7 @@
 // read only cases, when Apply is possible and the notes shown live under the fields.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPermsState, loaded, failed, toggleBit, setText, setRecursive, canApply, notes, counted, needsCount, readOnlyReason } from "../mods/filer-pro/lib/permsstate.js";
+import { createPermsState, loaded, failed, toggleBit, toggleSpecial, setText, setRecursive, canApply, notes, counted, needsCount, readOnlyReason } from "../mods/filer-pro/lib/permsstate.js";
 
 const probe = (over = {}) => ({ type: "f", mode: 0o644, uid: "501", gid: "20", user: "alice", group: "staff", me: "501", isDir: false, isLink: false, owned: true, ...over });
 const ready = (over = {}, spec = {}) => loaded(createPermsState({ name: "a.txt", isDir: false, ...spec }), probe(over));
@@ -172,4 +172,27 @@ test("notes: blocking messages come first; read only shows only its reason", () 
   assert.deepEqual(notes(e)[0], { level: "error", text: "Permission denied" });
   toggleBit(e, "others", "r");
   assert.equal(e.error, null, "an edit replaces the message of a refused apply");
+});
+
+test("toggleSpecial: a chip flips its bit like the octal field would, with the warning, and is locked when read only", () => {
+  const s = ready();
+  toggleSpecial(s, "setgid");
+  assert.equal(s.mode, 0o2644);
+  assert.equal(s.text, "2644", "four digits once a special bit is set");
+  assert.ok(notes(s).some((n) => /sets setgid/.test(n.text)));
+  toggleSpecial(s, "sticky");
+  assert.equal(s.text, "3644");
+  toggleSpecial(s, "setgid");
+  toggleSpecial(s, "sticky");
+  assert.equal(s.mode, 0o644);
+  assert.equal(s.text, "644", "back to three digits");
+  assert.equal(canApply(s), false, "same mode as before: nothing to apply");
+  setText(s, "7");
+  toggleSpecial(s, "setuid");
+  assert.equal(s.textError, null, "a chip replaces a wrong text, as a checkbox does");
+  assert.equal(s.mode, 0o4644);
+  const r = ready({ uid: "0", owned: false, me: "501" });
+  toggleSpecial(r, "setuid");
+  assert.equal(r.mode, 0o644);
+  assert.throws(() => toggleSpecial(ready(), "nope"), /Unknown special bit/);
 });

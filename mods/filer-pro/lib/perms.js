@@ -48,6 +48,12 @@ function shift(who, what) {
 export const getBit = (mode, who, what) => (mode & shift(who, what)) !== 0;
 export const setBit = (mode, who, what, on) => (on ? mode | shift(who, what) : mode & ~shift(who, what));
 
+// Flips setuid, setgid or sticky (the chips of the dialog).
+export function flipSpecial(mode, name) {
+  if (!(name in SPECIAL)) throw new Error(`Unknown special bit: ${name}`);
+  return mode ^ SPECIAL[name];
+}
+
 export function specialBits(mode) {
   return { setuid: (mode & SPECIAL.setuid) !== 0, setgid: (mode & SPECIAL.setgid) !== 0, sticky: (mode & SPECIAL.sticky) !== 0 };
 }

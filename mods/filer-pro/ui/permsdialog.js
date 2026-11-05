@@ -9,7 +9,7 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { BASE } from "../lib/icons.js";
 import { formatSymbolic, getBit, specialBits } from "../lib/perms.js";
-import { createPermsState, setText, toggleBit, setRecursive, canApply, notes } from "../lib/permsstate.js";
+import { createPermsState, setText, toggleBit, toggleSpecial, setRecursive, canApply, notes } from "../lib/permsstate.js";
 
 const WHO = [["owner", "Owner"], ["group", "Group"], ["others", "Others"]];
 const WHAT = [["r", "Read"], ["w", "Write"], ["x", "Execute"]];
@@ -54,6 +54,12 @@ export function flip(state, who, what, cx) {
   cx.notify();
 }
 
+export function flipChip(state, name, cx) {
+  toggleSpecial(state, name);
+  state.input.set_value(state.text);
+  cx.notify();
+}
+
 export function flipRecursive(state, cx) {
   setRecursive(state, !state.recursive);
   cx.notify();
@@ -70,10 +76,11 @@ function box(t, on, dim) {
     .when(on, (el) => el.child(svg(`${BASE}/check.svg`).size(11).flex_none().text_color(t.accent_foreground)));
 }
 
-// A clickable checkbox target: role, accessible name with its state, hover, and the click (not when locked).
-function toggle(el, t, { id, label, on, dim, onClick }) {
+// A clickable checkbox target: role, accessible name with its state, the click (not when locked) and, unless hover is
+// false, a hover background.
+function toggle(el, t, { id, label, on, dim, onClick, hover = true }) {
   return el.id(id).role("check_box").accessibility_label(`${label}, ${on ? "checked" : "not checked"}`)
-    .when(!dim, (e) => e.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)));
+    .when(!dim, (e) => e.cursor_pointer().when(hover, (h) => h.hover((s) => s.bg(t.hover))).on_click((_e, cx) => onClick(cx)));
 }
 
 function button(t, id, text, primary, enabled, action) {
@@ -109,11 +116,15 @@ function matrix(t, state) {
     .child(head).children(rows);
 }
 
-// Octal field, the ls style text, and the special bits as chips at the right (lit in t.ansi3 when set).
+// Octal field, the ls style text, and the special bits as chips at the right: labeled toggles like the checkboxes, filled
+// in the accent color when set, without a hover change.
 function octalRow(t, state) {
-  const bits = specialBits(state.mode);
-  const chip = (name) => div().id(`filer-pro-perms-${name}`).h(20).px(6).flex().items_center().rounded(5).border_1().text_size(11)
-    .border_color(bits[name] ? t.ansi3 : t.border).text_color(bits[name] ? t.ansi3 : t.dim).child(name);
+  const bits = specialBits(state.mode), dim = locked(state);
+  const chip = (name) => toggle(div().h(20).px(6).flex().items_center().rounded(5).border_1().text_size(11), t,
+    { id: `filer-pro-perms-${name}`, label: name, on: bits[name], dim, onClick: (cx) => flipChip(state, name, cx), hover: false })
+    .border_color(bits[name] ? t.accent : t.border).bg(bits[name] ? t.accent : t.popover)
+    .text_color(bits[name] ? t.accent_foreground : t.dim)
+    .child(name);
   return h_flex().h(LAYOUT.octal).flex_none().gap(8).items_center()
     .child(div().text_size(12.5).text_color(t.muted).child("Octal"))
     .child(Input.new(state.input).w(64).h(28).px(8).rounded(6).border_1()
@@ -148,8 +159,9 @@ export function permsView(t, state, handlers) {
   const dim = locked(state);
   const ok = canApply(state);
   const owner = state.phase === "ready" ? `Owner ${state.owner} · Group ${state.group}` : "";
-  const recursive = toggle(h_flex().h(28).px(6).ml(-6).gap(8).items_center().rounded(6), t,
-    { id: "filer-pro-perms-recursive", label: "Apply to enclosed items", on: state.recursive, dim, onClick: (cx) => handlers.onRecursive(cx) })
+  // Sized to its content (box, gap, text) and without a hover change: only the box and the text are the click target.
+  const recursive = toggle(h_flex().flex_none().h(28).gap(8).items_center(), t,
+    { id: "filer-pro-perms-recursive", label: "Apply to enclosed items", on: state.recursive, dim, onClick: (cx) => handlers.onRecursive(cx), hover: false })
     .child(box(t, state.recursive, dim))
     .child(div().text_size(12.5).text_color(dim ? t.dim : t.foreground).child("Apply to enclosed items"));
   return v_flex().id("filer-pro-permissions").track_focus(state.handle)
@@ -164,7 +176,7 @@ export function permsView(t, state, handlers) {
     .child(octalRow(t, state))
     .child(notesArea(t, state))
     .child(h_flex().h(LAYOUT.footer).flex_none().gap(8).items_center()
-      .child(div().flex_1().min_w(0).child(state.isDir ? recursive : div()))
+      .child(h_flex().flex_1().min_w(0).items_center().child(state.isDir ? recursive : div()))
       .child(button(t, "filer-pro-perms-cancel", state.phase === "error" ? "Close" : "Cancel", false, true, handlers.onCancel))
       .child(button(t, "filer-pro-perms-apply", "Apply", true, ok, handlers.onApply)));
 }

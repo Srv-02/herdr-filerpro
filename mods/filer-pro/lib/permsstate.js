@@ -3,7 +3,7 @@
 // the fields.
 // The checkboxes and the octal text always describe the same mode; a text that is not valid octal keeps the last good
 // mode and blocks Apply until it is fixed or a checkbox replaces it.
-import { parseOctal, formatOctal, formatChange, getBit, setBit, modeWarnings, insideText } from "./perms.js";
+import { parseOctal, formatOctal, formatChange, getBit, setBit, flipSpecial, modeWarnings, insideText } from "./perms.js";
 
 export const NOT_OWNER = "Not the owner, permissions cannot be changed";
 export const LINK_NOTE = "This is a symbolic link. The permissions of its target are shown; links are never changed.";
@@ -39,6 +39,17 @@ export function toggleBit(state, who, what) {
   state.text = formatOctal(state.mode);
   state.textError = null;
   state.error = null; // an edit replaces the message of a refused apply
+  return state;
+}
+
+// A special bit chip: the same as typing the four digit mode into the field.
+export function toggleSpecial(state, name) {
+  const mode = flipSpecial(state.mode, name);
+  if (!editable(state)) return state;
+  state.mode = mode;
+  state.text = formatOctal(state.mode);
+  state.textError = null;
+  state.error = null;
   return state;
 }
 
