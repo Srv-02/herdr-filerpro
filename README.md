@@ -26,7 +26,7 @@ Then click `Filer Pro` in the tab bar. To install by hand, see [Manual install](
 
 ![File tree with git marks and the context menu open](screenshots/browse.png)
 
-The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, edit, download, copy, paste, rename and delete. Apps and other macOS packages show as files: a double click starts them, and Show Package Contents looks inside. System files like `.DS_Store` stay out of the way, and hidden files can go too.
+The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, edit, download, copy, paste, rename, permissions and delete. Apps and other macOS packages show as files: a double click starts them, and Show Package Contents looks inside. System files like `.DS_Store` stay out of the way, and hidden files can go too.
 
 ### Transfers you can trust
 
@@ -61,6 +61,17 @@ Saving checks first that the file is still exactly what was opened; if anything 
 ![Edit in Terminal picked in the context menu, and the file open in vi in a split](screenshots/edit-terminal.png)
 
 Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, nano or helix in a split next to your terminal. It works for files on your SSH machines too, and you can add your own editors.
+
+### Permissions
+
+**Permissions…** in the row menu (files and folders, on this computer and on a machine; dimmed on Windows) shows the mode as an Owner / Group / Others by Read / Write / Execute matrix and as an octal field (3 or 4 digits, `644` or `2755`), kept in sync both ways. Owner and group are shown, never changed (no `chown`, no `chgrp`). setuid, setgid and sticky are chips next to the octal field: click one to set or clear the bit (the same as typing the 4 digit mode), with a warning.
+
+- **Warnings while you edit:** there is no second confirmation step. Under the fields the dialog shows, and updates as you click or type, everything worth knowing before you apply: a world writable result, removing your own read or write permission (for a folder also execute), a change of a special bit, and for **Apply to enclosed items** what happens to the files and folders inside plus the number of entries inside the folder (counted up to 10,000, then "more than 10,000"; "many items" if counting fails). **Apply** runs `chmod` at once and closes the dialog.
+- **Only your own entries:** the dialog is read only, with the note "Not the owner, permissions cannot be changed", unless you own the entry or are root. No `sudo`, no password prompt. Anything else the system refuses (a locked file, a protected volume) is shown as its message when you apply.
+- **Symbolic links:** a link is never changed, not itself and not through the link. The dialog shows the permissions of the link's target, read only, with a note. A path that turns into a link between opening the dialog and applying is refused too.
+- **Apply to enclosed items:** for a folder, `chmod` runs on the folder and everything inside it with exactly the same mode, like `chmod -R 644` would (so a folder mode without execute makes the folders inside unenterable, and an execute bit makes files executable; the dialog says so). Links inside are skipped and never followed. Protected paths (the root, your home folder, the shown folder, top level and system folders) are refused, as for Delete. macOS packages count as folders.
+- **After the change** the mode is read back. Which special bits a system keeps differs by OS and file system (Linux drops setgid on a file when you are not in its group; macOS on APFS keeps the sticky bit on a file set by its owner), so the dialog never assumes: if the system set something else than asked, a warning notice shows both modes.
+- **Safety:** paths and modes are passed to `sh` as arguments, never put into a command string; the mode is always sent with five digits so GNU `chmod` also clears special bits of a folder.
 
 ### Settings and updates
 
@@ -180,7 +191,7 @@ Remote files: **Edit in Terminal** starts the editor in a split of the focused t
 
 ### What it runs and touches
 
-- **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), for editing `stat`, `head`, `base64`, `tr`, `find`, `mktemp`, `cat` and `sha256sum` (or `shasum`, or `openssl`), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
+- **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `stat` and `find` (permissions and editing), `chmod` and `id` (permissions), `git status` (read only), for editing `head`, `base64`, `tr`, `mktemp`, `cat` and `sha256sum` (or `shasum`, or `openssl`), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
 - **Files:** it lists and changes files wherever you browse and act, locally and on your machines. Its own data lives in `~/.config/herdr-app/filer-pro.json`, `~/.config/herdr-app/data/filer-pro/` and `~/.config/herdr-app/filer-pro/`. Editing adds a private folder `~/.cache/filer-pro/edit/` on the machine of the file (upload and backup while a save runs, normally empty afterwards), and unsaved text is kept in the private folder `~/.config/herdr-app/filer-pro/unsaved/` (0700) until it is saved or discarded.
 - **Automation folder:** the mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). Anything that can write to that folder can drive the mod.
 - **Network:** SSH to the machines you added to Herdr, and at most one request per day to GitHub for the update check (off with `"update_check": false`), plus one for each click on **Check now** in Settings. Documents never load remote content; this holds for SVG images only while `svg_check` is on (whether Herdr's image renderer fetches external references of an unchecked SVG is not verified).

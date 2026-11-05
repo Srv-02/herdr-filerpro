@@ -31,6 +31,9 @@ import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "
 import { PROBE_SCRIPT, parseProbe, probeFile, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
+import { createPermsDialog, permsView, showProbe, PERMS_SIZE } from "./ui/permsdialog.js";
+import { loaded, failed, canApply, setRecursive, counted, needsCount } from "./lib/permsstate.js";
+import { formatChange, mismatchText } from "./lib/perms.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
 import { transfersBar } from "./ui/bar.js";
 import { menuView } from "./ui/menu.js";
@@ -96,6 +99,11 @@ export default class FilerPro extends View {
         this.fileOps = createFileOps({ exec });
         const spec = props().view === "rename" ? renameSpec({ name: baseName(props().path), isDir: props().isDir === true }) : newFolderSpec();
         this.dialog = createNameDialog(spec, { onSubmit: (name, cx) => this.submitName(name, cx) }, cx);
+      }
+      if (props().view === "permissions") {
+        this.fileOps = createFileOps({ exec });
+        this.perms = createPermsDialog({ name: baseName(props().path), isDir: props().isDir === true }, cx);
+        this.loadPermissions(cx);
       }
       if (props().view === "settings") {
         // Every InputState of the dialog is created here, from the snapshot the opener stored (openSettings).
@@ -396,7 +404,7 @@ export default class FilerPro extends View {
         close();
       };
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
-      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine), bundle: p.bundle === true, contents: p.contents === true };
+      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine), windows: window()?.platform === "windows", bundle: p.bundle === true, contents: p.contents === true };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
       // remote the file is downloaded first (download_folder, conflict dialog) and opened by afterDownload.
@@ -437,6 +445,7 @@ export default class FilerPro extends View {
         new_folder: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "mkdir", machine: p.machine, path: p.folder }, kind: "dialog", modal: true, width: 440, height: 220 }); },
         // isDir only picks the selection: a package's name is selected without its extension, as for a file.
         rename: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "rename", machine: p.machine, path: p.path, root: p.root, isDir: p.isDir === true && p.bundle !== true }, kind: "dialog", modal: true, width: 440, height: 220 }); },
+        permissions: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "permissions", machine: p.machine, path: p.path, root: p.root, isDir: p.isDir === true }, kind: "dialog", modal: true, ...PERMS_SIZE }); },
         delete: () => act({ action: "delete", path: p.path, root: p.root }),
         // The popup closes once the dialog is open (the snapshot is read first, as editor() does).
         settings: () => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })).finally(close); },
@@ -455,6 +464,13 @@ export default class FilerPro extends View {
       }, shared("filer-pro.update"));
     }
     if (p.view === "rename" || p.view === "mkdir") return nameView(t, this.dialog, { onCancel: close, onSubmit: (name, cx) => this.submitName(name, cx) });
+    if (p.view === "permissions" && this.perms) {
+      return permsView(t, this.perms, {
+        onCancel: close,
+        onApply: (cx) => this.applyPermissions(cx),
+        onRecursive: (cx) => this.toggleRecursive(cx),
+      });
+    }
     if (p.view === "file") return this.fileOverlay(t, cx);
     const pending = shared("filer-pro.pending");
     if (p.view !== "conflict" || !pending) return div();
@@ -513,6 +529,54 @@ export default class FilerPro extends View {
     setShared("filer-pro.changed", { at: Date.now(), ...(mkdir ? { expand: { machine: p.machine ?? null, folder: p.path } } : {}) });
     const toast = successToast({ action: mkdir ? "mkdir" : "rename", path: p.path }, out);
     if (toast) notify(toast);
+    try { closeOverlay(p.overlay); } catch {}
+  }
+
+  // Permissions dialog: read the mode and owner of the entry (behind a link: of its target).
+  loadPermissions(cx) {
+    const p = props(), s = this.perms;
+    cx.spawn(async (cx) => {
+      let out;
+      try { out = await this.fileOps.permissions({ on: p.machine ?? null, path: p.path }); }
+      catch (e) { out = { ok: false, error: String(e?.message ?? e) }; }
+      if (!out.ok) failed(s, out.error);
+      else { loaded(s, out); showProbe(s, s); }
+      cx.notify();
+    });
+  }
+
+  // "Apply to enclosed items": the first tick counts the entries inside (bounded, may stay unknown) for the notes; Apply
+  // does not wait for it.
+  toggleRecursive(cx) {
+    const p = props(), s = this.perms;
+    setRecursive(s, !s.recursive);
+    if (needsCount(s)) {
+      s.counting = true;
+      cx.spawn(async (cx) => {
+        let n = null;
+        try { n = await this.fileOps.permissionsCount({ on: p.machine ?? null, path: p.path }); } catch {}
+        counted(s, n);
+        cx.notify();
+      });
+    }
+    cx.notify();
+  }
+
+  // Apply: writes at once (the warnings were shown live). A refusal stays in the dialog; a result that differs from the
+  // request (the system dropped or kept a bit) is reported as a warning after the row reloaded.
+  async applyPermissions(cx) {
+    const p = props(), s = this.perms;
+    if (!canApply(s)) return;
+    s.busy = true; s.error = null; cx?.notify();
+    let out;
+    try { out = await this.fileOps.chmod({ on: p.machine ?? null, path: p.path, root: p.root, mode: s.mode, recursive: s.recursive }); }
+    catch (e) { out = { ok: false, error: String(e?.message ?? e) }; }
+    s.busy = false;
+    if (!out.ok) { s.error = out.error; cx?.notify(); return; }
+    setShared("filer-pro.changed", { at: Date.now() });
+    const name = baseName(p.path);
+    if (out.mismatch) notify({ title: "Permissions differ from the request", body: mismatchText(name, out.requested, out.mode), level: "warning" });
+    else notify({ title: "Permissions changed", body: `${name}: ${formatChange(s.original, s.mode)}${s.recursive ? " (with everything inside)" : ""}`, level: "success" });
     try { closeOverlay(p.overlay); } catch {}
   }
 
