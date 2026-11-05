@@ -1,5 +1,6 @@
 // Bookkeeping of the file tree. Pure.
 import { psQuoted } from "./names.js";
+import { group } from "./numbers.js";
 import { SYSTEM_CASE, psHideFilter } from "./hidden.js";
 
 // `files <dir> <limit> [<system> <dots>]`: NUL-separated kind (d/f) and name of each entry but .git, at most <limit> + 1
@@ -15,7 +16,7 @@ export function psListCommand(path, limit, hide) {
   return "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git'" + psHideFilter(hide) + " | Select-Object -First " + (Math.trunc(limit) + 1) + " | ForEach-Object { @{ name=$_.Name; dir=($_.PSIsContainer -and (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($_.Target -and [IO.Directory]::Exists(([IO.Path]::Combine([IO.Path]::GetDirectoryName($_.FullName), $_.Target[0])))))) } }) | ConvertTo-Json -Compress } '" + psQuoted(path) + "'";
 }
 
-export const limitText = (perFolder, total) => `File list limited to ${perFolder.toLocaleString("en-US")} entries per folder and ${total.toLocaleString("en-US")} total`;
+export const limitText = (perFolder, total) => `File list limited to ${group(perFolder)} entries per folder and ${group(total)} total`;
 
 // A folder that was open is gone (renamed or deleted): it and everything below it leave the open
 // folders and the loaded entries, without an error message.
@@ -46,7 +47,8 @@ export const ROW_H = 28, TREE_PAD = 6;
 
 // The rows of the tree in display order: the entries of "" and, depth first, of every open folder.
 // Stops at `limit` rows; a folder deeper than `maxDepth` is not descended into (rows up to depth maxDepth show).
-export function visibleRows(entries, folders, { limit = 5000, maxDepth = 40 } = {}) {
+// isDir(entry, path): does the row act as a folder (a macOS package only while its contents are shown, lib/bundles.js).
+export function visibleRows(entries, folders, { limit = 5000, maxDepth = 40, isDir = (entry) => entry.dir } = {}) {
   const out = [];
   const walk = (prefix, depth) => {
     if (out.length >= limit || depth > maxDepth) return;
@@ -54,7 +56,7 @@ export function visibleRows(entries, folders, { limit = 5000, maxDepth = 40 } = 
       if (out.length >= limit) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       out.push({ path, entry, depth });
-      if (entry.dir && folders.has(path)) walk(path, depth + 1);
+      if (isDir(entry, path) && folders.has(path)) walk(path, depth + 1);
     }
   };
   walk("", 0);

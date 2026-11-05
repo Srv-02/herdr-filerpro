@@ -50,6 +50,8 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 ![Context menu with Open in Editor and Edit in Terminal](screenshots/editors.png)
 
+![Edit in Terminal picked in the context menu, and the file open in vi in a split](screenshots/edit-terminal.png)
+
 Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, nano or helix in a split next to your terminal. It works for files on your SSH machines too, and you can add your own editors.
 
 ### Settings and updates
@@ -104,7 +106,7 @@ The gear in the panel header opens every setting, and changes apply without a re
 
 #### Settings dialog
 
-Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **File list** (hide system files and hidden files), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
+Most settings below can also be changed in **Settings**: the gear in the panel header while no file is open, or right click the free area below the tree, `Settings…`. The dialog shows, in this order: **Updates** (the installed version, **Check now**, and the switch for the automatic check), **Downloads** (the folder, with **Choose…** for the system folder picker), **Editors** (pick the GUI and the terminal editor; own editors are added in the config file, see [Editors](#editors), and appear here after reopening Settings), **File list** (hide system files and hidden files, open files and apps with a double click), **Preview**, **Security** (the SVG check, see below) and **Advanced**, closed at first, with every limit, timeout and connection setting. `perf` and the own editor lists (`terminal_editors`, `gui_editors`) are config file only.
 
 Each field is checked when you leave it and again on Save; nothing is written until every field is valid, and a wrong field in Advanced opens it. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one). What turning `update_check` off or on again does is described in [Updates](#updates).
 
@@ -120,6 +122,8 @@ A missing key means its default. In the file, a number of the wrong type (or wit
 | `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | see [Editors](#editors) | | Edit in Terminal, Open in Editor (the lists are config file only) |
 | `hide_system_files` | `true` | `true` / `false` | Hide OS clutter: `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`, `.apdisk`, `Icon\r`, `Thumbs.db`, `desktop.ini` (the last two in any case). Hidden entries do not count against the list limits; copy, move and delete of a folder still include them |
 | `hide_dotfiles` | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot; while on, system files are hidden too, whatever `hide_system_files` says |
+| `double_click_files` | `false` | `true` / `false` | Open a file with a double click; a single click then only marks it. Folders always open with a single click |
+| `double_click_apps` | `true` | `true` / `false` | Start a local macOS package (`.app`, `.pkg`, `.rtfd`) with a double click; a single click then only marks it. Off: a single click starts it |
 | `list_per_folder` | `500` | 10–10,000 | Entries shown per folder |
 | `list_total` | `5000` | 100–20,000 | Entries shown in the whole tree |
 | `tree_depth` | `40` | 1–200 | Deepest folder level shown |
@@ -166,8 +170,6 @@ Commands and templates are split into words first (spaces separate, `'…'` and 
 
 Remote files: **Edit in Terminal** starts the editor in a split of the focused terminal (or a new tab of the active space) when the active space is on the file's machine; otherwise a notice asks you to switch to a space on that machine. **Open in Editor** uses the editor's own remote mode: VS Code and Cursor open `vscode-remote://ssh-remote+<target>/<path>` (needs the Remote - SSH extension), Zed opens `ssh://<target>/<path>` (Zed remote development). The editor connects by itself, so the SSH target must work from your editor too; ports belong in `~/.ssh/config` as a host alias.
 
-To remove only the preview, delete `mods/filer-pro/preview/` from the installed mod. Files then open as source. The caches `data/filer-pro/diagrams/`, `data/filer-pro/images/` and `data/filer-pro/loads/` under `~/.config/herdr-app/` can go too.
-
 ### What it runs and touches
 
 - **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
@@ -187,6 +189,8 @@ Privacy: the request goes to GitHub without any account or token and sends no da
 2. Remove the two blocks from your layout.
 3. Delete `~/.config/herdr-app/mods/filer-pro` and `~/.config/herdr-app/data/filer-pro`, optionally also `~/.config/herdr-app/filer-pro.json` and `~/.config/herdr-app/filer-pro/`.
 
+To remove only the preview, delete `mods/filer-pro/preview/` from the installed mod. Files then open as source. The caches `data/filer-pro/diagrams/`, `data/filer-pro/images/` and `data/filer-pro/loads/` under `~/.config/herdr-app/` can go too.
+
 ### Development
 
 ```sh
@@ -194,7 +198,7 @@ npm test        # unit and integration tests (Node, no Herdr needed)
 npm run lint    # syntax check of all scripts
 ```
 
-Local side is macOS, remote side Linux or macOS. Platform specific code lives in `mods/filer-pro/lib/platform.js` and `mods/filer-pro/bin/transfer.sh`. [RECIPE.md](RECIPE.md) describes the mod as a brief to build it from scratch.
+Local side is macOS, remote side Linux or macOS. Platform specific code lives in `mods/filer-pro/lib/platform.js` and `mods/filer-pro/bin/transfer.sh`. [RECIPE.md](RECIPE.md) describes the mod as a brief to build it from scratch. [scripts/screenshots](scripts/screenshots/README.md) holds the pipeline and demo project behind the README images.
 
 ## Credits
 

@@ -271,7 +271,10 @@ function body(t, state, handlers, stored) {
     heading(t, "File list"),
     // Hide hidden files includes the system files (lib/hidden.js effectiveHide): shown on and locked, the stored value kept.
     switchRow(t, state, "hide_system_files", state.flags.hide_dotfiles === true ? { forced: true } : {}),
-    switchRow(t, state, "hide_dotfiles", { last: true }),
+    switchRow(t, state, "hide_dotfiles"),
+    // Two switches on their own (issue #21): files, and local macOS packages (lib/clicks.js).
+    switchRow(t, state, "double_click_files"),
+    switchRow(t, state, "double_click_apps", { last: true }),
 
     heading(t, "Preview"),
     switchRow(t, state, "preview"),

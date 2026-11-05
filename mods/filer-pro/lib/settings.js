@@ -3,12 +3,13 @@
 // with it, and saveSettings writes the changed keys back without touching anything else in the file. Not listed:
 // the editor lists (config file only) and perf (a developer switch, config file only); lib/config.js reads both.
 import { splitCommand } from "./editors.js";
+import { group } from "./numbers.js";
 
 const int = (key, def, min, max, label, help, section, unit) => ({ key, kind: "int", default: def, min, max, label, help, section, unit });
 const bool = (key, def, label, help, section) => ({ key, kind: "bool", default: def, label, help, section });
 
-// 10000 -> "10,000", without Intl (the host's engine need not have it).
-export const group = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+// ui/settings.js takes group from here, with the rest of the dialog's helpers.
+export { group };
 
 // The Advanced part of the dialog, in this order.
 export const ADVANCED = Object.freeze(["File list limits", "Preview limits", "Transfers & connections"]);
@@ -28,9 +29,9 @@ export const NUMBERS = Object.freeze([
   int("image_cache_mb", 50, 10, 5000, "Disk space for the image cache", "Images and PDF pages are kept here so they open faster next time.", "Preview limits", "MB"),
   int("max_diagrams", 20, 1, 100, "Diagrams per file", "Diagrams after this number stay as code.", "Preview limits", "diagrams"),
   int("max_diagram_chars", 20000, 1000, 200000, "Largest diagram", "Bigger diagrams stay as code.", "Preview limits", "characters"),
-  int("ssh_connect_timeout", 15, 1, 300, "Give up connecting after", "How long to wait for an SSH machine to answer.", "Transfers & connections", "seconds"),
-  int("ssh_alive_interval", 15, 1, 300, "Check the connection every", "Keeps long transfers from being dropped by routers.", "Transfers & connections", "seconds"),
-  int("ssh_alive_count", 4, 1, 100, "Drop the connection after", "Missed checks in a row before a transfer counts as disconnected.", "Transfers & connections", "missed checks"),
+  int("ssh_connect_timeout", 15, 1, 300, "Give up connecting after", "How long to wait for an SSH machine to answer, for transfers and previews.", "Transfers & connections", "seconds"),
+  int("ssh_alive_interval", 15, 1, 300, "Check the connection every", "Keeps long transfers and preview downloads from being dropped by routers.", "Transfers & connections", "seconds"),
+  int("ssh_alive_count", 4, 1, 100, "Drop the connection after", "Missed checks in a row before a transfer or preview download counts as disconnected.", "Transfers & connections", "missed checks"),
   int("stall_seconds", 120, 10, 3600, "Stop a stuck transfer after", "A transfer that makes no progress this long is stopped.", "Transfers & connections", "seconds"),
   int("keep_done_seconds", 10, 0, 3600, "Keep finished transfers visible for", "Set to 0 to hide them right away.", "Transfers & connections", "seconds"),
 ].map((s) => Object.freeze(s)));
@@ -40,6 +41,8 @@ export const SETTINGS = Object.freeze([
   Object.freeze({ key: "download_folder", kind: "text", default: "~/Downloads", label: "Download folder", help: "Where Download and Download to… put files.", section: "Downloads" }),
   bool("hide_system_files", true, "Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them.", "File list"),
   bool("hide_dotfiles", false, "Hide hidden files", "Hides every file and folder whose name starts with a dot, such as .env or .gitignore.", "File list"),
+  bool("double_click_files", false, "Open files with a double click", "A single click only marks a file. Folders still open with a single click.", "File list"),
+  bool("double_click_apps", true, "Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident.", "File list"),
   bool("preview", true, "Show previews", "Markdown, HTML, images and PDFs open formatted. Turn off to always see the raw text.", "Preview"),
   bool("mermaid", true, "Draw diagrams", "Turns Mermaid code in Markdown files into diagrams. Needs Node.js.", "Preview"),
   bool("svg_check", true, "Check SVG images before showing them", "Recommended. Blocks SVG files that try to load content from the internet.", "Security"),

@@ -3,6 +3,7 @@
 // Steers the diagrams of one preview: cache lookup, limits, order, and the Node child process that
 // draws them. Pure: the Herdr functions come in as dependencies, so it runs under Node tests.
 import { BASE } from "../lib/icons.js";
+import { group } from "../lib/numbers.js";
 import { hash, colorsFor, FONT, RENDER_VERSION, MAX_DIAGRAMS, MAX_DIAGRAM_CHARS } from "./mermaid.js";
 
 const DATA = "data/filer-pro";
@@ -91,7 +92,7 @@ export function createDiagrams({ exec, readTextFile, writeFile, mkdir, unlink, a
     const todo = [];
     for (const p of parts) {
       if (p.kind !== "mermaid") continue;
-      if (p.text.length > maxChars) p.diagram = { error: `Diagram too large (limit ${maxChars.toLocaleString("en-US")} characters)` };
+      if (p.text.length > maxChars) p.diagram = { error: `Diagram too large (limit ${group(maxChars)} characters)` };
       else if (++started > maxDiagrams) p.diagram = { error: `Too many diagrams (limit ${maxDiagrams})` };
       else { p.diagram = { loading: true }; todo.push(p); }
     }

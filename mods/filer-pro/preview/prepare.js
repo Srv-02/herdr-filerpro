@@ -5,13 +5,14 @@
 // and runs on the thread that draws and handles input, so the mod sleeps between steps (prepareAsync) and shows the
 // source meanwhile. prepare() runs all steps at once (tests, tools).
 import { markdownSteps, htmlSteps } from "./strip.js";
+import { group } from "../lib/numbers.js";
 import { splitMermaidSteps, MAX_DIAGRAMS, MAX_DIAGRAM_CHARS } from "./mermaid.js";
 
 export const PREVIEW_MAX_CHARS = 200000;
 export { MAX_DIAGRAMS, MAX_DIAGRAM_CHARS };
 
 // The note under a shortened preview, with the limit the document was prepared with (setting preview_max_chars).
-export const noteText = (limit) => `Preview is shortened (first ${limit.toLocaleString("en-US")} characters, long lines cut) · open Source for the whole file`;
+export const noteText = (limit) => `Preview is shortened (first ${group(limit)} characters, long lines cut) · open Source for the whole file`;
 
 // Links in a document are written by whoever wrote the document: only web links go to the system opener.
 // A local path, file:, javascript: or a custom scheme could start a program.

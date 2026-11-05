@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { group as groupFromNumbers } from "../mods/filer-pro/lib/numbers.js";
 import { SETTINGS, NUMBERS, numbers, validateField, terminalProblem, guiProblem, saveSettings, changedEdits, group, ADVANCED } from "../mods/filer-pro/lib/settings.js";
 import { PREVIEW_MAX_CHARS, MAX_DIAGRAMS, MAX_DIAGRAM_CHARS } from "../mods/filer-pro/preview/prepare.js";
 import { MAX_IMAGE, CACHE_LIMIT } from "../mods/filer-pro/preview/images.js";
@@ -42,7 +43,7 @@ test("settings: a wrong type or a fraction falls back to the default, an integer
 test("settings: every dialog key is listed once with a section, a label and a help line; perf and the editor lists are not", () => {
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
-  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "hide_system_files", "hide_dotfiles", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
+  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "hide_system_files", "hide_dotfiles", "double_click_files", "double_click_apps", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
   for (const k of ["perf", "terminal_editors", "gui_editors"]) assert.ok(!keys.includes(k), k);
   const sections = ["Updates", "Downloads", "File list", "Preview", "Security", ...ADVANCED];
   for (const s of SETTINGS) assert.ok(s.label && s.help && sections.includes(s.section), s.key);
@@ -71,8 +72,20 @@ test("settings: the two hide switches of issue #17, in the visible File list gro
   assert.equal(by.list_per_folder.section, "File list limits");
 });
 
-test("group: thousands with commas, without Intl", () => {
-  assert.deepEqual([0, 10, 999, 1000, 10000, 2000000].map(group), ["0", "10", "999", "1,000", "10,000", "2,000,000"]);
+test("settings: the two double click switches of issue #21, in the visible File list group, not in Advanced", () => {
+  const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+  assert.deepEqual([by.double_click_files.kind, by.double_click_files.default, by.double_click_files.section], ["bool", false, "File list"]);
+  assert.deepEqual([by.double_click_apps.kind, by.double_click_apps.default, by.double_click_apps.section], ["bool", true, "File list"]);
+  assert.equal(by.double_click_files.label, "Open files with a double click");
+  assert.equal(by.double_click_files.help, "A single click only marks a file. Folders still open with a single click.");
+  assert.equal(by.double_click_apps.label, "Open apps with a double click");
+  assert.equal(by.double_click_apps.help, "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident.");
+  assert.ok(!ADVANCED.includes("File list"), "one File list heading in the dialog; the Advanced numbers are File list limits");
+  assert.equal(by.list_per_folder.section, "File list limits");
+});
+
+test("group is the one from lib/numbers.js (settings re-exports it for the dialog)", () => {
+  assert.equal(group, groupFromNumbers);
 });
 
 test("validateField: numbers must be whole and in range", () => {

@@ -13,7 +13,9 @@ import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
 import { platform } from "./lib/platform.js";
-import { openRegularFile, openChecked } from "./lib/open.js";
+import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
+import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
+import { fileClick } from "./lib/clicks.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
@@ -25,7 +27,7 @@ import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, L
 import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate } from "./lib/reload.js";
-import { baseName, joinPath, relativePath, shellPath } from "./lib/names.js";
+import { baseName, joinPath, parentOf, relativePath, shellPath } from "./lib/names.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
@@ -56,7 +58,7 @@ function location() {
 }
 const key = () => JSON.stringify(location());
 // The settings before the config file was read (and in copies that never read it): today's defaults.
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true };
 const MB = 1024 * 1024;
 // Title of the error toast per failed request action.
 const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Copy failed", paste: "Paste failed", rename: "Rename failed", mkdir: "New folder failed", delete: "Delete failed", clip: "Copy failed" };
@@ -74,7 +76,7 @@ async function directory(path, on, perFolder, hide) {
   if (r.code !== 0) throw Object.assign(new Error(r.stderr || "Cannot list this folder"), { missing: folderMissing(r) });
   const fields = r.stdout.split("\0"), out = [];
   for (let i = 0; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
-  return out;
+  return markBundles(out, { on, platform: window()?.platform }); // macOS packages (lib/bundles.js), local only
 }
 
 // False once this build of the mod was reloaded or closed. Herdr ends an old build's async loop only at its next cx use
@@ -132,6 +134,7 @@ export default class FilerPro extends View {
     this.reload = createReloadGate({ now: Date.now, at: shared("filer-pro.changed")?.at ?? null });
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null; this.perf = null; this.diagrams = null;
     this.configSeen = shared("filer-pro.config")?.at ?? null;
+    this.packageSeen = shared("filer-pro.package")?.id ?? null; // an old Show Package Contents request is not applied again
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
       // The first listing ran with the defaults: other list settings reload the tree at the next tick.
@@ -391,11 +394,13 @@ export default class FilerPro extends View {
         close();
       };
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
-      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine) };
+      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine), bundle: p.bundle === true, contents: p.contents === true };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
       // remote the file is downloaded first (download_folder, conflict dialog) and opened by afterDownload.
       const openWith = (app) => {
+        // A local macOS package (lib/bundles.js) opens like a double click in the Finder; Open in Preview is dimmed for it.
+        if (!p.machine && p.bundle === true && app === "default") { openBundle(p.path, { exec, notify, platform }).finally(close); return; }
         if (!p.machine) { openChecked(p.path, { app }, { exec, notify, platform }).finally(close); return; }
         this.request({ machine: p.machine, path: p.path, reveal: app === "preview" ? "preview" : "open" });
         close();
@@ -418,6 +423,8 @@ export default class FilerPro extends View {
           const [cmd, args] = platform.revealArgs(p.path);
           Promise.resolve(exec(cmd, args)).catch(() => {}).finally(close);
         },
+        // The panel that shows the package expands or collapses it (pollPackage).
+        package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
         copy: () => act({ action: "clip", path: p.path, is_dir: p.isDir === true }),
@@ -426,7 +433,8 @@ export default class FilerPro extends View {
         copy_path: (cx) => toClipboard(shellPath(p.path), cx),
         copy_relative_path: (cx) => toClipboard(shellPath(relativePath(p.root, p.path)), cx),
         new_folder: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "mkdir", machine: p.machine, path: p.folder }, kind: "dialog", modal: true, width: 440, height: 220 }); },
-        rename: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "rename", machine: p.machine, path: p.path, root: p.root, isDir: p.isDir === true }, kind: "dialog", modal: true, width: 440, height: 220 }); },
+        // isDir only picks the selection: a package's name is selected without its extension, as for a file.
+        rename: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "rename", machine: p.machine, path: p.path, root: p.root, isDir: p.isDir === true && p.bundle !== true }, kind: "dialog", modal: true, width: 440, height: 220 }); },
         delete: () => act({ action: "delete", path: p.path, root: p.root }),
         // The popup closes once the dialog is open (the snapshot is read first, as editor() does).
         settings: () => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })).finally(close); },
@@ -542,16 +550,16 @@ export default class FilerPro extends View {
     if (!this.current(context) || (path && !this.folders.has(path))) return;
     const { list_per_folder: perFolder, list_total: total } = this.conf;
     const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
-    this.entries.set(path, entries.slice(0, Math.max(0, Math.min(perFolder, total - used))).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)));
+    this.entries.set(path, entries.slice(0, Math.max(0, Math.min(perFolder, total - used))).sort((a, b) => Number(sortsAsFolder(b)) - Number(sortsAsFolder(a)) || a.name.localeCompare(b.name)));
     if (entries.length > perFolder || used + entries.length > total) this.limited = true;
   }
 
   refresh(cx) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
-      if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file, lastOpened: this.lastOpened });
+      if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened });
       const saved = this.saved.get(next);
-      this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
+      this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
       this.loading = false; this.lastOpened = saved?.lastOpened ?? null;
       if (saved?.file) this.show(saved.file, cx);
@@ -591,6 +599,8 @@ export default class FilerPro extends View {
         this.folders.delete(folder);
         this.entries.delete(folder);
       }
+      // A collapsed package is a file row again (lib/bundles.js), and so is every package shown below it.
+      for (const p of [...(this.packages ?? [])]) if (p === path || p.startsWith(path + "/")) this.packages.delete(p);
     } else {
       this.folders.add(path);
       if (!this.entries.has(path) && !this.pending.has(path)) {
@@ -604,6 +614,34 @@ export default class FilerPro extends View {
       }
     }
     cx.notify();
+  }
+
+  // Show Package Contents (show true) expands a macOS package like a folder; Hide (false) collapses it, and it is a
+  // file row again. path: relative to the root.
+  showPackage(path, show, cx) {
+    this.packages ??= new Set();
+    if (show) {
+      this.packages.add(path);
+      if (!this.folders.has(path)) this.toggle(path, cx);
+    } else if (this.folders.has(path)) this.toggle(path, cx);
+    else this.packages.delete(path);
+  }
+
+  // The menu copy asks through shared("filer-pro.package") = { id, machine, path, show }: this copy applies it once,
+  // when it shows that machine and a folder above the path. Called from render, where cx.notify() throws (and the
+  // host shows that as an error toast): showPackage runs in a task, whose cx may redraw.
+  pollPackage(cx) {
+    const r = shared("filer-pro.package");
+    if (!r?.id || r.id === this.packageSeen) return;
+    this.packageSeen = r.id;
+    const rel = expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on);
+    if (rel) cx.spawn(async (cx) => this.showPackage(rel, r.show === true, cx));
+  }
+
+  // The loaded entry of a path relative to the root, or undefined.
+  entryAt(path) {
+    const name = baseName(path);
+    return this.entries?.get(parentOf(path) ?? "")?.find((e) => e.name === name);
   }
 
   // Request actions open and mode (askPanel in lib/requests.js): this copy answers when it shows the machine
@@ -636,6 +674,13 @@ export default class FilerPro extends View {
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
     if (!path || !cx) return;
+    // A macOS package is a folder: the viewer never reads it as a file (a double click opens it, see rows()).
+    if (this.entryAt(path)?.bundle) {
+      this.fileError = "This is a package: use Open, or Show Package Contents";
+      cx.notify();
+      opts.onDone?.({ error: this.fileError, mode: "source" });
+      return;
+    }
     const context = this.context, root = this.root, on = this.on;
     cx.spawn(async cx => {
       try {
@@ -687,9 +732,11 @@ export default class FilerPro extends View {
     });
   }
 
-  // The size limits of images and PDFs in bytes, from the settings of the open file (per call: the loaders live per view).
+  // The size limits of images and PDFs in bytes and the SSH options of their download from a machine, from the settings
+  // of the open file (per call: the loaders live per view).
   loadLimits(cfg = this.fileCfg ?? DEFAULTS) {
-    return { maxImage: cfg.image_max_mb * MB, cacheLimit: cfg.image_cache_mb * MB, maxLocal: cfg.pdf_local_max_mb * MB, maxRemote: cfg.pdf_remote_max_mb * MB, svgCheck: cfg.svg_check };
+    const ssh = { ssh_connect_timeout: cfg.ssh_connect_timeout, ssh_alive_interval: cfg.ssh_alive_interval, ssh_alive_count: cfg.ssh_alive_count };
+    return { maxImage: cfg.image_max_mb * MB, cacheLimit: cfg.image_cache_mb * MB, maxLocal: cfg.pdf_local_max_mb * MB, maxRemote: cfg.pdf_remote_max_mb * MB, svgCheck: cfg.svg_check, ssh };
   }
 
   // A file over the limit: a running preview job for its loads folder is joined (the panel's, while the dialog opens);
@@ -837,6 +884,17 @@ export default class FilerPro extends View {
       .child(this.viewer(t));
   }
 
+  // A click on a file row or a macOS package row (local only, lib/bundles.js) under double_click_files or
+  // double_click_apps, read at each click (lib/clicks.js fileClick). "select" marks the row as the tree marks the last
+  // opened file; "open" shows a file in the viewer and starts a package like the Finder does (lib/open.js openBundle).
+  clickFile(path, bundle, event, cx) {
+    const action = fileClick(event, bundle ? this.conf.double_click_apps : this.conf.double_click_files);
+    if (action === "open" && !bundle) { this.show(path, cx); return; }
+    if (!action) return;
+    this.lastOpened = path; cx.notify();
+    if (action === "open") openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
+  }
+
   // Cmd+click: remote rows are downloaded and shown in the Finder, local rows are only shown there.
   reveal(path) {
     if (this.on) { this.request({ machine: this.on, path: joinPath(this.root, path), reveal: true }); return; }
@@ -852,23 +910,26 @@ export default class FilerPro extends View {
 
   // The visible tree rows under the list settings; rows() and the spacer of an open file use the same (issue #5).
   visible() {
-    return visibleRows(this.entries, this.folders, { limit: this.conf.list_total, maxDepth: this.conf.tree_depth });
+    return visibleRows(this.entries, this.folders, { limit: this.conf.list_total, maxDepth: this.conf.tree_depth, isDir: (entry, path) => treeDir(entry, path, this.packages) });
   }
 
   // The tree rows; the last opened file is marked with t.selected (issue #5).
   rows(t, dark) {
     return this.visible().map(({ path, entry, depth }) => {
       const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
+      // A macOS package acts as a file until its contents are shown (lib/bundles.js); `dir` decides chevron, click and drop.
+      const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
+      const menuState = { paste: { enabled: false }, isDir: entry.dir, bundle, contents };
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
-        .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : entry.dir ? this.toggle(path, cx) : this.show(path, cx))
+        .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : dir ? this.toggle(path, cx) : this.clickFile(path, bundle, e, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
-          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, folder: dropTarget(this.root, path, entry.dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems({ paste: { enabled: false } })) });
+          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
-        .on_drop((e, cx) => this.drop(e.paths, path, entry.dir))
-        .child(entry.dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
-        .child(image(icon(path, entry.dir, open, dark)).size(16).flex_none())
+        .on_drop((e, cx) => this.drop(e.paths, path, dir))
+        .child(dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
+        .child(image(bundle && !dir ? bundleIcon(entry.name, dark) : icon(path, entry.dir, open, dark)).size(16).flex_none())
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
         .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark)));
     });
@@ -891,6 +952,7 @@ export default class FilerPro extends View {
     const t0 = this.perf ? Date.now() : 0;
     if (key() !== this.context?.key) this.refresh(cx);
     this.pollReload(cx);
+    this.pollPackage(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
     // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.

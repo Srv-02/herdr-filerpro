@@ -174,7 +174,7 @@ test("view: the parts in the order of the design, help lines below the labels, p
   const root = view(s);
   const out = texts(root);
   const order = ["UPDATES", "Filer Pro 1.0.0", "Check for updates automatically", "DOWNLOADS", "Download folder", "Choose…", "EDITORS", "Open in Editor", "Edit in Terminal",
-    "Missing your editor? Add it to ~/.config/herdr-app/filer-pro.json, then reopen Settings.", "How to add an editor", "FILE LIST", "Hide system files", "Hide hidden files", "PREVIEW", "Show previews", "Draw diagrams",
+    "Missing your editor? Add it to ~/.config/herdr-app/filer-pro.json, then reopen Settings.", "How to add an editor", "FILE LIST", "Hide system files", "Hide hidden files", "Open files with a double click", "Open apps with a double click", "PREVIEW", "Show previews", "Draw diagrams",
     "SECURITY", "Check SVG images before showing them", "Keep this on", SVG_WARNING, "Advanced", "Limits, timeouts and connections. The defaults suit almost everyone.",
     "Filer Pro is free and open source.", "GitHub", "Buy me a coffee", "Cancel", "Save"];
   let at = -1;
@@ -311,4 +311,23 @@ test("view: while Hide hidden files is on, Hide system files shows on, is dimmed
   assert.deepEqual(called(sw2, "bg"), [["hover"]], "drawn as off");
   assert.equal(called(sw2, "on_click").length, 1);
   assert.deepEqual(collect(s), { hide_dotfiles: false });
+});
+
+test("view: the two double click switches start at their defaults, flip on their own, are never dimmed, and only a flipped one is written (issue #21)", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  assert.deepEqual([s.flags.double_click_files, s.flags.double_click_apps], [false, true]);
+  assert.deepEqual(collect(s), {});
+  for (const key of ["double_click_files", "double_click_apps"]) assert.equal(called(byId(view(s), `filer-pro-settings-${key}`), "opacity").length, 0, key);
+  called(byId(view(s), "filer-pro-settings-double_click_files-switch"), "on_click")[0][0]({}, makeCx());
+  assert.deepEqual([s.flags.double_click_files, s.flags.double_click_apps], [true, true]);
+  assert.deepEqual(collect(s), { double_click_files: true });
+  called(byId(view(s), "filer-pro-settings-double_click_apps-switch"), "on_click")[0][0]({}, makeCx());
+  assert.deepEqual([s.flags.double_click_files, s.flags.double_click_apps], [true, false]);
+  assert.deepEqual(collect(s), { double_click_files: true, double_click_apps: false });
+  for (const key of ["double_click_files", "double_click_apps"]) {
+    assert.equal(called(byId(view(s), `filer-pro-settings-${key}`), "opacity").length, 0, key);
+    assert.equal(called(byId(view(s), `filer-pro-settings-${key}-switch`), "on_click").length, 1, key);
+  }
+  const row = byId(view(s), "filer-pro-settings-double_click_apps");
+  assert.deepEqual(texts(row.kids[0]), ["Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident."]);
 });
