@@ -20,7 +20,7 @@ import { createFileOps, successToast } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
-import { pruneFolder, folderMissing, expandPath } from "./lib/tree.js";
+import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD } from "./lib/tree.js";
 import { createReloadGate } from "./lib/reload.js";
 import { baseName, joinPath, relativePath, shellPath, psQuoted } from "./lib/names.js";
 import { writeClipboard } from "./lib/pasteboard.js";
@@ -415,11 +415,11 @@ export default class FilerPro extends View {
   refresh(cx) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
-      if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
+      if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file, lastOpened: this.lastOpened });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
-      this.loading = false;
+      this.loading = false; this.lastOpened = saved?.lastOpened ?? null;
       if (saved?.file) this.show(saved.file, cx);
     }
     if (!cwd || this.loading) return;
@@ -496,6 +496,7 @@ export default class FilerPro extends View {
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
     this.code?.release(); this.code = null; this.file = path; this.fileError = null;
+    if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
     if (!path || !cx) return;
@@ -698,12 +699,12 @@ export default class FilerPro extends View {
     if (r) this.request(r);
   }
 
-  rows(prefix, depth, out, t, dark) {
-    if (out.length >= TOTAL || depth > 40) return out;
-    for (const entry of this.entries.get(prefix) ?? []) {
-      if (out.length >= TOTAL) break;
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
-      out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
+  // The tree rows; the last opened file is marked with t.selected (issue #5).
+  rows(t, dark) {
+    return visibleRows(this.entries, this.folders, { limit: TOTAL }).map(({ path, entry, depth }) => {
+      const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
+      return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+        .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : entry.dir ? this.toggle(path, cx) : this.show(path, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
@@ -713,10 +714,8 @@ export default class FilerPro extends View {
         .child(entry.dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(image(icon(path, entry.dir, open, dark)).size(16).flex_none())
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
-        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark))));
-      if (entry.dir && open) this.rows(path, depth + 1, out, t, dark);
-    }
-    return out;
+        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark)));
+    });
   }
 
   // A rename, a delete or a finished job changed the file system: reload soon, not at the next 10 s timer.
@@ -747,7 +746,11 @@ export default class FilerPro extends View {
         .children(this.previewTools(t))
         .when(Boolean(this.file), el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t,
           () => openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.on, root: this.root, path: this.file, mode: this.doc ? this.mode : "preview", page: this.page, pages: this.pages, force: this.force }, kind: "dialog", width: 0.86, height: 0.9 })))))
-      .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t, dark))
+      // The tree stays mounted while a file is open, at zero height with a spacer of the same content height:
+      // GPUI keeps a scroll offset only for elements rendered every frame (issue #5).
+      .child(v_flex().id("files-tree").min_h(0).overflow_y_scrollbar()
+        .when(!this.file, el => el.flex_1().p(TREE_PAD).children(this.rows(t, dark)))
+        .when(Boolean(this.file), el => el.flex_none().h(0).p(0).child(div().flex_none().h(visibleRows(this.entries, this.folders, { limit: TOTAL }).length * ROW_H + 2 * TREE_PAD)))
         .on_drop((e, cx) => this.drop(e.paths, null, false))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
@@ -755,7 +758,7 @@ export default class FilerPro extends View {
           openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
         })
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
-        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
+        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total"))))
       .when(Boolean(bar), el => el.child(bar))
       .when(Boolean(this.file), el => el.child(this.viewer(t)));
     if (this.perf) this.perf.sample("render", Date.now() - t0);

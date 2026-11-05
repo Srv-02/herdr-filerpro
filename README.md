@@ -38,7 +38,7 @@ Drop files from the Finder to upload, right click to download. Every transfer sh
 
 ![Markdown with a Mermaid diagram next to a PDF](screenshots/preview.png)
 
-Markdown renders with Mermaid diagrams, PDF shows page by page. Remote content inside documents is never loaded.
+Markdown renders with Mermaid diagrams, PDF shows page by page. Remote content inside documents is never loaded. `←` goes back to the tree where you left it, with the file you just opened marked.
 
 ### Source, HTML and images
 
