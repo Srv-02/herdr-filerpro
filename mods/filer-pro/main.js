@@ -28,7 +28,7 @@ import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
-import { PROBE_SCRIPT, parseProbe, probeFile, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory } from "./lib/textedit.js";
+import { PROBE_SCRIPT, parseProbe, probeFile, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName } from "./lib/textedit.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
@@ -786,7 +786,7 @@ export default class FilerPro extends View {
     history.reset(info.text);
     const e = this.edit = { state, history, info, dirty: false, applying: null, prompt: null, message: null, modeBefore: null, busy: false, copy: null,
       mirrored: null, mirrorAt: 0, wroteFile: false, id: this.newId(), context: this.context, wasFixed: Boolean(this.context?.fixed) };
-    e.mirrorPath = `${appHome()}/filer-pro/unsaved/${e.id}-${baseName(this.file)}`;
+    e.mirrorPath = `${appHome()}/filer-pro/unsaved/${mirrorName(e.id, baseName(this.file))}`;
     if (this.context) this.context.fixed = true; // the file stays open while the focus moves
     state.on("change", (_ev, cx) => this.editChanged(cx));
     // The dialog has no other timer (it stays passive until editing starts): this one runs the mirror for it.
@@ -892,11 +892,16 @@ export default class FilerPro extends View {
   // appHome, so only its path is in argv, where other users could read it. The save script removes the file.
   async stageLocal(b64) {
     const dir = `${appHome()}/filer-pro/edit`;
-    const r = await exec("sh", ["-c", 'umask 077 && mkdir -p "$1" && chmod 700 "$1"', "stage", dir]);
-    if (r.code !== 0) throw new Error(r.stderr || "Cannot create the staging folder");
+    await this.privateDir(dir);
     const path = `${dir}/${this.newId()}.b64`;
     await fs.writeFile(path, b64);
     return path;
+  }
+
+  // A local folder only this user can enter (0700): herdr's fs.mkdir and fs.writeFile take no mode.
+  async privateDir(dir) {
+    const r = await exec("sh", ["-c", 'umask 077 && mkdir -p "$1" && chmod 700 "$1"', "private", dir]);
+    if (r.code !== 0) throw new Error(r.stderr || "Cannot create a private folder");
   }
 
   // Save a Copy…: the name form is shown above the editor (an InputState is created here, in a click).
@@ -947,7 +952,7 @@ export default class FilerPro extends View {
     e.mirrorAt = Date.now();
     e.writing = true;
     try {
-      await fs.mkdir(parentOf(e.mirrorPath), { recursive: true });
+      await this.privateDir(parentOf(e.mirrorPath)); // fs has no mode option: the folder is made 0700 through sh
       await fs.writeFile(e.mirrorPath, v);
       e.mirrored = v; e.wroteFile = true;
     } catch {} finally { e.writing = false; }

@@ -519,7 +519,7 @@ test("close() with a dirty buffer keeps the text under unsaved/ and notifies", a
     await s2.close();
     const write = w2.log.writes.at(-1);
     assert.ok(write.p.startsWith("/app/filer-pro/unsaved/"), kind + " " + write?.p);
-    assert.ok(write.p.endsWith("a.txt"));
+    assert.ok(write.p.endsWith("-a.txt.txt"));
     assert.equal(write.text, "unsaved text\n");
     assert.equal(w2.log.notes.length, 1);
     assert.equal(w2.log.notes[0].level, "warning");
@@ -543,7 +543,8 @@ test("the mirror timer writes while dirty and the file is removed after a save",
   assert.equal(w.log.writes.length, 1);
   const mirror = w.log.writes[0].p;
   assert.ok(mirror.startsWith("/app/filer-pro/unsaved/"));
-  assert.ok(w.log.mkdirs.includes("/app/filer-pro/unsaved"));
+  assert.ok(w.log.execs.some((x) => x.args[2] === "private" && x.args[3] === "/app/filer-pro/unsaved"), "folder made private through sh");
+  assert.equal(fs.statSync(path.join(w.base, "app", "filer-pro", "unsaved")).mode & 0o777, 0o700);
   assert.equal(w.log.writes[0].text, "draft\n");
   tick();
   await settle();
@@ -622,4 +623,17 @@ test("on a machine nothing is staged locally", async () => {
   await settle();
   assert.equal(w.read("a.txt").toString(), "two\n");
   assert.equal(w.log.writes.some((x) => x.p.startsWith("/app/filer-pro/edit/")), false);
+});
+
+test("the mirror file name never leaves the unsaved folder, whatever the remote name", async () => {
+  const w = world();
+  const self = await panel(w);
+  for (const name of ["a\\b:c.txt", ".hidden", "x\ny"]) {
+    w.put(name, "one\n");
+    await editing(w, self, name);
+    const m = self.edit.mirrorPath;
+    assert.ok(m.startsWith("/app/filer-pro/unsaved/"), m);
+    assert.match(m.slice("/app/filer-pro/unsaved/".length), /^[A-Za-z0-9]+-[A-Za-z0-9_][A-Za-z0-9._-]*\.txt$/, m);
+    self.leaveEdit();
+  }
 });

@@ -264,6 +264,13 @@ export function statusText(info, modeBefore) {
   return `UTF-8 · ${info.eol} · ${mode}`;
 }
 
+// File name of the unsaved-text mirror: the id, then the file's name with anything but [A-Za-z0-9._-] made "_" and no
+// leading dot, so a remote name ("..", "\\", ":", control characters) can never leave the mirror folder or hide itself.
+export function mirrorName(id, name) {
+  const safe = String(name ?? "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 80);
+  return `${id}-${safe || "file"}.txt`;
+}
+
 export function copyName(name) {
   const i = name.lastIndexOf(".");
   return i <= 0 ? `${name} copy` : `${name.slice(0, i)} copy${name.slice(i)}`;

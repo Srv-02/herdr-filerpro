@@ -7,7 +7,7 @@ import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
 import {
   EDIT_MAX_BYTES, CHUNK_CHARS, PROBE_SCRIPT, BEGIN_SCRIPT, BEGIN_FILE_SCRIPT, COPY_SCRIPT, APPEND_SCRIPT, COMMIT_SCRIPT, CLEAN_SCRIPT,
-  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, uploadChunks, probeFile, saveFile, saveCopy, copyName,
+  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, uploadChunks, probeFile, saveFile, saveCopy, copyName, mirrorName,
 } from "../mods/filer-pro/lib/textedit.js";
 
 const FAKE_SSH = path.resolve(import.meta.dirname, "fake", "ssh");
@@ -800,4 +800,13 @@ describe("security review fixes", () => {
     assert.equal(r.ok, true, r.error);
     assert.equal(fs.statSync(r.path).mode & 0o777, 0o644);
   });
+});
+
+test("mirrorName keeps only safe characters and never starts with a dot", () => {
+  assert.equal(mirrorName("ab12", "notes.txt"), "ab12-notes.txt.txt");
+  assert.equal(mirrorName("ab12", ".."), "ab12-_.txt");
+  assert.equal(mirrorName("ab12", ".env"), "ab12-_env.txt");
+  assert.equal(mirrorName("ab12", "a\\b:c\u0001/d"), "ab12-a_b_c__d.txt");
+  assert.equal(mirrorName("ab12", ""), "ab12-file.txt");
+  assert.equal(mirrorName("ab12", "x".repeat(300)).length, "ab12-".length + 80 + 4);
 });
