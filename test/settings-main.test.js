@@ -43,7 +43,7 @@ const FilerPro = (await import("../mods/filer-pro/main.js")).default;
 
 const never = () => new Promise(() => {});
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false };
 
 // A fake host; `files` by path, shared values in `store`, every call logged.
 function host({ files = {}, store = {}, platform = "macos", props = {} } = {}) {
@@ -89,7 +89,7 @@ test("settings: the folder listing gets list_per_folder, on Windows as -First N+
   Object.assign(self, { context });
   self.current = () => true;
   await self.loadFolder("", context);
-  assert.deepEqual(log.execs[0].args, ["-c", LIST_SCRIPT, "files", "/data", "20"]);
+  assert.deepEqual(log.execs[0].args, ["-c", LIST_SCRIPT, "files", "/data", "20", "1", "0"], "system files hidden by default, dot files shown");
   const win = host({ platform: "windows" });
   win.log.execs.length = 0;
   globalThis.__impl.exec = async (cmd, args) => { win.log.execs.push({ cmd, args }); return { code: 0, stdout: "[]", stderr: "" }; };
@@ -351,4 +351,61 @@ test("settings dialog: Choose… puts the picked folder into the field, with ~/ 
   self.chooseDownloadFolder(cx);
   await settle();
   assert.equal(self.settings.fields.download_folder.value, "~/Inbox", "cancel keeps the field");
+});
+
+// Issue #17: the hide switches reach the listing (this Mac, an SSH machine, Windows), apply live, and an open folder
+// that becomes hidden leaves the tree.
+test("hide settings: the listing gets both switches as 1/0 words, on an SSH machine too; on Windows a Where-Object before -First", async () => {
+  const { log } = host();
+  const self = panel({ hide_system_files: false, hide_dotfiles: true }), context = { key: "k", cwd: "/srv", on: "box" };
+  Object.assign(self, { context });
+  self.current = () => true;
+  await self.loadFolder("", context);
+  assert.deepEqual([log.execs[0].args, log.execs[0].opts], [["-c", LIST_SCRIPT, "files", "/srv", "500", "1", "1"], { on: "box" }], "hidden files include the system files");
+  assert.equal(self.cfg.hide_system_files, false, "the stored switch is not changed");
+  const win = host({ platform: "windows" });
+  globalThis.__impl.exec = async (cmd, args) => { win.log.execs.push({ cmd, args }); return { code: 0, stdout: "[]", stderr: "" }; };
+  self.cfg = { ...DEFAULTS };
+  await self.loadFolder("", { key: "k", cwd: "C:\\data", on: null });
+  assert.match(win.log.execs[0].args[2], /Where-Object \{ -not \(.*DS_Store.*\) \} \| Select-Object -First 501 /);
+});
+
+test("hide settings: a saved change applies at once; an open folder that is now hidden leaves the tree, the others reload", async () => {
+  const h = host({ files: { "/app/filer-pro.json": "{}" } });
+  const listed = [];
+  globalThis.__impl.exec = async (cmd, args) => {
+    if (cmd !== "sh") return { code: 1, stdout: "", stderr: "" };
+    listed.push(args.slice(3));
+    const dir = args[3], dots = args[6] === "1";
+    const names = dir === "/data" ? [["d", ".github"], ["d", "src"], ["f", ".env"]] : dir === "/data/.github" ? [["d", "workflows"], ["f", "x"]] : [["f", "x"]];
+    return { code: 0, stdout: names.filter(([, n]) => !(dots && n.startsWith("."))).map(([k, n]) => `${k}\0${n}\0`).join(""), stderr: "" };
+  };
+  const self = panel({});
+  Object.assign(self, { reload: { signal: () => false, take: () => false }, saved: new Map(), marks: {}, pending: new Set(), show() {}, watch() {} });
+  self.context = { key: JSON.stringify({ cwd: "/data", on: null, space: "s1" }), cwd: "/data", on: null };
+  self.folders = new Set([".github", ".github/workflows", "src"]);
+  const { cx } = fakeCx();
+  self.refresh(cx);
+  await settle();
+  assert.deepEqual(self.visible().map((r) => r.path), [".github", ".github/workflows", ".github/workflows/x", ".github/x", "src", "src/x", ".env"]);
+  h.files["/app/filer-pro.json"] = '{"hide_dotfiles": true}';
+  h.store["filer-pro.config"] = { at: 1 };
+  listed.length = 0;
+  self.checkConfig(cx);
+  await settle();
+  assert.equal(self.conf.hide_dotfiles, true);
+  assert.deepEqual(listed, [["/data", "500", "1", "1"], ["/data/src", "500", "1", "1"]], "the hidden open folders are not listed again");
+  assert.deepEqual([...self.folders], ["src"]);
+  assert.deepEqual(self.visible().map((r) => r.path), ["src", "src/x"]);
+});
+
+test("hide settings: non-default switches reload the tree at the next tick after the config was read", async () => {
+  for (const cfg of ['{"hide_system_files": false}', '{"hide_dotfiles": true}']) {
+    host({ files: { "/app/filer-pro.json": cfg, "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' } });
+    const { cx } = fakeCx();
+    const self = Object.create(FilerPro.prototype);
+    self.init({}, cx);
+    await settle();
+    assert.equal(self.refreshedAt, 0, cfg);
+  }
 });

@@ -182,11 +182,12 @@ function button(t, id, text, onClick, primary = false) {
 const input = (t, f, w) => Input.new(f.input).w(w).h(28).px(8).rounded(6).border_1()
   .border_color(f.error ? t.ansi1 : f.focused ? t.accent : t.input).bg(t.background).text_size(13).text_color(t.foreground);
 
-function switchRow(t, state, key, { last = false, disabled = false } = {}) {
+// forced: the switch is shown on and cannot be switched; the stored flag stays as it is.
+function switchRow(t, state, key, { last = false, disabled = false, forced = false } = {}) {
   const s = SETTINGS.find((x) => x.key === key);
-  const on = state.flags[key] === true;
-  const flip = disabled ? null : (_e, cx) => { state.flags[key] = !on; cx.notify(); };
-  return row(t, `filer-pro-settings-${key}`, s.label, help(t, s.help), [toggle(t, `filer-pro-settings-${key}-switch`, on, flip)], { last, dim: disabled });
+  const on = forced || state.flags[key] === true, locked = disabled || forced;
+  const flip = locked ? null : (_e, cx) => { state.flags[key] = !on; cx.notify(); };
+  return row(t, `filer-pro-settings-${key}`, s.label, help(t, s.help), [toggle(t, `filer-pro-settings-${key}-switch`, on, flip)], { last, dim: locked });
 }
 
 function numberRow(t, state, s, last) {
@@ -266,7 +267,11 @@ function body(t, state, handlers, stored) {
         .child(h_flex().child(div().id("filer-pro-settings-editors-doc").cursor_pointer().text_size(12.5).line_height("18px").text_color(t.accent)
           .on_click((_e, cx) => cx.open_url(EDITORS_DOC_URL)).child("How to add an editor")))),
 
+    // Above Preview, as in the panel (the list on top, the preview below) and in Advanced (File list limits first).
     heading(t, "File list"),
+    // Hide hidden files includes the system files (lib/hidden.js effectiveHide): shown on and locked, the stored value kept.
+    switchRow(t, state, "hide_system_files", state.flags.hide_dotfiles === true ? { forced: true } : {}),
+    switchRow(t, state, "hide_dotfiles"),
     // Two switches on their own (issue #21): files, and local macOS packages (lib/clicks.js).
     switchRow(t, state, "double_click_files"),
     switchRow(t, state, "double_click_apps", { last: true }),

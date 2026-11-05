@@ -174,7 +174,7 @@ test("view: the parts in the order of the design, help lines below the labels, p
   const root = view(s);
   const out = texts(root);
   const order = ["UPDATES", "Filer Pro 1.0.0", "Check for updates automatically", "DOWNLOADS", "Download folder", "Choose…", "EDITORS", "Open in Editor", "Edit in Terminal",
-    "Missing your editor? Add it to ~/.config/herdr-app/filer-pro.json, then reopen Settings.", "How to add an editor", "FILE LIST", "Open files with a double click", "Open apps with a double click", "PREVIEW", "Show previews", "Draw diagrams",
+    "Missing your editor? Add it to ~/.config/herdr-app/filer-pro.json, then reopen Settings.", "How to add an editor", "FILE LIST", "Hide system files", "Hide hidden files", "Open files with a double click", "Open apps with a double click", "PREVIEW", "Show previews", "Draw diagrams",
     "SECURITY", "Check SVG images before showing them", "Keep this on", SVG_WARNING, "Advanced", "Limits, timeouts and connections. The defaults suit almost everyone.",
     "Filer Pro is free and open source.", "GitHub", "Buy me a coffee", "Cancel", "Save"];
   let at = -1;
@@ -277,6 +277,40 @@ test("tilde: only paths in the home folder get ~", () => {
   assert.equal(tilde("/home/u/Downloads", "/home/u"), "~/Downloads");
   assert.equal(tilde("/home/user2/x", "/home/u"), "/home/user2/x");
   assert.equal(tilde("/tmp", null), "/tmp");
+});
+
+test("view: the File list switches start at their defaults, flip on click, and only a flipped one is written (issue #17)", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  assert.deepEqual([s.flags.hide_system_files, s.flags.hide_dotfiles], [true, false]);
+  assert.deepEqual(collect(s), {});
+  const sw = byId(view(s), "filer-pro-settings-hide_dotfiles-switch");
+  called(sw, "on_click")[0][0]({}, makeCx());
+  assert.equal(s.flags.hide_dotfiles, true);
+  assert.deepEqual(collect(s), { hide_dotfiles: true });
+  const row = byId(view(s), "filer-pro-settings-hide_system_files");
+  assert.deepEqual(texts(row.kids[0]), ["Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them."]);
+  const off = createSettingsDialog(await snapshot({ hide_system_files: false }), cx);
+  assert.equal(off.flags.hide_system_files, false);
+});
+
+test("view: while Hide hidden files is on, Hide system files shows on, is dimmed and cannot be switched; the stored value stays", async () => {
+  const s = createSettingsDialog(await snapshot({ hide_system_files: false, hide_dotfiles: true }), cx);
+  const row = byId(view(s), "filer-pro-settings-hide_system_files");
+  assert.deepEqual(called(row, "opacity"), [[0.45]]);
+  const sw = byId(view(s), "filer-pro-settings-hide_system_files-switch");
+  assert.equal(called(sw, "on_click").length, 0);
+  assert.deepEqual(called(sw, "bg"), [["accent"]], "drawn as on");
+  assert.deepEqual(texts(row.kids[0]), ["Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them."], "no extra help text");
+  assert.equal(s.flags.hide_system_files, false, "the stored value is not overwritten");
+  assert.deepEqual(collect(s), {});
+  // Hide hidden files off again: the stored value (off) applies and the switch works.
+  called(byId(view(s), "filer-pro-settings-hide_dotfiles-switch"), "on_click")[0][0]({}, makeCx());
+  const back = byId(view(s), "filer-pro-settings-hide_system_files");
+  assert.equal(called(back, "opacity").length, 0);
+  const sw2 = byId(view(s), "filer-pro-settings-hide_system_files-switch");
+  assert.deepEqual(called(sw2, "bg"), [["hover"]], "drawn as off");
+  assert.equal(called(sw2, "on_click").length, 1);
+  assert.deepEqual(collect(s), { hide_dotfiles: false });
 });
 
 test("view: the two double click switches start at their defaults, flip on their own, are never dimmed, and only a flipped one is written (issue #21)", async () => {
