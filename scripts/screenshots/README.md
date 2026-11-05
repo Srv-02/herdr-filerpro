@@ -32,16 +32,18 @@ Crops (`cards/*.png`) and the browser profile are ignored by git: they hold wind
 
 2. **Shot.** `herdr-app shot raw.png` saves the whole window at full pixel size. It contains the sidebar and every other space name, so keep it out of the repository (for example in the ignored `tmp/`) and delete it when done.
 
+   A menu in its hover state cannot be scripted. For `edit-terminal.png`, right click `.env.example` in the panel, rest the pointer on **Edit in Terminal** and take a Retina screenshot of the vi split and the panel by hand (Cmd+Shift+4, then drag over both panes).
+
 3. **Crop.** Cut each panel out along its outer border (any image tool, for example Pillow: `Image.open("raw.png").crop((left, top, right, bottom))`) and save it under the name the card expects in `cards/`. Look at every crop: no paths outside the demo folder, no user or host names, no window titles.
 
 4. **Render.** Sizes in CSS pixels, the PNG comes out at twice that:
 
    ```sh
-   scripts/screenshots/render.sh scripts/screenshots/cards/edit-terminal.html screenshots/edit-terminal.png 880 620
+   scripts/screenshots/render.sh scripts/screenshots/cards/edit-terminal.html screenshots/edit-terminal.png 880 651
    scripts/screenshots/render.sh scripts/screenshots/cards/editors.html screenshots/editors.png 880 660
    scripts/screenshots/render.sh scripts/screenshots/cards/settings.html screenshots/settings.png 880 540
    ```
 
-   A panel cut off at the bottom gets the class `cut`, which draws its border again. Open the result and check it once more before you commit it.
+   A panel cut off at the bottom gets the class `cut`, which draws its border again. A crop wider than the card (as in `edit-terminal.html`) is scaled to the card width; end it between two text lines. Open the result and check it once more before you commit it.
 
-5. **Clean up.** Close the demo space (`herdr-app do space.close '{"id":"<space>","confirmed":true}'`), go back to your own space, delete the demo copy and the raw shot. Closing the space leaves the panel state of your other spaces and your settings as they were; `herdr-app status` shows zoom and focus.
+5. **Clean up.** Close the demo space (`herdr-app do space.close '{"id":"<space>","confirmed":true}'`), go back to your own space, delete the demo copy and the raw shot. Your settings, layouts and other spaces stay as they were (`herdr-app status` shows zoom and focus); Herdr only keeps the demo folder in its list of recent folders.

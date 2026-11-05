@@ -50,7 +50,7 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 ![Context menu with Open in Editor and Edit in Terminal](screenshots/editors.png)
 
-![Edit in Terminal: vi in a split next to the Filer Pro panel](screenshots/edit-terminal.png)
+![Edit in Terminal picked in the context menu, and the file open in vi in a split](screenshots/edit-terminal.png)
 
 Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, nano or helix in a split next to your terminal. It works for files on your SSH machines too, and you can add your own editors.
 
