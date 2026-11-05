@@ -7,6 +7,8 @@ import { createJobs } from "./lib/jobs.js";
 import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
 import { claim, processRequest, handleRequest, closeAnswer, panelPlan, answerShow, openResult, modeResult } from "./lib/requests.js";
 import { loadConfig } from "./lib/config.js";
+import { editInTerminal, openInEditor } from "./lib/editors.js";
+import { createUpdateGate, updateCheck, fetchLatest, fetchRelease, localVersion, updateHint } from "./lib/update.js";
 import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
@@ -19,15 +21,17 @@ import { createFileOps, successToast } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
-import { pruneFolder, folderMissing, expandPath } from "./lib/tree.js";
+import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
+import { numbers } from "./lib/settings.js";
 import { createReloadGate } from "./lib/reload.js";
-import { baseName, joinPath, relativePath, shellPath, psQuoted } from "./lib/names.js";
+import { baseName, joinPath, relativePath, shellPath } from "./lib/names.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
 import { transfersBar } from "./ui/bar.js";
 import { menuView } from "./ui/menu.js";
 import { conflictView } from "./ui/conflict.js";
+import { createSettingsDialog, settingsView, submitSettings, tilde } from "./ui/settings.js";
 
 // The preview lives in ./preview/ and is only ever loaded here, with import(): a deleted or broken folder
 // gives null and files open as plain source. A failure is not remembered, so putting the folder back works at the next click.
@@ -50,25 +54,32 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 const key = () => JSON.stringify(location());
-const PER_FOLDER = 500, TOTAL = 5000;
+// The settings before the config file was read (and in copies that never read it): today's defaults.
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true };
+const MB = 1024 * 1024;
 // Title of the error toast per failed request action.
 const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Copy failed", paste: "Paste failed", rename: "Rename failed", mkdir: "New folder failed", delete: "Delete failed", clip: "Copy failed" };
 
-async function directory(path, on) {
+// perFolder: the setting list_per_folder; the listing returns at most one entry more, so a cut folder is noticed.
+async function directory(path, on, perFolder) {
   if (!on && window()?.platform === "windows") {
-    // Windows PowerShell otherwise uses the console code page; exec decodes UTF-8.
-    // Reparse points keep directory attributes even when dangling; check their target.
-    const r = await exec("powershell", ["-NoProfile", "-Command", "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git' | Select-Object -First 501 | ForEach-Object { @{ name=$_.Name; dir=($_.PSIsContainer -and (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($_.Target -and [IO.Directory]::Exists(([IO.Path]::Combine([IO.Path]::GetDirectoryName($_.FullName), $_.Target[0])))))) } }) | ConvertTo-Json -Compress } '" + psQuoted(path) + "'"]);
+    const r = await exec("powershell", ["-NoProfile", "-Command", psListCommand(path, perFolder)]);
     if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
     const result = JSON.parse(r.stdout || "[]");
     return Array.isArray(result) ? result : [result];
   }
-  const script = 'n=0; for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt 500 ] && break; done; test -d "$1"';
-  const r = await exec("sh", ["-c", script, "files", path], { on });
+  const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder)], { on });
   if (r.code !== 0) throw Object.assign(new Error(r.stderr || "Cannot list this folder"), { missing: folderMissing(r) });
   const fields = r.stdout.split("\0"), out = [];
   for (let i = 0; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
   return out;
+}
+
+// False once this build of the mod was reloaded or closed. Herdr ends an old build's async loop only at its next cx use
+// (AsyncContext throws then); a loop that only awaits nextCommand() or watchFolder() calls this after every wait, so it
+// stops instead of running on with the old code. cx.phase() is a plain read: no redraw, no side effect.
+function live(cx) {
+  try { cx.phase(); return true; } catch { return false; }
 }
 
 export default class FilerPro extends View {
@@ -79,6 +90,10 @@ export default class FilerPro extends View {
         this.fileOps = createFileOps({ exec });
         const spec = props().view === "rename" ? renameSpec({ name: baseName(props().path), isDir: props().isDir === true }) : newFolderSpec();
         this.dialog = createNameDialog(spec, { onSubmit: (name, cx) => this.submitName(name, cx) }, cx);
+      }
+      if (props().view === "settings") {
+        // Every InputState of the dialog is created here, from the snapshot the opener stored (openSettings).
+        this.settings = createSettingsDialog(shared("filer-pro.settings"), cx);
       }
       if (props().view === "file") {
         // The fullscreen copy of one file: reads it itself with the panel's show(), under a fixed context.
@@ -95,33 +110,81 @@ export default class FilerPro extends View {
       if (panels !== shared("workspace.panels")) setShared("workspace.panels", panels);
       this.button = true;
       // `<mod>.<command>` reaches only shown copies: when the panel is hidden, this copy answers "reveal".
-      cx.spawn(async () => {
+      cx.spawn(async (cx) => {
         for (;;) {
           let command;
           try { command = await nextCommand(); } catch { await cx.sleep(1000); continue; }
+          if (!live(cx)) return;
           if (command === "reveal" && !panelShown(layout(), "filer-pro")) this.revealLast();
         }
       });
       return;
     }
+    this.cfg = DEFAULTS;
     this.jobs = createJobs({
-      exec, hc, readTextFile, getShared: shared, setShared, notify, now: Date.now, appHome, home,
+      exec, hc, readTextFile, getShared: shared, setShared, notify, now: Date.now, appHome, home, settings: () => this.cfg,
       newId: () => (Math.random().toString(36).slice(2) + "00000000").slice(0, 8),
     });
     const base = createFileOps({ exec });
     this.fileOps = { ...base, ...createMoveOps({ exec, check: base.check, trashDir: platform.trashDir(home()) }) };
     this.reload = createReloadGate({ now: Date.now, at: shared("filer-pro.changed")?.at ?? null });
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null; this.perf = null; this.diagrams = null;
+    this.configSeen = shared("filer-pro.config")?.at ?? null;
     cx.spawn(async (cx) => {
-      const cfg = await loadConfig(readTextFile, appHome, home);
+      const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
+      // The first listing ran with the defaults: other list settings reload the tree at the next tick.
+      if (["list_per_folder", "list_total", "tree_depth"].some((k) => cfg[k] !== DEFAULTS[k])) this.refreshedAt = 0;
+      this.version = await this.readVersion();
       if (cfg.perf) await this.startPerf(cx);
     });
     this.saved = new Map();
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.refresh(cx);
-    cx.timer.every(10000, cx => this.refresh(cx));
-    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); });
+    // The periodic reload, every refresh_seconds (setting): a 1 s tick that checks the time itself, so a changed
+    // interval applies without a restart. The config is read again on the way, which picks up hand edits.
+    this.refreshedAt = Date.now();
+    cx.timer.every(1000, cx => {
+      if (Date.now() - this.refreshedAt < this.conf.refresh_seconds * 1000) return;
+      this.refreshedAt = Date.now();
+      this.reloadConfig(cx);
+    });
+    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); });
     this.drive(cx);
+  }
+
+  // The current settings of this copy: the config read last, or the defaults before the first read.
+  get conf() { return this.cfg ?? DEFAULTS; }
+
+  // Reads the config again, then reloads the tree, so new list limits apply to the folders already shown.
+  reloadConfig(cx) {
+    cx.spawn(async (cx) => {
+      try { this.cfg = await loadConfig(readTextFile, appHome, home); } catch {}
+      this.refresh(cx);
+      cx.notify();
+    });
+  }
+
+  // The settings dialog saved (shared filer-pro.config): read the config at once instead of at the next periodic reload.
+  checkConfig(cx) {
+    const at = shared("filer-pro.config")?.at ?? null;
+    if (at === this.configSeen) return;
+    this.configSeen = at;
+    this.reloadConfig(cx);
+  }
+
+  // Opens the settings dialog with a snapshot of the config: the parsed file (unknown keys, ~/ as written), what
+  // loadConfig made of it, the installed version and the config path to show. The dialog's init reads it from shared, synchronously.
+  async openSettings() {
+    let raw = null, broken = false;
+    try {
+      const text = await readTextFile(`${appHome()}/filer-pro.json`).catch(() => null);
+      raw = text == null ? null : JSON.parse(text);
+      broken = text != null && (raw === null || typeof raw !== "object" || Array.isArray(raw));
+    } catch { broken = true; raw = null; }
+    const config = await loadConfig(readTextFile, appHome, home);
+    const version = await this.readVersion();
+    setShared("filer-pro.settings", { config, raw: broken ? null : raw, broken, version, home: home(), configPath: tilde(`${appHome()}/filer-pro.json`, home()) });
+    openOverlay({ mod: "filer-pro", props: { view: "settings" }, kind: "dialog", modal: true, width: 620, height: 0.86 });
   }
 
   // Perf mode ("perf": true): timings in memory, rewritten to PERF_FILE every 5 s (only documented file calls are used).
@@ -143,6 +206,7 @@ export default class FilerPro extends View {
     const wakers = [];
     const nap = () => new Promise((resolve) => wakers.push(resolve));
     let holding = false, busy = false, scanning = false, again = false;
+    const updates = createUpdateGate(Date.now);
 
     const scan = async () => {
       if (scanning) { again = true; return; }
@@ -195,9 +259,10 @@ export default class FilerPro extends View {
     const beat = () => {
       wakers.splice(0).forEach((w) => w());
       const next = leaseNext(shared("filer-pro.lease"), me, Date.now());
-      if (!next.mine) { holding = false; return; }
+      if (!next.mine) { holding = false; updates.take(false); return; }
       if (next.write) setShared("filer-pro.lease", { owner: next.owner, at: next.at });
       if (!cleaned) { cleaned = true; for (const k of staleLegacyKeys(shared)) setShared(k, null); }
+      if (updates.take(true)) cx.spawn(async (cx) => { try { await this.updatePass(cx); } catch {} finally { updates.done(); } });
       if (holding) { scan().catch(() => {}); return; }
       holding = true;
       busy = true;
@@ -209,26 +274,45 @@ export default class FilerPro extends View {
     cx.timer.every(1000, () => {
       if (!holding || busy) return;
       busy = true;
-      if (Object.values(shared("filer-pro.jobs") || {}).some(j => (j.state === "done" || j.state === "cancelled") && Date.now() - j.finishedAt > 10000)) jobs.clearFinished();
+      const keep = this.conf.keep_done_seconds * 1000; // the same setting as clearFinished's, not a second number
+      if (Object.values(shared("filer-pro.jobs") || {}).some(j => (j.state === "done" || j.state === "cancelled") && Date.now() - j.finishedAt > keep)) jobs.clearFinished(keep);
       jobs.tick().catch(() => {}).then(() => { busy = false; });
     });
     cx.timer.every(300, () => this.checkAnswer());
-    cx.spawn(async () => {
+    // Both loops check cx after every wait (live): they would outlive a reload of the mod otherwise.
+    cx.spawn(async (cx) => {
       await exec("mkdir", ["-p", dir], { on: null }).catch(() => {});
+      if (!live(cx)) return;
       if (holding) scan().catch(() => {});
       for (;;) {
-        try { await watchFolder(dir); } catch { await nap(); continue; }
+        try { await watchFolder(dir); } catch { await nap(); if (!live(cx)) return; continue; }
+        if (!live(cx)) return;
         if (holding) scan().catch(() => {});
       }
     });
-    cx.spawn(async () => {
+    cx.spawn(async (cx) => {
       for (;;) {
         let command;
-        try { command = await nextCommand(); } catch { await nap(); continue; }
+        try { command = await nextCommand(); } catch { await nap(); if (!live(cx)) return; continue; }
+        if (!live(cx)) return;
         if (command === "scan" && holding) scan().catch(() => {});
         else if (command === "reveal") this.revealLast();
       }
     });
+  }
+
+  // The installed version from this mod's own mod.json (null when unreadable: then no check and no hint).
+  readVersion() {
+    return readTextFile(`${appHome()}/${BASE}/mod.json`).then(localVersion, () => null);
+  }
+
+  // Lease holder, at most hourly (lib/update.js): reads the config fresh, so update_check false means no request;
+  // a request goes out only when the last one is 24 h old. The result goes to shared, for every panel copy.
+  async updatePass(cx, fetchFn = globalThis.fetch) {
+    const cfg = await loadConfig(readTextFile, appHome, home);
+    const local = cfg.update_check ? await this.readVersion() : null;
+    const out = await updateCheck({ enabled: cfg.update_check, state: shared("filer-pro.update"), local, now: Date.now(), fetch: () => fetchLatest(fetchFn, (ms) => cx.sleep(ms)) });
+    if (out.state !== undefined) setShared("filer-pro.update", out.state);
   }
 
   // The Filer Pro button beside the tab bar's Files and Changes (props { button: true }).
@@ -315,9 +399,17 @@ export default class FilerPro extends View {
         close();
       };
       const toClipboard = (text, cx) => { writeClipboard(text, { cx, exec, notify, platform }).finally(close); };
+      // Open in Editor and Edit in Terminal (lib/editors.js): the popup closes once the lookup and the start returned.
+      const config = () => loadConfig(readTextFile, appHome, home);
+      const editor = (action, title, deps) => {
+        action({ machine: p.machine ?? null, path: p.path }, { loadConfig: config, notify, ...deps })
+          .catch((e) => notify({ title: `${title} failed`, body: String(e?.message ?? e), level: "error" })).finally(close);
+      };
       return menuView(t, items, {
         open: () => openWith("default"),
         open_preview: () => openWith("preview"),
+        open_editor: () => editor(openInEditor, "Open in Editor", { hc, exec, home }),
+        edit_terminal: () => editor(editInTerminal, "Edit in Terminal", { focused, spaces, run }),
         // dimmed on a machine (rowMenuItems remote): Show in Finder would download first; Cmd+click still does
         reveal: () => {
           if (p.machine) { close(); return; }
@@ -334,7 +426,21 @@ export default class FilerPro extends View {
         new_folder: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "mkdir", machine: p.machine, path: p.folder }, kind: "dialog", modal: true, width: 440, height: 220 }); },
         rename: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "rename", machine: p.machine, path: p.path, root: p.root, isDir: p.isDir === true }, kind: "dialog", modal: true, width: 440, height: 220 }); },
         delete: () => act({ action: "delete", path: p.path, root: p.root }),
+        // The popup closes once the dialog is open (the snapshot is read first, as editor() does).
+        settings: () => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })).finally(close); },
       });
+    }
+    if (p.view === "settings" && this.settings) {
+      return settingsView(t, this.settings, {
+        onCancel: close,
+        onSave: (cx) => submitSettings(this.settings, { readTextFile, writeTextFile, path: `${appHome()}/filer-pro.json` }, cx).then((saved) => {
+          if (!saved) return;
+          setShared("filer-pro.config", { at: Date.now() }); // every panel copy reads the config again (checkConfig)
+          close();
+        }),
+        onCheck: (cx) => this.checkNow(cx),
+        onChoose: (cx) => this.chooseDownloadFolder(cx),
+      }, shared("filer-pro.update"));
     }
     if (p.view === "rename" || p.view === "mkdir") return nameView(t, this.dialog, { onCancel: close, onSubmit: (name, cx) => this.submitName(name, cx) });
     if (p.view === "file") return this.fileOverlay(t, cx);
@@ -343,6 +449,40 @@ export default class FilerPro extends View {
     return conflictView(t, pending, { all: this.all }, {
       onChoose: (choice) => { setShared("filer-pro.answer", { batch: pending.batch, choice, apply_to_all: this.all === true }); close(); },
       onToggleAll: (cx) => { this.all = !this.all; cx.notify(); },
+    });
+  }
+
+  // Settings dialog, Check now: one request to GitHub from this copy, also with the daily check off (a click asks
+  // for it). A result is stored in shared filer-pro.update for the panels while the daily check is on (the lease
+  // holder's next pass then sees a fresh check); a failure keeps the last known release.
+  checkNow(cx, fetchFn = globalThis.fetch) {
+    const s = this.settings;
+    if (!s || s.check.phase === "checking") return;
+    s.check = { phase: "checking" };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await fetchRelease(fetchFn, (ms) => cx.sleep(ms));
+      if (r.error) s.check = { phase: "failed" };
+      else {
+        const state = { at: Date.now(), local: s.version, latest: r.tag };
+        if (s.version && shared("filer-pro.settings")?.config?.update_check !== false) setShared("filer-pro.update", state);
+        s.check = { phase: "done", state };
+      }
+      cx.notify();
+    });
+  }
+
+  // Settings dialog, Choose…: the system folder picker; a folder in the home folder is written with ~/.
+  chooseDownloadFolder(cx) {
+    const f = this.settings?.fields.download_folder;
+    if (!f) return;
+    cx.spawn(async (cx) => {
+      const dir = await pickFolder({ prompt: "Choose" }).catch(() => null);
+      if (!dir) return;
+      f.value = tilde(dir, this.settings.home);
+      f.input.set_value(f.value);
+      f.error = null;
+      cx.notify();
     });
   }
 
@@ -391,26 +531,27 @@ export default class FilerPro extends View {
     const { on, cwd: root } = context;
     let entries;
     try {
-      entries = await directory(path ? joinPath(root, path) : root, on);
+      entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder);
     } catch (e) {
       // An open subfolder that was renamed or deleted just leaves the tree, with everything below it.
       if (path && e?.missing && this.current(context)) { pruneFolder(this.folders, this.entries, path); return; }
       throw e;
     }
     if (!this.current(context) || (path && !this.folders.has(path))) return;
+    const { list_per_folder: perFolder, list_total: total } = this.conf;
     const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
-    this.entries.set(path, entries.slice(0, Math.max(0, Math.min(PER_FOLDER, TOTAL - used))).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)));
-    if (entries.length > PER_FOLDER || used + entries.length > TOTAL) this.limited = true;
+    this.entries.set(path, entries.slice(0, Math.max(0, Math.min(perFolder, total - used))).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)));
+    if (entries.length > perFolder || used + entries.length > total) this.limited = true;
   }
 
   refresh(cx) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
-      if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
+      if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file, lastOpened: this.lastOpened });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
-      this.loading = false;
+      this.loading = false; this.lastOpened = saved?.lastOpened ?? null;
       if (saved?.file) this.show(saved.file, cx);
     }
     if (!cwd || this.loading) return;
@@ -428,7 +569,7 @@ export default class FilerPro extends View {
         if (top?.code === 0) {
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
           const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
-          if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, TOTAL)) {
+          if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, this.conf.list_total)) {
             const xy = entry.slice(0, 2);
             marks[joinPath(top.stdout.trim(), entry.slice(3))] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
           }
@@ -487,6 +628,7 @@ export default class FilerPro extends View {
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
     this.code?.release(); this.code = null; this.file = path; this.fileError = null;
+    if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
     if (!path || !cx) return;
@@ -495,13 +637,14 @@ export default class FilerPro extends View {
       try {
         // Read at every click: "preview": false works from the next file on, without a restart.
         const cfg = await loadConfig(readTextFile, appHome, home), kind = previewKind(path);
+        this.fileCfg = cfg; // the limits this file was prepared with: diagrams and page turns use the same
         let previewer = kind && cfg.preview ? await loadPreview() : null;
         if ((kind === "image" || kind === "pdf") && previewer) {
           // Images and PDFs never go through readTextFile: the probe decides, the file or its page lands in the cache.
           const loader = kind === "pdf"
             ? (this.pdfs ??= previewer.createPdfs({ exec, hc, exists: fs.exists, unlink: fs.unlink, mkdir: fs.mkdir, readFile: fs.readFile, appHome, platform: window()?.platform }))
             : (this.images ??= previewer.createImages({ exec, hc, exists: fs.exists, unlink: fs.unlink, appHome }));
-          const doc = await loader.load({ on, path: joinPath(root, path), page: this.page, pages: this.pages, force: opts.force });
+          const doc = await loader.load({ on, path: joinPath(root, path), page: this.page, pages: this.pages, force: opts.force, ...this.loadLimits(cfg) });
           if (this.file !== path || !this.current(context)) return;
           if (doc.load) { this.showHint(previewer, doc, path, cx); return; }
           if (doc.error && (doc.final || extOf(path) !== "svg")) { this.fileError = doc.error; return; }
@@ -514,14 +657,14 @@ export default class FilerPro extends View {
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
         const t = theme();
         this.code = EditorState.new({ language: langOf(path), readonly: true, soft_wrap: true,
-          value: text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text,
+          value: text.length > cfg.source_max_chars ? text.slice(0, cfg.source_max_chars) + "\n… (file truncated)" : text,
           font_family: settings().font_family, font_size: 12,
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
         if (previewer) {
           // The source is on screen now; the preview follows in small steps, so typing and drawing never wait for it.
           cx.notify(); // the source is on screen
           try {
-            const doc = await previewer.prepareAsync(text, { kind, mermaid: cfg.mermaid }, {
+            const doc = await previewer.prepareAsync(text, { kind, mermaid: cfg.mermaid, maxChars: cfg.preview_max_chars, maxDiagrams: cfg.max_diagrams }, {
               sleep: () => cx.sleep(1), alive: () => this.file === path && this.current(context),
               now: Date.now, onStep: (ms) => this.perf?.sample("preview.prepare", ms, { file: path }),
             });
@@ -538,6 +681,11 @@ export default class FilerPro extends View {
         opts.onDone?.(mine ? { error: this.fileError, mode: this.mode, preview: Boolean(this.doc) } : { error: "Another file was opened meanwhile", mode: "source" });
       }
     });
+  }
+
+  // The size limits of images and PDFs in bytes, from the settings of the open file (per call: the loaders live per view).
+  loadLimits(cfg = this.fileCfg ?? DEFAULTS) {
+    return { maxImage: cfg.image_max_mb * MB, cacheLimit: cfg.image_cache_mb * MB, maxLocal: cfg.pdf_local_max_mb * MB, maxRemote: cfg.pdf_remote_max_mb * MB, svgCheck: cfg.svg_check };
   }
 
   // A file over the limit: a running preview job for its loads folder is joined (the panel's, while the dialog opens);
@@ -607,7 +755,7 @@ export default class FilerPro extends View {
     if (!this.pdfs || !this.pages || n < 1 || n > this.pages || n === this.page) return;
     this.page = n; cx.notify();
     cx.spawn(async (cx) => {
-      const doc = await this.pdfs.load({ on, path: joinPath(this.root, path), page: n, pages: this.pages, force: this.force });
+      const doc = await this.pdfs.load({ on, path: joinPath(this.root, path), page: n, pages: this.pages, force: this.force, ...this.loadLimits() });
       if (this.file !== path || this.page !== n || !this.current(context)) return;
       if (doc.load) this.showHint(previewer, doc, path, cx); // the loaded copy was cleared meanwhile
       else if (doc.error) this.fileError = doc.error;
@@ -623,7 +771,8 @@ export default class FilerPro extends View {
     this.colorKey = key;
     this.diagrams ??= this.previewer.createDiagrams({ exec, readTextFile, writeFile: fs.writeFile, mkdir: fs.mkdir, unlink: fs.unlink, appHome, now: Date.now, perf: this.perf });
     cx.spawn(async (cx) => {
-      await this.diagrams.renderAll(doc.parts, t, () => this.doc === doc && this.colorKey === key, () => cx.notify());
+      const cfg = this.fileCfg ?? DEFAULTS;
+      await this.diagrams.renderAll(doc.parts, t, () => this.doc === doc && this.colorKey === key, () => cx.notify(), { maxDiagrams: cfg.max_diagrams, maxChars: cfg.max_diagram_chars, node: cfg.node_path });
       cx.notify();
     });
   }
@@ -661,6 +810,14 @@ export default class FilerPro extends View {
       .on_click((_e, cx) => onClick(cx)).child(child);
   }
 
+  // The Settings button in the panel header while no file is open: a gear in a 24px hit area, muted at rest.
+  gear(t) {
+    return div().id("files-settings").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).tooltip("Settings").accessibility_label("Settings")
+      .on_click(() => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })); })
+      .child(svg(`${BASE}/settings.svg`).size(14).text_color(t.muted));
+  }
+
   // The fullscreen dialog (props view "file"): the same header buttons and viewer as the panel, plus Close. Esc closes a
   // dialog through the app; the root hears it too in case the editor holds the keyboard (as the name dialog does).
   fileOverlay(t, cx) {
@@ -689,12 +846,17 @@ export default class FilerPro extends View {
     if (r) this.request(r);
   }
 
-  rows(prefix, depth, out, t, dark) {
-    if (out.length >= TOTAL || depth > 40) return out;
-    for (const entry of this.entries.get(prefix) ?? []) {
-      if (out.length >= TOTAL) break;
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
-      out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
+  // The visible tree rows under the list settings; rows() and the spacer of an open file use the same (issue #5).
+  visible() {
+    return visibleRows(this.entries, this.folders, { limit: this.conf.list_total, maxDepth: this.conf.tree_depth });
+  }
+
+  // The tree rows; the last opened file is marked with t.selected (issue #5).
+  rows(t, dark) {
+    return this.visible().map(({ path, entry, depth }) => {
+      const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
+      return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+        .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : entry.dir ? this.toggle(path, cx) : this.show(path, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
@@ -704,13 +866,11 @@ export default class FilerPro extends View {
         .child(entry.dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(image(icon(path, entry.dir, open, dark)).size(16).flex_none())
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
-        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark))));
-      if (entry.dir && open) this.rows(path, depth + 1, out, t, dark);
-    }
-    return out;
+        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark)));
+    });
   }
 
-  // A rename, a delete or a finished job changed the file system: reload soon, not at the next 10 s timer.
+  // A rename, a delete or a finished job changed the file system: reload soon, not at the next periodic reload.
   // The gate (lib/reload.js) makes a burst of signals one reload and catches up a signal from during a load.
   pollReload(cx) {
     const changed = shared("filer-pro.changed");
@@ -729,16 +889,24 @@ export default class FilerPro extends View {
     this.pollReload(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
+    // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
+    const update = this.conf.update_check ? updateHint(shared("filer-pro.update"), this.version) : null;
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Filer Pro"))
+        .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
+        .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
         .when(Boolean(this.file), el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t,
           () => openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.on, root: this.root, path: this.file, mode: this.doc ? this.mode : "preview", page: this.page, pages: this.pages, force: this.force }, kind: "dialog", width: 0.86, height: 0.9 })))))
-      .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t, dark))
+      // The tree stays mounted while a file is open, at zero height with a spacer of the same content height:
+      // GPUI keeps a scroll offset only for elements rendered every frame (issue #5).
+      .child(v_flex().id("files-tree").min_h(0).overflow_y_scrollbar()
+        .when(!this.file, el => el.flex_1().p(TREE_PAD).children(this.rows(t, dark)))
+        .when(Boolean(this.file), el => el.flex_none().h(0).p(0).child(div().flex_none().h(this.visible().length * ROW_H + 2 * TREE_PAD)))
         .on_drop((e, cx) => this.drop(e.paths, null, false))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
@@ -746,7 +914,7 @@ export default class FilerPro extends View {
           openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
         })
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
-        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
+        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total)))))
       .when(Boolean(bar), el => el.child(bar))
       .when(Boolean(this.file), el => el.child(this.viewer(t)));
     if (this.perf) this.perf.sample("render", Date.now() - t0);

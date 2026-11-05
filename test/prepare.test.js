@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { prepare, prepareSteps, prepareAsync, safeLink, PREVIEW_MAX_CHARS, MAX_DIAGRAMS } from "../mods/filer-pro/preview/prepare.js";
+import { prepare, prepareSteps, prepareAsync, safeLink, noteText, PREVIEW_MAX_CHARS, MAX_DIAGRAMS } from "../mods/filer-pro/preview/prepare.js";
 
 test("Markdown is truncated, stripped and split", () => {
   const md = "# T\n![a](https://example.com/p.gif)\n```mermaid\nflowchart LR\n A-->B\n```\n" + "x".repeat(300000);
@@ -94,4 +94,17 @@ test("prepareAsync reports the duration of every step", async () => {
 
 test("a cut long line marks the document as shortened", () => {
   assert.equal(prepare("a".repeat(50000), { kind: "markdown", mermaid: false }).truncated, true);
+});
+
+test("settings: maxChars and maxDiagrams per call; the document carries its limit for the note", () => {
+  const long = "a".repeat(150);
+  const doc = prepare(long, { kind: "markdown", mermaid: true, maxChars: 100 });
+  assert.equal(doc.truncated, true);
+  assert.equal(doc.limit, 100);
+  assert.equal(prepare("x", { kind: "markdown", mermaid: true }).limit, PREVIEW_MAX_CHARS);
+  const fences = "```mermaid\ngraph TD\nA-->B\n```\n\n```mermaid\ngraph TD\nC-->D\n```\n";
+  assert.equal(prepare(fences, { kind: "markdown", mermaid: true, maxDiagrams: 1 }).diagrams, 1);
+  assert.equal(prepare(fences, { kind: "markdown", mermaid: true }).diagrams, 2);
+  assert.equal(noteText(200000), "Preview is shortened (first 200,000 characters, long lines cut) · open Source for the whole file");
+  assert.equal(noteText(50000), "Preview is shortened (first 50,000 characters, long lines cut) · open Source for the whole file");
 });

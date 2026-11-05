@@ -3,7 +3,8 @@
 const ALPHA = 0.3;
 export const STALL_MS = 120_000;
 
-export function progressOf(prev, bytes, total, now) {
+// stallMs: no growth for longer than this is a stall (setting stall_seconds).
+export function progressOf(prev, bytes, total, now, stallMs = STALL_MS) {
   let rate = 0;
   let lastGrowthAt = now;
   if (prev) {
@@ -18,7 +19,7 @@ export function progressOf(prev, bytes, total, now) {
   }
   const percent =
     total == null || !(total > 0) ? null : Math.min(99, Math.max(0, Math.floor((bytes / total) * 100)));
-  return { bytes, at: now, lastGrowthAt, percent, rate, stalled: now - lastGrowthAt > STALL_MS };
+  return { bytes, at: now, lastGrowthAt, percent, rate, stalled: now - lastGrowthAt > stallMs };
 }
 
 // Fill of a transfer bar. A failed job shows a full red bar (it may have failed before the first byte).

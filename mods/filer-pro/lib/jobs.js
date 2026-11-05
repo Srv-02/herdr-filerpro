@@ -1,7 +1,7 @@
 // Job manager: one `transfer.sh` run per job in its own invisible hc terminal. The manager only
 // starts it, polls the temp size and the terminal state, and settles the end state. Pure: every
 // herdr API arrives through `deps` (exec, hc, readTextFile, getShared, setShared, notify, now,
-// newId, appHome, home). Jobs live in shared("filer-pro.jobs") as a plain object id -> job.
+// newId, appHome, home; optional settings() -> the config of lib/config.js, read at each use). Jobs live in shared("filer-pro.jobs") as a plain object id -> job.
 import { keepBothName, tempName, joinPath, parentOf, baseName, nameKey } from "./names.js";
 import { sshTarget } from "./machines.js";
 import { explainError, cleanText } from "./errors.js";
@@ -11,10 +11,21 @@ import { SIZE_SCRIPT, parseSize } from "./sizes.js";
 import { progressOf } from "./progress.js";
 import { LINKS_SCRIPT, parseLinks, linkWarning } from "./links.js";
 import { MOUNT_FN, normalizePath } from "./fileops.js";
+import { numbers } from "./settings.js";
 
 const KEY = "filer-pro.jobs";
 const SIZE_LIMIT_MS = 25_000;
-const KEEP_DONE_MS = 10_000;
+export const KEEP_DONE_MS = 10_000;
+
+// The SSH options for transfer.sh (FILER_PRO_SSH_*): an `env` prefix for the hc run argv, only when a value differs from
+// the default, so a config without them runs exactly the command of before. The values are whole numbers (numbers()),
+// and transfer.sh accepts digits only, because it word-splits them into the ssh command line.
+const SSH_ENV = [["ssh_connect_timeout", "FILER_PRO_SSH_CONNECT_TIMEOUT"], ["ssh_alive_interval", "FILER_PRO_SSH_ALIVE_INTERVAL"], ["ssh_alive_count", "FILER_PRO_SSH_ALIVE_COUNT"]];
+export function sshEnv(limits) {
+  const plain = numbers(null);
+  if (SSH_ENV.every(([k]) => limits[k] === plain[k])) return [];
+  return ["env", ...SSH_ENV.map(([k, name]) => `${name}=${limits[k]}`)];
+}
 
 // `x <path>`: prints y when the path exists (also as a dangling link), d when it is a directory (also through a link),
 // l when it is a symlink.
@@ -58,6 +69,8 @@ const OLD_COPY_LEFT = /(?:^|\n)Warning: could not fully remove old copy: ([\s\S]
 
 export function createJobs(deps) {
   const { exec, hc, readTextFile, getShared, setShared, notify, now, newId, appHome, home } = deps;
+  // The numbers of lib/settings.js, checked again here (whole numbers in range, else the default).
+  const limits = () => numbers(deps.settings?.() ?? null);
   const mountTables = deps.mountTables ?? []; // [infoPath, mountPath] for REPLACE_CHECK_SCRIPT, tests only
 
   const all = () => getShared(KEY) || {};
@@ -259,6 +272,7 @@ export function createJobs(deps) {
       await exec("mkdir", ["-p", `${appHome()}/filer-pro/jobs`], { on: null });
       const r = await hc([
         "run", "--bg", "--json", "--no-parent", "--no-notify", "--name", `fs-${id}`, "--",
+        ...sshEnv(limits()),
         "sh", `${appHome()}/mods/filer-pro/bin/transfer.sh`,
         direction, job.mode, t.target ?? "-", src, job.dest, job.temp, statusFile, platform.trashDir(home()),
       ]);
@@ -339,7 +353,7 @@ export function createJobs(deps) {
       const size = await measure(snap.temp, destOn(snap.direction, snap.machine));
       const cur = get(snap.id);
       if (cur?.state !== "running") continue;
-      const p = progressOf({ bytes: cur.bytes, at: cur.at, lastGrowthAt: cur.lastGrowthAt, rate: cur.rate }, size ?? cur.bytes, cur.total, now());
+      const p = progressOf({ bytes: cur.bytes, at: cur.at, lastGrowthAt: cur.lastGrowthAt, rate: cur.rate }, size ?? cur.bytes, cur.total, now(), limits().stall_seconds * 1000);
       // A missing temp (not created yet, or already moved away while finalizing) is no stall.
       const stalled = size !== null && p.stalled;
       const lastGrowthAt = size === null ? p.at : p.lastGrowthAt;
@@ -368,10 +382,10 @@ export function createJobs(deps) {
     }
   }
 
-  function clearFinished() {
+  function clearFinished(keepMs = KEEP_DONE_MS) {
     const next = {};
     for (const [id, j] of Object.entries(all())) {
-      const old = (j.state === "done" || j.state === "cancelled") && now() - j.finishedAt > KEEP_DONE_MS;
+      const old = (j.state === "done" || j.state === "cancelled") && now() - j.finishedAt > keepMs;
       if (!old) next[id] = j;
     }
     setShared(KEY, next);

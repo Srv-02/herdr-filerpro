@@ -3,7 +3,7 @@
 // The PDF is parsed by the system's PDFKit inside osascript: path, page and target travel only as arguments.
 import { extOf } from "../lib/langs.js";
 import { badSpelling } from "../lib/fileops.js";
-import { cacheKey, dimensions, createCache, timeoutHint, loadDir, DIR, PROBE_SCRIPT } from "./images.js";
+import { cacheKey, dimensions, createCache, timeoutHint, loadDir, mb, DIR, PROBE_SCRIPT, CACHE_LIMIT } from "./images.js";
 
 export const MAX_PDF_LOCAL = 100 * 1024 * 1024, MAX_PDF_REMOTE = 20 * 1024 * 1024;
 
@@ -59,7 +59,8 @@ export function createPdfs({ exec, hc, exists, unlink, mkdir, readFile, appHome,
   const cache = createCache({ exec, hc, unlink, rand, what: "PDF" });
   // { kind: "pdf", path, page, pages, width, height } (path relative to appHome, width and height in points: PNG pixels / 2)
   // or { error, final, load?, key? }. `pages` from an earlier result lets a cached page skip osascript.
-  async function load({ on, path, page = 1, pages = null, force = false }) {
+  // maxLocal, maxRemote, cacheLimit: bytes from the settings (pdf_local_max_mb, pdf_remote_max_mb, image_cache_mb), per call.
+  async function load({ on, path, page = 1, pages = null, force = false, maxLocal = MAX_PDF_LOCAL, maxRemote = MAX_PDF_REMOTE, cacheLimit = CACHE_LIMIT }) {
     if (badSpelling(path)) return { error: 'Path must not contain ".", ".." or "//"' };
     if (platform !== "macos") return { error: "PDF preview needs macOS", final: true };
     const cannot = (e) => ({ error: `Cannot load this PDF: ${oneLine(e?.message ?? e) ?? "unknown error"}`, final: true });
@@ -70,13 +71,13 @@ export function createPdfs({ exec, hc, exists, unlink, mkdir, readFile, appHome,
     if (!(size >= 0)) return { error: "This file is no longer available", final: true };
     const bytes = Uint8Array.from(rest.join(" ").match(/\b[0-9a-f]{2}\b/g) ?? [], (h) => parseInt(h, 16));
     if (!isPdf(bytes)) return { error: `File header is not ${extOf(path).toUpperCase()} · no preview`, final: true };
-    const limit = on ? MAX_PDF_REMOTE : MAX_PDF_LOCAL, key = cacheKey({ on, path, size, mtime }), dir = `${appHome()}/${DIR}`;
+    const limit = on ? maxRemote : maxLocal, key = cacheKey({ on, path, size, mtime }), dir = `${appHome()}/${DIR}`;
     // The source to raster: the file itself, the fetched copy in the cache, or the transfer job's copy in loads/<key>/.
     let src = path, fetched = null;
     const loaded = `${appHome()}/${loadDir(key)}/${key}.pdf`; // the transfer job writes this name (jobs.start `as`)
     if (on && (await exists(loaded))) src = loaded; // at any size: e.g. after a timed-out download
     else if (size > limit) {
-      if (on || !force) return { error: `File is larger than ${limit / 1024 / 1024} MB`, load: true, final: true, key, name: `${key}.pdf` };
+      if (on || !force) return { error: `File is larger than ${mb(limit)} MB`, load: true, final: true, key, name: `${key}.pdf` };
     } else if (on) {
       src = `${dir}/${key}.pdf`;
       fetched = `${key}.pdf`; // always in the keep list while it is the source, not only when fetched now (review W2)
@@ -97,7 +98,7 @@ export function createPdfs({ exec, hc, exists, unlink, mkdir, readFile, appHome,
     catch (e) { return timedOut(e) ? { error: "Rendering timed out (30 s limit) · no preview", final: true } : cannot(e); }
     const out = parseRender(r.stdout, r.code === 0 ? "" : r.stderr);
     if (out.error) return out;
-    await cache.evict(dir, [name, ...(fetched ? [fetched] : [])]); // the PNG sits under the requested page's name, also when PDFKit clamped the page
+    await cache.evict(dir, [name, ...(fetched ? [fetched] : [])], cacheLimit); // the PNG sits under the requested page's name, also when PDFKit clamped the page
     return { kind: "pdf", path: rel, page: out.page, pages: out.pages, width: Math.round(out.width / 2), height: Math.round(out.height / 2) };
   }
   return { load };

@@ -548,3 +548,47 @@ test("sniff and dimensions need no TextDecoder", () => {
     assert.deepEqual(dimensions(svg), { width: 10, height: 20 });
   } finally { globalThis.TextDecoder = saved; }
 });
+
+// Settings (#3): limits per call, so a changed setting applies to the next file without a restart.
+test("settings: maxImage per call decides the Load hint and names the configured size", async () => {
+  const MB = 1024 * 1024;
+  const f = fake(() => ({ code: 0, stdout: probeOut(2 * MB, 1, PNG(300, 200)), stderr: "" }));
+  const r = await f.make().load({ on: null, path: "/Users/m/big.png", maxImage: MB });
+  assert.deepEqual([r.error, r.load], ["File is larger than 1 MB", true]);
+  const g = fake(() => ({ code: 0, stdout: probeOut(30 * MB, 1, ascii('<svg viewBox="0 0 1 1">')), stderr: "" }));
+  assert.deepEqual(await g.make().load({ on: null, path: "/Users/m/big.svg", maxImage: 25 * MB }), { error: "File is larger than 25 MB · no preview", final: true });
+});
+
+test("settings: cacheLimit per call decides the eviction", async () => {
+  const name = `${cacheKey({ on: "box", path: "/home/u/pic.png", size: 29, mtime: 1 })}.png`;
+  const f = fake((c) => {
+    if (c.args[1] === PROBE_SCRIPT) return { code: 0, stdout: probeOut(29, 1, PNG(300, 200)), stderr: "" };
+    if (c.args[1] === LIST_SCRIPT) return { code: 0, stdout: `total 8\n-rw-r--r--  1 501  20  29 Nov  4 15:00 ${name}\n-rw-r--r--  1 501  20  60000000 Nov  4 14:00 aaaa.png\n`, stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  });
+  await f.make().load({ on: "box", path: "/home/u/pic.png", cacheLimit: 100 * 1024 * 1024 });
+  assert.deepEqual(f.kinds(), ["probe", "hc", "scp", "list"], "under a 100 MB cache nothing is removed");
+});
+
+test("settings: svgCheck false draws an SVG that fails the safety check, true (default) does not", async () => {
+  const unsafe = ascii('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><style>svg{width:1e5px}</style><foreignObject/></svg>');
+  assert.equal(dimensions(unsafe), null);
+  assert.equal(dimensions(unsafe, { svgCheck: true }), null);
+  assert.deepEqual(dimensions(unsafe, { svgCheck: false }), { width: 24, height: 24 });
+  const load = async (svgCheck) => {
+    const f = fake((c) => c.args[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(unsafe.length, 1, unsafe), stderr: "" } : { code: 0, stdout: "", stderr: "" });
+    return f.make().load({ on: null, path: "/Users/m/x.svg", ...(svgCheck === undefined ? {} : { svgCheck }) });
+  };
+  assert.equal((await load(undefined)).error, "Image size unknown · no preview");
+  assert.equal((await load(true)).error, "Image size unknown · no preview");
+  assert.equal((await load(false)).kind, "image");
+  // The 64 KiB scan limit exists only for the check: relaxed, a larger SVG is drawn; safe, it is still refused.
+  const big = ascii('<svg viewBox="0 0 24 24"></svg>');
+  const h = (svgCheck) => fake((c) => c.args[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(70000, 1, big), stderr: "" } : { code: 0, stdout: "", stderr: "" }).make().load({ on: null, path: "/Users/m/big.svg", svgCheck });
+  assert.ok((await h(true)).error);
+  assert.equal((await h(false)).kind, "image");
+  // The 100-megapixel limit still holds on the attribute size.
+  const huge = ascii('<svg width="20000" height="10000"><foreignObject/></svg>');
+  const k = fake((c) => c.args[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(huge.length, 1, huge), stderr: "" } : { code: 0, stdout: "", stderr: "" });
+  assert.equal((await k.make().load({ on: null, path: "/Users/m/h.svg", svgCheck: false })).error, "Image has more than 100 megapixels · no preview");
+});
