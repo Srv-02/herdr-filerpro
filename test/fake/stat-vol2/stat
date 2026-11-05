@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake stat for tests: every path below a folder named vol2 lies on device 2, the rest on device 1.
+case "$*" in */vol2/*|*/vol2) echo 2 ;; *) echo 1 ;; esac

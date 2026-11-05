@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake ssh for tests: like real ssh, joins everything after the host with
+# spaces and hands that single string to a shell. The remote side finds the
+# fake cp first (a remote copy runs plain "cp" there).
+# FAKE_LOGIN: the remote login shell that gets the command line (default sh), e.g. /bin/csh.
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o|-i|-p|-F|-J|-l) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+shift # host
+joined=$*
+PATH="$(dirname "$0"):$PATH"
+exec "${FAKE_LOGIN:-sh}" -c "$joined"

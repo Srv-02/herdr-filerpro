@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fake ssh whose remote command outlives the client: a dropped connection that does not stop it.
+# FAKE_LOGIN: the remote login shell that gets the command line (default sh), e.g. /bin/csh.
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o|-i|-p|-F|-J|-l) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+shift # host
+joined=$*
+PATH="$(dirname "$0"):$PATH"
+# A background job gets /dev/null as stdin by default; the script arrives on stdin, so pass it on.
+exec 3<&0
+"${FAKE_LOGIN:-sh}" -c "$joined" <&3 &
+child=$!
+trap 'exit 143' HUP INT TERM
+wait "$child"

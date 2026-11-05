@@ -1,0 +1,12 @@
+{
+  "name": "filer-pro",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "lint": "node scripts/lint.mjs",
+    "bench": "node --test \"test/bench/*.test.js\"",
+    "check:preview": "node scripts/check-preview.mjs"
+  }
+}

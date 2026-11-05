@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fake mv for tests: the first move whose last argument is FAKE_RACE_DEST fails, after an entry appeared
+# there (FAKE_RACE_KIND dir or file; none: nothing appears). FAKE_RACE_FLAG marks that it happened once.
+# Every other call goes to the real mv.
+last=; for a in "$@"; do last=$a; done
+if [ -n "$FAKE_RACE_DEST" ] && [ "$last" = "$FAKE_RACE_DEST" ] && [ ! -e "$FAKE_RACE_FLAG" ]; then
+  : > "$FAKE_RACE_FLAG"
+  case $FAKE_RACE_KIND in dir) mkdir -- "$last" ;; file) : > "$last" ;; esac
+  echo "mv: fake failure" >&2; exit 1
+fi
+exec /bin/mv "$@"

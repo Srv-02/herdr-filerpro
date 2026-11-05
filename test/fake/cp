@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake cp for tests: copies, then waits (FAKE_SLEEP) so a cancel can hit a transfer that has its temp
+# in place; FAKE_FAIL makes it fail with that message instead. A signal ends the wait without orphaning the sleep.
+[ -z "$FAKE_FAIL" ] || { echo "$FAKE_FAIL" >&2; exit 1; }
+/bin/cp "$@" || exit 1
+if [ -n "$FAKE_SLEEP" ]; then
+  sp=
+  trap '[ -n "$sp" ] && kill "$sp" 2>/dev/null; exit 143' HUP INT TERM
+  sleep "$FAKE_SLEEP" &
+  sp=$!
+  wait "$sp"
+fi

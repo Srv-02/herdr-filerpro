@@ -1,0 +1,11 @@
+workbench/
+tmp/
+build/
+node_modules/
+.superpowers/
+test/check-preview/preview/
+test/check-preview/lib/
+test/check-preview/icons.js
+gpui-kit.d.ts
+jsconfig.json
+.DS_Store
