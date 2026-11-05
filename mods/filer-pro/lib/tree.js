@@ -1,5 +1,6 @@
 // Bookkeeping of the file tree. Pure.
 import { psQuoted } from "./names.js";
+import { group } from "./numbers.js";
 
 // `files <dir> <limit>`: NUL-separated kind (d/f) and name of each entry but .git, at most <limit> + 1 of them (one past
 // the limit tells main.js that the folder was cut); ends with `test -d`, see folderMissing.
@@ -12,7 +13,7 @@ export function psListCommand(path, limit) {
   return "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git' | Select-Object -First " + (Math.trunc(limit) + 1) + " | ForEach-Object { @{ name=$_.Name; dir=($_.PSIsContainer -and (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($_.Target -and [IO.Directory]::Exists(([IO.Path]::Combine([IO.Path]::GetDirectoryName($_.FullName), $_.Target[0])))))) } }) | ConvertTo-Json -Compress } '" + psQuoted(path) + "'";
 }
 
-export const limitText = (perFolder, total) => `File list limited to ${perFolder.toLocaleString("en-US")} entries per folder and ${total.toLocaleString("en-US")} total`;
+export const limitText = (perFolder, total) => `File list limited to ${group(perFolder)} entries per folder and ${group(total)} total`;
 
 // A folder that was open is gone (renamed or deleted): it and everything below it leave the open
 // folders and the loaded entries, without an error message.

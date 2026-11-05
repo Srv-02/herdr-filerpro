@@ -27,5 +27,17 @@ for (const [cmd, args, file] of checks) {
     console.error(`FAIL ${path.relative(root, file)}\n${r.stderr || r.error || ""}`);
   }
 }
-console.log(`lint: ${checks.length - failed}/${checks.length} ok`);
+
+// herdr runs the mod on QuickJS-ng without Intl: toLocaleString gives plain digits there. Use group() from
+// lib/numbers.js. jsFiles already leaves out the vendored mermaid.bundle.js.
+const modFiles = jsFiles(path.join(root, "mods/filer-pro"));
+for (const file of modFiles) {
+  const hits = fs.readFileSync(file, "utf8").split("\n").flatMap((line, i) => (/\btoLocaleString\b/.test(line) ? [i + 1] : []));
+  if (hits.length) {
+    failed++;
+    console.error(`FAIL ${path.relative(root, file)}:${hits.join(",")}: toLocaleString (no Intl in herdr), use group() from lib/numbers.js`);
+  }
+}
+const total = checks.length + modFiles.length;
+console.log(`lint: ${total - failed}/${total} ok`);
 process.exit(failed ? 1 : 0);
