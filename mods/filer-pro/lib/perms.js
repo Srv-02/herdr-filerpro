@@ -136,18 +136,25 @@ printf '%s\\0' "$T" "$M" "$U" "$G" "$UN" "$GN" "$(id -u)"`;
 // 3: no such entry, 6: the path is a symbolic link (never changed, also not through the link), 7: recursive on a
 // non-folder. Recursive: find -P, so no link is followed, and every link is skipped (chmod would follow it on BSD);
 // -depth changes the contents before the folder, so a folder that loses its execute bit is left last.
+// Residual race: between find's type check and chmod an entry could be swapped for a link by someone who can write in the
+// tree. BSD/macOS chmod -h then changes the link itself, never its target. GNU chmod has no such flag (and its own -R
+// would stop at a folder that lost its execute bit), so there the window stays; see the README.
 export const CHMOD_SCRIPT = `m=$1 p=$2 r=$3
+${STAT_FN}
 case $m in [0-7][0-7][0-7][0-7][0-7]) ;; *) echo "invalid mode" >&2; exit 2 ;; esac
 case $p in /*) ;; *) echo "path must be absolute" >&2; exit 2 ;; esac
 if [ -L "$p" ]; then echo "Symbolic links are not changed" >&2; exit 6; fi
 [ -e "$p" ] || exit 3
 if [ "$r" = 1 ]; then
   [ -d "$p" ] || exit 7
-  find -P "$p" ! -type l -depth -exec chmod -- "$m" {} + || exit 1
+  if [ $g = 1 ]; then
+    find -P "$p" ! -type l -depth -exec chmod -- "$m" {} + || exit 1
+  else
+    find -P "$p" ! -type l -depth -exec chmod -h -- "$m" {} + || exit 1
+  fi
 else
   chmod -- "$m" "$p" || exit 1
 fi
-${STAT_FN}
 st "$p" && echo "$M"`;
 
 // `x <path>`: the number of entries (the folder itself, files, folders; links are skipped) up to COUNT_LIMIT + 1. find stops

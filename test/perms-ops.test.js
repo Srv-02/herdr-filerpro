@@ -71,7 +71,9 @@ test("permissions: a missing entry, a dangling link and a relative path give mes
   const o = ops(home).ops;
   assert.equal((await o.permissions({ on: null, path: `${d}/nope` })).ok, false);
   assert.match((await o.permissions({ on: null, path: `${d}/nope` })).error, /No such file or folder/);
-  assert.equal((await o.permissions({ on: null, path: `${d}/Users/m/proj/dead` })).ok, false);
+  // GNU stat -L fails on a dangling link; BSD stat -L falls back to the link itself. Either way nothing is changeable.
+  const dead = await o.permissions({ on: null, path: `${d}/Users/m/proj/dead` });
+  assert.ok(dead.ok === false || dead.isLink === true);
   assert.deepEqual(await o.permissions({ on: null, path: "rel" }), { ok: false, error: "path must be absolute" });
 });
 
@@ -266,4 +268,19 @@ case $3 in %p) echo "$BSD_MODE" ;; %u) echo 501 ;; %g) echo 20 ;; %Su) echo alic
     assert.equal(parseInt(f[1], 8), want, raw);
     assert.deepEqual([f[2], f[3], f[4], f[5]], ["501", "20", "alice", "staff"]);
   }
+});
+
+test("CHMOD_SCRIPT recursive: BSD chmod gets -h (a swapped-in link is changed itself, not its target), GNU does not", () => {
+  const { d, root } = tree();
+  const bin = `${d}/bin2`;
+  fs.mkdirSync(bin);
+  fs.writeFileSync(`${bin}/chmod`, `#!/bin/sh\necho "$@" >> "${d}/chmod.log"\n`, { mode: 0o755 });
+  fs.writeFileSync(`${bin}/stat`, `#!/bin/sh\nif [ "$BSD" = 1 ]; then [ "$1" = -c ] && exit 1; case $3 in %p) echo 40755 ;; *) echo 1 ;; esac; else exec /usr/bin/stat "$@"; fi\n`, { mode: 0o755 });
+  const run = (bsd) => spawnSync("sh", ["-c", CHMOD_SCRIPT, "x", "00750", `${root}/sub`, "1"], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BSD: bsd } });
+  run("1");
+  const bsdLog = fs.readFileSync(`${d}/chmod.log`, "utf8");
+  fs.rmSync(`${d}/chmod.log`);
+  if (fs.existsSync("/usr/bin/stat")) run("0");
+  assert.match(bsdLog, /^-h -- 00750 /m);
+  if (fs.existsSync(`${d}/chmod.log`)) assert.doesNotMatch(fs.readFileSync(`${d}/chmod.log`, "utf8"), /-h/);
 });
