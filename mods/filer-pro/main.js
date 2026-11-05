@@ -8,6 +8,7 @@ import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
 import { claim, processRequest, handleRequest, closeAnswer, panelPlan, answerShow, openResult, modeResult } from "./lib/requests.js";
 import { loadConfig } from "./lib/config.js";
 import { editInTerminal, openInEditor } from "./lib/editors.js";
+import { createUpdateGate, updateCheck, fetchLatest, localVersion, updateHint } from "./lib/update.js";
 import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
@@ -115,6 +116,7 @@ export default class FilerPro extends View {
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null; this.perf = null; this.diagrams = null;
     cx.spawn(async (cx) => {
       const cfg = await loadConfig(readTextFile, appHome, home);
+      this.version = await this.readVersion();
       if (cfg.perf) await this.startPerf(cx);
     });
     this.saved = new Map();
@@ -144,6 +146,7 @@ export default class FilerPro extends View {
     const wakers = [];
     const nap = () => new Promise((resolve) => wakers.push(resolve));
     let holding = false, busy = false, scanning = false, again = false;
+    const updates = createUpdateGate(Date.now);
 
     const scan = async () => {
       if (scanning) { again = true; return; }
@@ -196,9 +199,10 @@ export default class FilerPro extends View {
     const beat = () => {
       wakers.splice(0).forEach((w) => w());
       const next = leaseNext(shared("filer-pro.lease"), me, Date.now());
-      if (!next.mine) { holding = false; return; }
+      if (!next.mine) { holding = false; updates.take(false); return; }
       if (next.write) setShared("filer-pro.lease", { owner: next.owner, at: next.at });
       if (!cleaned) { cleaned = true; for (const k of staleLegacyKeys(shared)) setShared(k, null); }
+      if (updates.take(true)) cx.spawn(async (cx) => { try { await this.updatePass(cx); } catch {} finally { updates.done(); } });
       if (holding) { scan().catch(() => {}); return; }
       holding = true;
       busy = true;
@@ -230,6 +234,20 @@ export default class FilerPro extends View {
         else if (command === "reveal") this.revealLast();
       }
     });
+  }
+
+  // The installed version from this mod's own mod.json (null when unreadable: then no check and no hint).
+  readVersion() {
+    return readTextFile(`${appHome()}/${BASE}/mod.json`).then(localVersion, () => null);
+  }
+
+  // Lease holder, at most hourly (lib/update.js): reads the config fresh, so update_check false means no request;
+  // a request goes out only when the last one is 24 h old. The result goes to shared, for every panel copy.
+  async updatePass(cx, fetchFn = globalThis.fetch) {
+    const cfg = await loadConfig(readTextFile, appHome, home);
+    const local = cfg.update_check ? await this.readVersion() : null;
+    const out = await updateCheck({ enabled: cfg.update_check, state: shared("filer-pro.update"), local, now: Date.now(), fetch: () => fetchLatest(fetchFn, (ms) => cx.sleep(ms)) });
+    if (out.state !== undefined) setShared("filer-pro.update", out.state);
   }
 
   // The Filer Pro button beside the tab bar's Files and Changes (props { button: true }).
@@ -737,11 +755,13 @@ export default class FilerPro extends View {
     this.pollReload(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
+    const update = updateHint(shared("filer-pro.update"), this.version);
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Filer Pro"))
+        .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
         .children(this.previewTools(t))
         .when(Boolean(this.file), el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t,

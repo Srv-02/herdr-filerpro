@@ -1,6 +1,6 @@
 import { splitCommand, TERMINAL_EDITORS, GUI_EDITORS, DEFAULT_TERMINAL_EDITOR, DEFAULT_GUI_EDITOR } from "./editors.js";
 
-// Config: appHome()/filer-pro.json. Keys: download_folder, preview, mermaid, perf, terminal_editor,
+// Config: appHome()/filer-pro.json. Keys: download_folder, preview, mermaid, perf, update_check, terminal_editor,
 // terminal_editors, gui_editor, gui_editors. A missing or broken file, or a value of the wrong type, means the default.
 
 const trimmed = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
@@ -54,7 +54,7 @@ export async function loadConfig(readTextFile, appHome, home) {
     folder = null; cfg = null;
   }
   const flag = (key, fallbackValue) => (cfg && typeof cfg[key] === "boolean" ? cfg[key] : fallbackValue);
-  const flags = { preview: flag("preview", true), mermaid: flag("mermaid", true), perf: flag("perf", false), ...editors(cfg) };
+  const flags = { preview: flag("preview", true), mermaid: flag("mermaid", true), perf: flag("perf", false), update_check: flag("update_check", true), ...editors(cfg) };
   if (folder == null) return { download_folder: fallback, ...flags };
   if (folder === "~" || folder.startsWith("~/")) folder = home() + folder.slice(1);
   return { download_folder: folder, ...flags };

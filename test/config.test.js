@@ -22,7 +22,7 @@ test("reader that rejects gives the default", async () => {
 });
 test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
-    download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false,
+    download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
@@ -94,4 +94,11 @@ test("templates without the file are dropped: a GUI template needs {path} or {pa
     { name: "RemoteNoPath", local: "r {path}", remote: null },
     { name: "Uri", local: "u file://{path_uri}", remote: "u ssh://{target}{path_uri}" },
   ]);
+});
+
+test("update_check is on by default and off only with false", async () => {
+  assert.equal((await loadConfig(reader(null), appHome, home)).update_check, true);
+  assert.equal((await loadConfig(reader("{nope"), appHome, home)).update_check, true);
+  assert.equal((await loadConfig(reader('{"update_check":"no"}'), appHome, home)).update_check, true);
+  assert.equal((await loadConfig(reader('{"update_check":false}'), appHome, home)).update_check, false);
 });
