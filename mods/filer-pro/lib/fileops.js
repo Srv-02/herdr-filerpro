@@ -2,6 +2,7 @@
 import { platform } from "./platform.js";
 import { baseName, parentOf, joinPath, nameKey } from "./names.js";
 import { explainError, cleanText } from "./errors.js";
+import { PROBE_SCRIPT, CHMOD_SCRIPT, COUNT_SCRIPT, chmodArg, parseProbe, parseCount, parseModeOut } from "./perms.js";
 
 // Newline, tab and the other control characters (0x00-0x1F, 0x7F): never deleted or renamed through here.
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -426,7 +427,63 @@ export function createFileOps({ exec, trashBin = TRASH_BIN }) {
     return { ok: true, trashed: true, ...(moved ? { trash_path: moved[1] } : {}), ...done };
   }
 
-  return { check, rename, remove, mkdir };
+  // Permissions (lib/perms.js). Values are argv only. Reading and a single entry need no guard; a recursive change goes
+  // through check() like delete and rename (verb "change permissions of"), and runs on the physical path it returns.
+  async function permissions({ on = null, path }) {
+    if (typeof path !== "string" || !path.startsWith("/")) return { ok: false, error: "path must be absolute" };
+    if (CONTROL.test(path)) return { ok: false, error: CONTROL_ERROR };
+    let res;
+    try {
+      res = await run("sh", ["-c", PROBE_SCRIPT, "x", normalizePath(path)], on);
+    } catch (e) {
+      return failure(e, on);
+    }
+    if (res.code === 3) return { ok: false, error: `No such file or folder: ${path}` };
+    if (res.code !== 0) return { ok: false, error: explainError(res.stderr, on, "Could not read the permissions") };
+    const probe = parseProbe(res.stdout);
+    return probe ? { ok: true, ...probe } : { ok: false, error: "Could not read the permissions" };
+  }
+
+  // The entries a recursive change would touch (up to COUNT_LIMIT + 1), or null when that cannot be told.
+  async function permissionsCount({ on = null, path }) {
+    try {
+      const res = await run("sh", ["-c", COUNT_SCRIPT, "x", normalizePath(path)], on);
+      return res.code === 0 ? parseCount(res.stdout) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // mode: the integer (0 to 0o7777) to set. Answer: { ok, mode (re-read afterwards, null if that failed), requested,
+  // mismatch (the system set something else, for example BSD refuses the sticky bit on a file, Linux drops setgid without the group) }.
+  async function chmod({ on = null, path, root, mode, recursive = false }) {
+    let arg;
+    try { arg = chmodArg(mode); } catch { return { ok: false, error: "Invalid permissions" }; }
+    if (typeof path !== "string" || !path.startsWith("/")) return { ok: false, error: "path must be absolute" };
+    if (CONTROL.test(path)) return { ok: false, error: CONTROL_ERROR };
+    let target = normalizePath(path);
+    if (recursive) {
+      const c = await check({ on, path, root, verb: "change permissions of" });
+      if (!c.ok) return c;
+      target = c.path;
+    }
+    let res;
+    try {
+      res = await run("sh", ["-c", CHMOD_SCRIPT, "x", arg, target, recursive ? "1" : "0"], on);
+    } catch (e) {
+      return failure(e, on);
+    }
+    if (res.code === 3) return { ok: false, error: `No such file or folder: ${target}` };
+    if (res.code === 6) return { ok: false, error: "Symbolic links are not changed" };
+    if (res.code === 7) return { ok: false, error: "Only a folder can be changed with its contents" };
+    // Not explainError's macOS privacy text: for chmod this means "not the owner" or a locked item.
+    if (/Operation not permitted/.test(res.stderr ?? "")) return { ok: false, error: "Not the owner, permissions cannot be changed (or the item is locked or protected)" };
+    if (res.code !== 0) return { ok: false, error: explainError(res.stderr, on, "Could not change the permissions") };
+    const actual = parseModeOut(res.stdout);
+    return { ok: true, mode: actual, requested: mode, mismatch: actual !== mode };
+  }
+
+  return { check, rename, remove, mkdir, permissions, permissionsCount, chmod };
 }
 
 // The toast after a successful UI request; null where there is nothing to say.

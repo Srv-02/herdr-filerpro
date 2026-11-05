@@ -2,15 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "../mods/filer-pro/lib/menuitems.js";
 const on = { paste: { enabled: true, reason: null } }, off = { paste: { enabled: false, reason: "Nothing to paste" } };
-test("row menu lists fifteen entries in five groups, Open first and Delete last", () => {
+test("row menu lists sixteen entries in five groups, Open first and Delete last", () => {
   const items = rowMenuItems(on);
   assert.deepEqual(items.filter((i) => !i.separator).map((i) => i.label), [
     "Open", "Open in Preview", "Open in Editor", "Edit in Terminal", "Show in Finder", "Download", "Download to…", "Copy", "Cut", "Paste",
-    "Copy Path", "Copy Relative Path", "New Folder…", "Rename…", "Delete…",
+    "Copy Path", "Copy Relative Path", "New Folder…", "Rename…", "Permissions…", "Delete…",
   ]);
   assert.deepEqual(items.map((i) => (i.separator ? "|" : i.action)), [
     "open", "open_preview", "open_editor", "edit_terminal", "reveal", "|", "download", "download_to", "|", "copy", "cut", "paste", "|",
-    "copy_path", "copy_relative_path", "|", "new_folder", "rename", "delete",
+    "copy_path", "copy_relative_path", "|", "new_folder", "rename", "permissions", "delete",
   ]);
   assert.equal(items.find((i) => i.action === "open_preview").id, "filer-pro-menu-open-preview");
   assert.equal(items.find((i) => i.action === "copy_relative_path").id, "filer-pro-menu-copy-relative-path");
@@ -55,11 +55,29 @@ test("Show in Finder is dimmed on a machine for files and folders, Open and Open
     assert.equal(enabled(rowMenuItems({ ...on, isDir, remote: false }), "reveal"), true);
   }
   assert.equal(enabled(rowMenuItems(on), "reveal"), true); // remote absent: local
-  assert.equal(menuHeight(rowMenuItems({ ...on, remote: true })), 460);
+  assert.equal(menuHeight(rowMenuItems({ ...on, remote: true })), 488);
 });
 test("menu height matches the item count", () => {
-  assert.equal(menuHeight(rowMenuItems(on)), 460);
-  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 460);
+  assert.equal(menuHeight(rowMenuItems(on)), 488);
+  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 488);
   assert.equal(menuHeight(rootMenuItems(on)), 103);
   assert.equal(MENU_WIDTH, 200);
+});
+
+test("Permissions… sits between Rename… and Delete…, for files and folders, local and remote", () => {
+  for (const state of [on, { ...on, isDir: true }, { ...on, remote: true }, { ...on, isDir: true, remote: true }, { ...on, isDir: true, bundle: true }]) {
+    const items = rowMenuItems(state).filter((i) => !i.separator);
+    const i = items.findIndex((x) => x.action === "permissions");
+    assert.deepEqual(items.slice(i - 1, i + 2).map((x) => x.action), ["rename", "permissions", "delete"]);
+    assert.equal(items[i].id, "filer-pro-menu-permissions");
+    assert.equal(items[i].enabled, true);
+  }
+});
+
+test("Permissions… is dimmed on this computer when it is Windows (no chmod there), not on a machine", () => {
+  const enabled = (state) => rowMenuItems(state).find((i) => i.action === "permissions").enabled;
+  assert.equal(enabled({ ...on, windows: true }), false);
+  assert.equal(enabled({ ...on, windows: true, remote: true }), true);
+  assert.equal(enabled({ ...on, windows: false }), true);
+  assert.equal(menuHeight(rowMenuItems({ ...on, windows: true })), 488, "the height does not depend on it");
 });
