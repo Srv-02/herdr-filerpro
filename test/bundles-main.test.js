@@ -253,9 +253,11 @@ test("menu: Show Package Contents asks the panel to expand the package, Hide col
   self.showPackage("Example.app", true, cx);
   store["filer-pro.package"] = { id: "p3", machine: null, path: `${ROOT}/Example.app`, show: false };
   self.render(cx);
+  await settle();
   assert.equal(self.folders.has("Example.app"), false);
   self.showPackage("Example.app", true, cx);
   self.render(cx);
+  await settle();
   assert.equal(self.folders.has("Example.app"), true, "p3 is not applied twice");
 });
 
@@ -267,6 +269,7 @@ test("a package request for another machine or outside the shown folder is ignor
   self.render(cx);
   store["filer-pro.package"] = { id: "x2", machine: null, path: "/elsewhere/Example.app", show: true };
   self.render(cx);
+  await settle();
   assert.deepEqual([...self.packages], []);
   assert.equal(self.folders.has("Example.app"), false);
 });
@@ -301,4 +304,31 @@ test("an open request for a package does not read it as a file", async () => {
   await settle();
   assert.deepEqual(log.reads.filter((p) => p.includes("Example.app")), []);
   assert.match(self.fileError, /package/i);
+});
+
+// The real host throws when render calls cx.notify() (gpui-kit.d.ts Context.notify); the panel's render has to stay
+// free of it, else Show and Hide Package Contents flash an error toast.
+function renderCx() {
+  const cx = fakeCx();
+  cx.notify = () => { throw new Error("cx.notify() is not allowed during the `render` phase; request a re-render from an event handler instead"); };
+  return cx;
+}
+
+test("Show and Hide Package Contents are applied without cx.notify() during render", async () => {
+  const { store } = host();
+  const self = await loaded(fakeCx());
+  let notified = 0;
+  const rcx = renderCx();
+  rcx.spawn = (fn) => { const a = { ...fakeCx(), notify: () => { notified++; } }; const p = Promise.resolve().then(() => fn(a)); p.catch(() => {}); return p; };
+  store["filer-pro.package"] = { id: "r1", machine: null, path: `${ROOT}/Example.app`, show: true };
+  self.render(rcx);
+  await settle();
+  assert.equal(self.folders.has("Example.app"), true, "shown");
+  assert.ok(notified > 0, "redrawn from a task");
+  store["filer-pro.package"] = { id: "r2", machine: null, path: `${ROOT}/Example.app`, show: false };
+  notified = 0;
+  self.render(rcx);
+  await settle();
+  assert.equal(self.folders.has("Example.app"), false, "hidden again");
+  assert.ok(notified > 0, "redrawn from a task");
 });

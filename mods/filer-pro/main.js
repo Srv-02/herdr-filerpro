@@ -623,13 +623,14 @@ export default class FilerPro extends View {
   }
 
   // The menu copy asks through shared("filer-pro.package") = { id, machine, path, show }: this copy applies it once,
-  // when it shows that machine and a folder above the path.
+  // when it shows that machine and a folder above the path. Called from render, where cx.notify() throws (and the
+  // host shows that as an error toast): showPackage runs in a task, whose cx may redraw.
   pollPackage(cx) {
     const r = shared("filer-pro.package");
     if (!r?.id || r.id === this.packageSeen) return;
     this.packageSeen = r.id;
     const rel = expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on);
-    if (rel) this.showPackage(rel, r.show === true, cx);
+    if (rel) cx.spawn(async (cx) => this.showPackage(rel, r.show === true, cx));
   }
 
   // The loaded entry of a path relative to the root, or undefined.
