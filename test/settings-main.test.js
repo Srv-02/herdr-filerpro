@@ -47,7 +47,10 @@ const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true };
 
 // A fake host; `files` by path, shared values in `store`, every call logged.
 function host({ files = {}, store = {}, platform = "macos", props = {} } = {}) {
-  const log = { execs: [], writes: [], shared: [], overlays: [], closed: [], notes: [] };
+  const log = { execs: [], writes: [], shared: [], overlays: [], closed: [], notes: [], fetches: [] };
+  // A panel that init starts as lease holder runs the daily update pass with globalThis.fetch (main.js updatePass).
+  // GitHub answers at once with "no release": a real request would land in the store of a later test (issue #24).
+  globalThis.fetch = async (url) => { log.fetches.push(String(url)); return { status: 404 }; };
   globalThis.__impl = {
     props: () => props, appHome: () => "/app", home: () => "/home/u", window: () => ({ platform }),
     theme: () => new Proxy({}, { get: (_t, k) => String(k) }), settings: () => ({ dark: false, font_family: "mono" }),
@@ -270,9 +273,9 @@ test("settings: preview limits travel per call (source guard and loadLimits)", a
   assert.ok(body("show").includes("...this.loadLimits(cfg)") && body("turnPage").includes("...this.loadLimits()"), "images and PDFs, also when turning pages");
   assert.ok(body("renderDiagrams").includes("node: cfg.node_path") && body("renderDiagrams").includes("this.fileCfg"));
   const MB = 1024 * 1024;
-  assert.deepEqual(panel({}).loadLimits({ ...DEFAULTS, image_max_mb: 3, image_cache_mb: 70, pdf_local_max_mb: 8, pdf_remote_max_mb: 9, svg_check: false }),
-    { maxImage: 3 * MB, cacheLimit: 70 * MB, maxLocal: 8 * MB, maxRemote: 9 * MB, svgCheck: false });
-  assert.deepEqual(panel({}).loadLimits(), { maxImage: 20 * MB, cacheLimit: 50 * MB, maxLocal: 100 * MB, maxRemote: 20 * MB, svgCheck: true }, "defaults before a file was shown");
+  assert.deepEqual(panel({}).loadLimits({ ...DEFAULTS, image_max_mb: 3, image_cache_mb: 70, pdf_local_max_mb: 8, pdf_remote_max_mb: 9, svg_check: false, ssh_connect_timeout: 30, ssh_alive_interval: 5, ssh_alive_count: 9 }),
+    { maxImage: 3 * MB, cacheLimit: 70 * MB, maxLocal: 8 * MB, maxRemote: 9 * MB, svgCheck: false, ssh: { ssh_connect_timeout: 30, ssh_alive_interval: 5, ssh_alive_count: 9 } });
+  assert.deepEqual(panel({}).loadLimits(), { maxImage: 20 * MB, cacheLimit: 50 * MB, maxLocal: 100 * MB, maxRemote: 20 * MB, svgCheck: true, ssh: { ssh_connect_timeout: 15, ssh_alive_interval: 15, ssh_alive_count: 4 } }, "defaults before a file was shown");
 });
 
 test("settings: a file holding null is broken; non-default list settings reload the tree at the next tick", async () => {

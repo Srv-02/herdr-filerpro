@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDiagrams, NODE_CANDIDATES, NO_NODE } from "../mods/filer-pro/preview/diagrams.js";
 import { hash, colorsFor, FONT, RENDER_VERSION, MAX_DIAGRAM_CHARS } from "../mods/filer-pro/preview/mermaid.js";
+import { withoutIntl } from "./no-intl.js";
 
 const APP = "/Users/m/.config/herdr-app";
 const theme = { background: "#000000", foreground: "#ffffff", dim: "#888888", ansi4: "#0000ff", muted: "#999999", border: "#333333" };
@@ -116,9 +117,9 @@ test("a theme change (the color key no longer matches) stops the run the same wa
   assert.equal(f.execCalls.length, 1);
 });
 
-test("a fence over the limit does not render", async () => {
+test("a fence over the limit does not render; the limit is grouped without Intl (herdr's engine)", async () => {
   const f = fake(), parts = [part("x".repeat(MAX_DIAGRAM_CHARS + 1)), part("y")];
-  await f.make().renderAll(parts, theme, () => true, () => {});
+  await withoutIntl(() => f.make().renderAll(parts, theme, () => true, () => {}));
   assert.deepEqual(parts[0].diagram, { error: "Diagram too large (limit 20,000 characters)" });
   assert.equal(f.execCalls.length, 1);
 });

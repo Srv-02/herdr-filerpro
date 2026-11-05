@@ -59,8 +59,9 @@ export function createPdfs({ exec, hc, exists, unlink, mkdir, readFile, appHome,
   const cache = createCache({ exec, hc, unlink, rand, what: "PDF" });
   // { kind: "pdf", path, page, pages, width, height } (path relative to appHome, width and height in points: PNG pixels / 2)
   // or { error, final, load?, key? }. `pages` from an earlier result lets a cached page skip osascript.
-  // maxLocal, maxRemote, cacheLimit: bytes from the settings (pdf_local_max_mb, pdf_remote_max_mb, image_cache_mb), per call.
-  async function load({ on, path, page = 1, pages = null, force = false, maxLocal = MAX_PDF_LOCAL, maxRemote = MAX_PDF_REMOTE, cacheLimit = CACHE_LIMIT }) {
+  // maxLocal, maxRemote, cacheLimit: bytes from the settings (pdf_local_max_mb, pdf_remote_max_mb, image_cache_mb), per call;
+  // ssh: the SSH settings for the download from a machine (cache.fetch in images.js).
+  async function load({ on, path, page = 1, pages = null, force = false, maxLocal = MAX_PDF_LOCAL, maxRemote = MAX_PDF_REMOTE, cacheLimit = CACHE_LIMIT, ssh }) {
     if (badSpelling(path)) return { error: 'Path must not contain ".", ".." or "//"' };
     if (platform !== "macos") return { error: "PDF preview needs macOS", final: true };
     const cannot = (e) => ({ error: `Cannot load this PDF: ${oneLine(e?.message ?? e) ?? "unknown error"}`, final: true });
@@ -89,7 +90,7 @@ export function createPdfs({ exec, hc, exists, unlink, mkdir, readFile, appHome,
       if (dims) return { kind: "pdf", path: rel, page, pages, width: Math.round(dims.width / 2), height: Math.round(dims.height / 2) };
     }
     if (fetched && !(await exists(src))) {
-      const r = await cache.fetch({ on, path, size, file: src });
+      const r = await cache.fetch({ on, path, size, file: src, ssh });
       if (r) return { ...timeoutHint(r, on, key, `${key}.pdf`), final: true };
     }
     try { await mkdir(dir, { recursive: true }); } catch {}

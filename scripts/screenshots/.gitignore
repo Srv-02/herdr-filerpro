@@ -1,0 +1,3 @@
+# Crops and renders hold window content: never commit them from here.
+cards/*.png
+.edge-profile/

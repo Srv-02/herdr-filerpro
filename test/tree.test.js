@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { mkTmpSync } from "./tmp-helper.js";
+import { withoutIntl } from "./no-intl.js";
 
 test("pruneFolder drops a vanished folder and everything below it, nothing else", () => {
   const folders = new Set(["a", "a/b", "a/b/c", "ab", "d"]);
@@ -96,7 +97,9 @@ test("psListCommand asks for one entry past the limit and quotes the path", () =
   assert.match(psListCommand("C:\\x", 20), /-First 21 /);
 });
 
-test("limitText names the configured numbers", () => {
-  assert.equal(limitText(500, 5000), "File list limited to 500 entries per folder and 5,000 total");
-  assert.equal(limitText(1200, 20000), "File list limited to 1,200 entries per folder and 20,000 total");
+test("limitText names the configured numbers, also without Intl (herdr's engine)", async () => {
+  await withoutIntl(() => {
+    assert.equal(limitText(500, 5000), "File list limited to 500 entries per folder and 5,000 total");
+    assert.equal(limitText(1200, 20000), "File list limited to 1,200 entries per folder and 20,000 total");
+  });
 });
