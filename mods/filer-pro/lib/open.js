@@ -1,3 +1,5 @@
+import { BUNDLE_EXTENSIONS } from "./bundles.js";
+
 // "Open in browser", hardened. One sh call resolves the path (symlinks in any component), requires a regular
 // file whose resolved name ends in .html or .htm, and then starts the opener with exactly that resolved path.
 // So a link can never make the opener start a .command, .app or .sh, and the path that was checked is the path
@@ -44,6 +46,36 @@ export async function openChecked(file, { app }, { exec, notify, platform }) {
   if (r?.code === 0) return { ok: true };
   const error = (REASONS[r?.code] ?? ((p) => `Could not open: ${p}`))(file);
   notify({ title: TITLES[app] ?? TITLES.default, body: error, level: "warning" });
+  return { ok: false, error };
+}
+
+// `sh -c OPEN_BUNDLE_SCRIPT sh <path> <opener> [<opener args>...]` for a macOS package (lib/bundles.js): 2 no opener,
+// 3 not found, 4 not a folder, 5 the resolved name has no package extension (a link "Example.app" to another folder),
+// else exec opener with the resolved path. Like a double click in the Finder: Gatekeeper and the quarantine flag
+// decide, nothing is removed or bypassed.
+export const OPEN_BUNDLE_SCRIPT = 'f=$1; shift; [ $# -gt 0 ] || exit 2; '
+  + 'real=$(realpath -- "$f" 2>/dev/null) || exit 3; [ -e "$real" ] || exit 3; [ -d "$real" ] || exit 4; '
+  + 'case $(printf %s "$real" | LC_ALL=C tr "[:upper:]" "[:lower:]") in ' + BUNDLE_EXTENSIONS.map((e) => `*.${e}`).join("|") + ') ;; *) exit 5 ;; esac; '
+  + 'exec "$@" "$real"';
+
+const BUNDLE_REASONS = {
+  3: (p) => `Cannot open: ${p} (not found)`,
+  4: (p) => `Not a package any more: ${p}`,
+  5: (p) => `Not a package (the link leads elsewhere): ${p}`,
+};
+
+// Opens a local macOS package with `open` (platform.openArgs) after the checks above; { ok, error? }, never rejects.
+export async function openBundle(path, { exec, notify, platform }) {
+  const [cmd, args] = platform.openArgs(path);
+  let r = null;
+  try {
+    r = await exec("sh", ["-c", OPEN_BUNDLE_SCRIPT, "sh", path, cmd, ...args.slice(0, -1)]);
+  } catch {
+    r = null;
+  }
+  if (r?.code === 0) return { ok: true };
+  const error = (BUNDLE_REASONS[r?.code] ?? ((p) => `Could not open: ${p}`))(path);
+  notify({ title: TITLES.default, body: error, level: "warning" });
   return { ok: false, error };
 }
 

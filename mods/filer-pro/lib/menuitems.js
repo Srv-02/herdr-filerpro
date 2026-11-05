@@ -5,17 +5,21 @@ const ITEM_H = 28, SEPARATOR_H = 7, PADDING = 8, RESERVE = 4;
 const SEPARATOR = { separator: true };
 const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action.replace(/_/g, "-")}`, label, action, enabled });
 
-// state: { paste: { enabled, reason }, isDir?, remote? } (isDir: the row is a folder, Open, Open in Preview,
-// Open in Editor and Edit in Terminal are dimmed; remote: the row is on a machine, Show in Finder is dimmed because it would download first)
+// state: { paste: { enabled, reason }, isDir?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
+// Open in Editor and Edit in Terminal are dimmed; remote: the row is on a machine, Show in Finder is dimmed because it would download first;
+// bundle: a local macOS package (lib/bundles.js), a folder that Open starts like the Finder does, with the entry
+// Show Package Contents, or Hide Package Contents while contents is true)
 export function rowMenuItems(state) {
   const file = state.isDir !== true;
   const local = state.remote !== true;
+  const bundle = state.bundle === true && local;
   return [
-    entry("open", "Open", file),
+    entry("open", "Open", file || bundle),
     entry("open_preview", "Open in Preview", file),
     entry("open_editor", "Open in Editor", file),
     entry("edit_terminal", "Edit in Terminal", file),
     entry("reveal", "Show in Finder", local),
+    ...(bundle ? [entry("package_contents", state.contents === true ? "Hide Package Contents" : "Show Package Contents")] : []),
     SEPARATOR,
     entry("download", "Download"),
     entry("download_to", "Download to…"),
