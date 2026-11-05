@@ -46,6 +46,14 @@ Markdown renders with Mermaid diagrams, PDF shows page by page. Remote content i
 
 Code opens with syntax colors and line wrap, HTML and images open in place. One click goes fullscreen.
 
+### Edit plain text
+
+Small edits happen right in the source view, locally and on your machines. **Edit** in the header switches the view to edit mode; **Undo**, **Redo**, **Cancel**, **Save** and **Save a Copy…** appear next to it, a `●` before the file name marks unsaved changes, and the line below the text shows encoding, line endings and permissions, for example `UTF-8 · LF · 600`. In the fullscreen view `Cmd+S`, `Cmd+Z` and `Cmd+Shift+Z` work too; the small view in the panel has buttons only. Going back, closing the fullscreen view or switching edit mode off with unsaved changes asks Save, Discard or Cancel first.
+
+Only files that can be written back byte for byte are editable. Edit is dimmed, with the reason as its tooltip, for UTF-16, UTF-8 with BOM and any other encoding than clean UTF-8, mixed or CR-only line endings, binary files, files over 1 MiB, files whose view is cut at `source_max_chars`, symbolic links, folders and packages, files without write permission or on read-only volumes, files in folders everyone may write to (without the sticky bit), and local files on Windows. For those, use Edit in Terminal.
+
+Saving checks first that the file is still exactly what was opened; if anything else changed it meanwhile, the save is refused and your text stays in the editor (use Save a Copy…). The file is then overwritten in place, so its permissions, owner, hard links and extended attributes stay as they are. Line endings (LF or CRLF) and a missing final newline are kept. Save a Copy… never replaces an existing file.
+
 ### Your editor, one click away
 
 ![Context menu with Open in Editor and Edit in Terminal](screenshots/editors.png)
@@ -172,8 +180,9 @@ Remote files: **Edit in Terminal** starts the editor in a split of the focused t
 
 ### What it runs and touches
 
-- **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
-- **Files:** it lists and changes files wherever you browse and act, locally and on your machines. Its own data lives in `~/.config/herdr-app/filer-pro.json`, `~/.config/herdr-app/data/filer-pro/` and `~/.config/herdr-app/filer-pro/`.
+- **Programs:** `ssh` and `scp`, `hc`, `sh`, `cp`, `mv`, `git status` (read only), for editing `stat`, `head`, `base64`, `tr`, `find`, `mktemp`, `cat` and `sha256sum` (or `shasum`, or `openssl`), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
+- **Files:** it lists and changes files wherever you browse and act, locally and on your machines. Its own data lives in `~/.config/herdr-app/filer-pro.json`, `~/.config/herdr-app/data/filer-pro/` and `~/.config/herdr-app/filer-pro/`. Editing adds a private folder `~/.cache/filer-pro/edit/` on the machine of the file (upload and backup while a save runs, normally empty afterwards), and unsaved text is kept in `~/.config/herdr-app/filer-pro/unsaved/` until it is saved or discarded.
+- **Editing and other users:** saving a local file passes the text through a private file, never on a command line. On an SSH machine the text travels as base64 in the command line of short `sh` calls (Herdr's `exec` has no input stream), so for that moment other users of that machine can read it with `ps`. Saving refuses folders that everyone may write to (without the sticky bit), and checks right before writing that the file is still the same one, not a link; a user who may write to the folder could still swap the file in that last instant.
 - **Automation folder:** the mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). Anything that can write to that folder can drive the mod.
 - **Network:** SSH to the machines you added to Herdr, and at most one request per day to GitHub for the update check (off with `"update_check": false`), plus one for each click on **Check now** in Settings. Documents never load remote content; this holds for SVG images only while `svg_check` is on (whether Herdr's image renderer fetches external references of an unchecked SVG is not verified).
 
