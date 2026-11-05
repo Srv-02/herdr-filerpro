@@ -3,12 +3,13 @@
 // with it, and saveSettings writes the changed keys back without touching anything else in the file. Not listed:
 // the editor lists (config file only) and perf (a developer switch, config file only); lib/config.js reads both.
 import { splitCommand } from "./editors.js";
+import { group } from "./numbers.js";
 
 const int = (key, def, min, max, label, help, section, unit) => ({ key, kind: "int", default: def, min, max, label, help, section, unit });
 const bool = (key, def, label, help, section) => ({ key, kind: "bool", default: def, label, help, section });
 
-// 10000 -> "10,000", without Intl (the host's engine need not have it).
-export const group = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+// ui/settings.js takes group from here, with the rest of the dialog's helpers.
+export { group };
 
 // The Advanced part of the dialog, in this order.
 export const ADVANCED = Object.freeze(["File list", "Preview limits", "Transfers & connections"]);
