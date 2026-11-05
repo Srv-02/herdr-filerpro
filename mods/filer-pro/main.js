@@ -7,6 +7,7 @@ import { createJobs } from "./lib/jobs.js";
 import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
 import { claim, processRequest, handleRequest, closeAnswer, panelPlan, answerShow, openResult, modeResult } from "./lib/requests.js";
 import { loadConfig } from "./lib/config.js";
+import { editInTerminal, openInEditor } from "./lib/editors.js";
 import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
@@ -315,9 +316,17 @@ export default class FilerPro extends View {
         close();
       };
       const toClipboard = (text, cx) => { writeClipboard(text, { cx, exec, notify, platform }).finally(close); };
+      // Open in Editor and Edit in Terminal (lib/editors.js): the popup closes once the lookup and the start returned.
+      const config = () => loadConfig(readTextFile, appHome, home);
+      const editor = (action, title, deps) => {
+        action({ machine: p.machine ?? null, path: p.path }, { loadConfig: config, notify, ...deps })
+          .catch((e) => notify({ title: `${title} failed`, body: String(e?.message ?? e), level: "error" })).finally(close);
+      };
       return menuView(t, items, {
         open: () => openWith("default"),
         open_preview: () => openWith("preview"),
+        open_editor: () => editor(openInEditor, "Open in Editor", { hc, exec, home }),
+        edit_terminal: () => editor(editInTerminal, "Edit in Terminal", { focused, spaces, run }),
         // dimmed on a machine (rowMenuItems remote): Show in Finder would download first; Cmd+click still does
         reveal: () => {
           if (p.machine) { close(); return; }
