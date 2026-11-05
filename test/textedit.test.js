@@ -6,20 +6,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
 import {
-  EDIT_MAX_BYTES, CHUNK_CHARS, PROBE_SCRIPT, BEGIN_SCRIPT, BEGIN_FILE_SCRIPT, COPY_SCRIPT, APPEND_SCRIPT, COMMIT_SCRIPT, CLEAN_SCRIPT,
-  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, uploadChunks, probeFile, saveFile, saveCopy, copyName, mirrorName, octalMode,
+  EDIT_MAX_BYTES, PROBE_SCRIPT, BEGIN_FILE_SCRIPT, PRIVATE_DIR_SCRIPT, COPY_SCRIPT, COMMIT_SCRIPT, CLEAN_SCRIPT,
+  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, probeFile, saveFile, saveCopy, copyName, mirrorName, octalMode, scpSender,
 } from "../mods/filer-pro/lib/textedit.js";
+import { numbers } from "../mods/filer-pro/lib/settings.js";
 
 const FAKE_SSH = path.resolve(import.meta.dirname, "fake", "ssh");
+const FAKE_SCP = path.resolve(import.meta.dirname, "fake", "scp");
+const TRANSFER = path.resolve(import.meta.dirname, "..", "mods", "filer-pro", "bin", "transfer.sh");
+const MACHINES = JSON.stringify({ machines: [{ name: "box", target: "box", via: false }] });
 const IS_ROOT = process.getuid?.() === 0;
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const q = (s) => `'${String(s).replaceAll("'", "'\\''")}'`;
 
 // A stand-in for herdr's exec. on == null runs the command directly, on == "box" sends one shell-quoted string through
-// the fake ssh (like herdr's remote exec probably does). HOME and the cache folder point into the scratch folder.
-function makeExec(root, { shell = "sh", pathPrefix = "", wrap } = {}) {
+// the fake ssh (like herdr's remote exec probably does). HOME and the cache folder point into the scratch folder;
+// transfer.sh finds the fake scp and ssh through FILER_PRO_SCP / FILER_PRO_SSH.
+// exec.stage and exec.send are what main.js passes to saveFile/saveCopy: a private local stage folder and the scp sender.
+function makeExec(root, { shell = "sh", pathPrefix = "", wrap, stageWrap, sendWrap, extraEnv = {} } = {}) {
   const calls = [];
-  const env = { ...process.env, HOME: path.join(root, "home"), XDG_CACHE_HOME: path.join(root, "cache") };
+  const env = { ...process.env, HOME: path.join(root, "home"), XDG_CACHE_HOME: path.join(root, "cache"), FILER_PRO_SCP: FAKE_SCP, FILER_PRO_SSH: FAKE_SSH, ...extraEnv };
   if (pathPrefix) env.PATH = `${pathPrefix}:${env.PATH}`;
   const exec = async (cmd, args, opts = {}) => {
     if (wrap) [cmd, args] = (await wrap(cmd, args)) ?? [cmd, args];
@@ -37,8 +43,20 @@ function makeExec(root, { shell = "sh", pathPrefix = "", wrap } = {}) {
     if (r.error) throw r.error;
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   };
-  return { exec, calls, cacheDir: path.join(root, "cache", "filer-pro", "edit") };
+  const stageDir = path.join(root, "stage");
+  exec.stage = async (b64) => {
+    fs.mkdirSync(stageDir, { recursive: true, mode: 0o700 });
+    const p = path.join(stageDir, `s${crypto.randomBytes(4).toString("hex")}.b64`);
+    fs.writeFileSync(p, stageWrap ? stageWrap(b64) : b64, { mode: 0o600 });
+    return p;
+  };
+  const hc = async (args) => (args[0] === "machine" ? { code: 0, stdout: MACHINES, stderr: "" } : { code: 1, stdout: "", stderr: "" });
+  const send = scpSender({ exec, hc, script: TRANSFER, trashDir: path.join(root, "trash"), limits: () => numbers(null) });
+  exec.send = sendWrap ? (a) => sendWrap(a, send) : send;
+  const staged = () => (fs.existsSync(stageDir) ? fs.readdirSync(stageDir) : []);
+  return { exec, calls, staged, cacheDir: path.join(root, "cache", "filer-pro", "edit") };
 }
+const io = (exec) => ({ exec, stage: exec.stage, send: exec.send });
 
 function scratch() {
   const root = mkTmpSync("textedit-");
@@ -307,20 +325,7 @@ describe("createHistory", () => {
   });
 });
 
-describe("uploadChunks", () => {
-  test("empty bytes give one empty chunk, chunks are multiples of 4 and rejoin to the base64", () => {
-    assert.deepEqual(uploadChunks(new Uint8Array(0)), [""]);
-    assert.equal(CHUNK_CHARS % 4, 0);
-    const b = crypto.randomBytes(200000);
-    const chunks = uploadChunks(b);
-    assert.ok(chunks.length > 1);
-    for (const c of chunks.slice(0, -1)) assert.equal(c.length, CHUNK_CHARS);
-    assert.ok(chunks.at(-1).length <= CHUNK_CHARS);
-    assert.equal(chunks.join(""), b.toString("base64"));
-    assert.equal(uploadChunks(b.subarray(0, 49152)).length, 1);
-    assert.equal(uploadChunks(b.subarray(0, 49153)).length, 2);
-  });
-});
+
 
 async function open(exec, on, p, maxChars = 100000) {
   const r = await probeFile({ exec, on, path: p, maxChars });
@@ -340,7 +345,7 @@ describe("saveFile", () => {
         const p = path.join(files, "f");
         fs.writeFileSync(p, bytes);
         const info = await open(exec, on, p);
-        const r = await saveFile({ exec, on, path: p, info, bytes: bufferBytes(info.text, info) });
+        const r = await saveFile({ ...io(exec), on, path: p, info, bytes: bufferBytes(info.text, info) });
         assert.equal(r.ok, true, r.error);
         assert.equal(sha(fs.readFileSync(p)), sha(bytes));
         assert.equal(r.hash, sha(bytes));
@@ -357,7 +362,7 @@ describe("saveFile", () => {
       const ino = fs.statSync(p).ino;
       const info = await open(exec, on, p);
       const bytes = bufferBytes("a\nb\ntyped\nlines\n", info);
-      const r = await saveFile({ exec, on, path: p, info, bytes });
+      const r = await saveFile({ ...io(exec), on, path: p, info, bytes });
       assert.equal(r.ok, true, r.error);
       assert.equal(fs.readFileSync(p, "utf8"), "a\r\nb\r\ntyped\r\nlines\r\n");
       assert.equal(fs.statSync(p).mode & 0o7777, 0o600);
@@ -366,7 +371,7 @@ describe("saveFile", () => {
       assert.deepEqual(cacheLeft(cacheDir), []);
       // the sent bytes are the next baseline: a second save works without re-probing
       const next = { ...info, bytes: r.bytes, text: "a\nb\ntyped\nlines\n" };
-      const r2 = await saveFile({ exec, on, path: p, info: next, bytes: bufferBytes("x\n", next) });
+      const r2 = await saveFile({ ...io(exec), on, path: p, info: next, bytes: bufferBytes("x\n", next) });
       assert.equal(r2.ok, true, r2.error);
       assert.equal(fs.readFileSync(p, "utf8"), "x\r\n");
     });
@@ -377,7 +382,7 @@ describe("saveFile", () => {
       const p = path.join(files, "f");
       fs.writeFileSync(p, "a\nb");
       const info = await open(exec, on, p);
-      const r = await saveFile({ exec, on, path: p, info, bytes: bufferBytes("a\nbc", info) });
+      const r = await saveFile({ ...io(exec), on, path: p, info, bytes: bufferBytes("a\nbc", info) });
       assert.equal(r.ok, true, r.error);
       assert.equal(fs.readFileSync(p, "utf8"), "a\nbc");
     });
@@ -389,37 +394,36 @@ describe("saveFile", () => {
       fs.writeFileSync(p, "one\n");
       const info = await open(exec, on, p);
       fs.writeFileSync(p, "someone else\n");
-      const r = await saveFile({ exec, on, path: p, info, bytes: bufferBytes("mine\n", info) });
+      const r = await saveFile({ ...io(exec), on, path: p, info, bytes: bufferBytes("mine\n", info) });
       assert.deepEqual(r, { ok: false, error: "The file changed since it was opened. Your text is kept: use Save a Copy…" });
       assert.equal(fs.readFileSync(p, "utf8"), "someone else\n");
       assert.deepEqual(cacheLeft(cacheDir), []);
     });
 
-    test(`a damaged upload is refused before anything is written (${tag})`, async () => {
+    test(`a damaged or partial upload is refused before anything is written (${tag})`, async () => {
       const { root, files } = scratch();
-      const big = "line of text\n".repeat(8000); // > 1 chunk
+      const big = "line of text\n".repeat(8000);
       const p = path.join(files, "f");
       fs.writeFileSync(p, big);
-      for (const target of [BEGIN_SCRIPT, APPEND_SCRIPT]) {
-        const { exec, cacheDir } = makeExec(root, {
-          wrap: (cmd, args) => {
-            if (args[1] !== target) return null;
-            const i = target === BEGIN_SCRIPT ? 3 : 4;
-            const a = [...args];
-            a[i] = (a[i][0] === "A" ? "B" : "A") + a[i].slice(1);
-            return [cmd, a];
-          },
-        });
+      const damage = [
+        { stageWrap: (b64) => (b64[0] === "A" ? "B" : "A") + b64.slice(1) }, // a flipped character
+        { sendWrap: async (a, send) => { const r = await send(a); fs.truncateSync(path.join(a.dir, a.name), 1000); return r; } }, // a cut transfer
+      ];
+      for (const opts of damage) {
+        if (opts.sendWrap && on == null) continue; // local saves send nothing
+        const { exec, cacheDir, staged } = makeExec(root, opts);
         const info = await open(exec, on, p, 1000000);
-        const r = await saveFile({ exec, on, path: p, info, bytes: bufferBytes(big + "more\n", info) });
+        const r = await saveFile({ ...io(exec), on, path: p, info, bytes: bufferBytes(big + "more\n", info) });
         assert.equal(r.ok, false);
         assert.match(r.error, /upload was damaged/);
         assert.equal(fs.readFileSync(p, "utf8"), big);
         assert.deepEqual(cacheLeft(cacheDir), []);
+        assert.deepEqual(staged(), []);
       }
     });
 
-    test(`a 1 MiB file goes through several calls and round-trips byte exact (${tag})`, async () => {
+
+    test(`a 1 MiB file round-trips byte exact with no content in any argv (${tag})`, async () => {
       const { root, files } = scratch();
       const { exec, calls, cacheDir } = makeExec(root);
       const p = path.join(files, "f");
@@ -430,11 +434,10 @@ describe("saveFile", () => {
       fs.writeFileSync(p, orig);
       const info = await open(exec, on, p, 2000000);
       const bytes = bufferBytes(info.text + "tail \u{1F600}\n", info);
-      const r = await saveFile({ exec, on, path: p, info, bytes });
+      const r = await saveFile({ ...io(exec), on, path: p, info, bytes });
       assert.equal(r.ok, true, r.error);
-      assert.ok(calls.length > 5, `${calls.length} calls`);
       assert.equal(sha(fs.readFileSync(p)), sha(bytes));
-      for (const c of calls) assert.ok(c.args.join("").length < 131072);
+      for (const c of calls) assert.ok(c.args.join("").length < 4096, "only paths and hashes in argv");
       assert.deepEqual(cacheLeft(cacheDir), []);
     });
   }
@@ -447,7 +450,7 @@ describe("saveFile", () => {
     for (const on of [null, "box"]) {
       const info = await open(exec, on, p);
       const text = "$(touch pwned) `touch pwned2` ' \" \\ ;\n";
-      const r = await saveFile({ exec, on, path: p, info, bytes: bufferBytes(text, info) });
+      const r = await saveFile({ ...io(exec), on, path: p, info, bytes: bufferBytes(text, info) });
       assert.equal(r.ok, true, r.error);
       assert.equal(fs.readFileSync(p, "utf8"), text);
     }
@@ -472,14 +475,14 @@ describe("saveFile", () => {
     fs.rmSync(p);
     fs.writeFileSync(path.join(files, "target"), "a\n");
     fs.symlinkSync(path.join(files, "target"), p);
-    let r = await saveFile({ exec, on: null, path: p, info, bytes });
+    let r = await saveFile({ ...io(exec), on: null, path: p, info, bytes });
     assert.match(r.error, /symbolic link/);
     assert.equal(fs.readFileSync(path.join(files, "target"), "utf8"), "a\n");
     fs.rmSync(p);
-    r = await saveFile({ exec, on: null, path: p, info, bytes });
+    r = await saveFile({ ...io(exec), on: null, path: p, info, bytes });
     assert.match(r.error, /no longer a regular file/);
     fs.mkdirSync(p);
-    r = await saveFile({ exec, on: null, path: p, info, bytes });
+    r = await saveFile({ ...io(exec), on: null, path: p, info, bytes });
     assert.match(r.error, /no longer a regular file/);
     assert.deepEqual(cacheLeft(cacheDir), []);
   });
@@ -491,7 +494,7 @@ describe("saveFile", () => {
     fs.writeFileSync(p, "a\n");
     const info = await open(exec, null, p);
     fs.chmodSync(p, 0o444);
-    const r = await saveFile({ exec, on: null, path: p, info, bytes: bufferBytes("b\n", info) });
+    const r = await saveFile({ ...io(exec), on: null, path: p, info, bytes: bufferBytes("b\n", info) });
     assert.deepEqual(r, { ok: false, error: "No write permission; nothing was written" });
     assert.equal(fs.readFileSync(p, "utf8"), "a\n");
     assert.deepEqual(cacheLeft(cacheDir), []);
@@ -507,7 +510,7 @@ describe("saveFile", () => {
     const p = path.join(files, "f");
     fs.writeFileSync(p, "original\n");
     const info = await open(exec, null, p);
-    const r = await saveFile({ exec, on: null, path: p, info, bytes: bufferBytes("new text\n", info) });
+    const r = await saveFile({ ...io(exec), on: null, path: p, info, bytes: bufferBytes("new text\n", info) });
     assert.equal(r.ok, false);
     assert.match(r.error, /^Could not write the file; it is unchanged\. Your text is also in \//);
     assert.equal(fs.readFileSync(p, "utf8"), "original\n");
@@ -525,7 +528,7 @@ describe("saveFile", () => {
     const p = path.join(files, "f");
     fs.writeFileSync(p, "original\n");
     const info = await open(exec, null, p);
-    const r = await saveFile({ exec, on: null, path: p, info, bytes: bufferBytes("new text\n", info) });
+    const r = await saveFile({ ...io(exec), on: null, path: p, info, bytes: bufferBytes("new text\n", info) });
     assert.equal(r.ok, false);
     assert.equal(r.error, `Could not write the file; it may be incomplete. Original: ${r.backup}, your text: ${r.kept}`);
     assert.equal(fs.readFileSync(r.backup, "utf8"), "original\n");
@@ -535,17 +538,20 @@ describe("saveFile", () => {
   test("exec that rejects gives a Cannot reach the machine message and cleans up what it can", async () => {
     const calls = [];
     const exec = async (cmd, args) => {
-      calls.push(args[2]);
-      if (args[2] === "begin") return { code: 0, stdout: "/c/filer-pro/edit/edit.abc\n", stderr: "" };
+      calls.push(cmd === "sh" ? args[2] : cmd);
+      if (args[2] === "begin-file") return { code: 0, stdout: "/c/filer-pro/edit/edit.abc\n", stderr: "" };
+      if (cmd === "rm") return { code: 0, stdout: "", stderr: "" };
       throw new Error('`herdr.exec`: unknown machine "box"');
     };
-    const r = await saveFile({ exec, on: "box", path: "/x", info: { bytes: new Uint8Array(0) }, bytes: new Uint8Array([97]) });
+    const stage = async () => "/stage/s1.b64";
+    const r = await saveFile({ exec, stage, on: null, path: "/x", info: { bytes: new Uint8Array(0) }, bytes: new Uint8Array([97]) });
     assert.equal(r.ok, false);
     assert.match(r.error, /^Cannot reach the machine: /);
-    assert.deepEqual(calls, ["begin", "commit"]);
-    const r2 = await saveFile({ exec: async () => { throw new Error("ssh: connect to host box port 22: Connection refused"); }, on: "box", path: "/x", info: { bytes: new Uint8Array(0) }, bytes: new Uint8Array([97]) });
-    assert.match(r2.error, /^Cannot reach the machine: /);
+    assert.deepEqual(calls, ["begin-file", "commit"]);
+    const r2 = await saveFile({ exec: async () => { throw new Error("ssh: connect to host box port 22: Connection refused"); }, stage, send: async () => ({ ok: true }), on: "box", path: "/x", info: { bytes: new Uint8Array(0) }, bytes: new Uint8Array([97]) });
+    assert.match(r2.error, /^Cannot reach the machine: |private upload folder/);
   });
+
 
   test("a cache folder that cannot be created is reported", async () => {
     const { root, files } = scratch();
@@ -554,7 +560,7 @@ describe("saveFile", () => {
     const p = path.join(files, "f");
     fs.writeFileSync(p, "a\n");
     const info = await open(exec, null, p);
-    const r = await saveFile({ exec, on: null, path: p, info, bytes: bufferBytes("b\n", info) });
+    const r = await saveFile({ ...io(exec), on: null, path: p, info, bytes: bufferBytes("b\n", info) });
     assert.equal(r.ok, false);
     assert.match(r.error, /private upload folder/);
     assert.equal(fs.readFileSync(p, "utf8"), "a\n");
@@ -568,7 +574,7 @@ describe("saveCopy", () => {
       const { exec, cacheDir } = makeExec(root);
       for (const mode of ["600", "644", "640", "444"]) {
         const bytes = Buffer.from(`copy ${mode}\r\n`);
-        const r = await saveCopy({ exec, on, dir: files, name: `c ${mode}.txt`, bytes, mode });
+        const r = await saveCopy({ ...io(exec), on, dir: files, name: `c ${mode}.txt`, bytes, mode });
         assert.equal(r.ok, true, r.error);
         assert.equal(r.path, path.join(files, `c ${mode}.txt`));
         assert.deepEqual(fs.readFileSync(r.path), bytes);
@@ -581,7 +587,7 @@ describe("saveCopy", () => {
   test("a 600 file's copy is private even under a permissive umask", async () => {
     const { root, files } = scratch();
     const { exec } = makeExec(root);
-    const r = await saveCopy({ exec, on: null, dir: files, name: "p", bytes: Buffer.from("x"), mode: "600" });
+    const r = await saveCopy({ ...io(exec), on: null, dir: files, name: "p", bytes: Buffer.from("x"), mode: "600" });
     assert.equal(r.ok, true);
     assert.equal(fs.statSync(r.path).mode & 0o777, 0o600);
   });
@@ -594,7 +600,7 @@ describe("saveCopy", () => {
     fs.symlinkSync(path.join(files, "target"), path.join(files, "lnk"));
     fs.symlinkSync(path.join(files, "nowhere"), path.join(files, "dangling"));
     for (const name of ["taken", "lnk", "dangling"]) {
-      const r = await saveCopy({ exec, on: null, dir: files, name, bytes: Buffer.from("new"), mode: "644" });
+      const r = await saveCopy({ ...io(exec), on: null, dir: files, name, bytes: Buffer.from("new"), mode: "644" });
       assert.deepEqual(r, { ok: false, error: "A file with that name already exists" }, name);
     }
     assert.equal(fs.readFileSync(path.join(files, "taken"), "utf8"), "keep");
@@ -606,19 +612,19 @@ describe("saveCopy", () => {
   test("validates the name and the folder", async () => {
     const { root, files } = scratch();
     const { exec, calls } = makeExec(root);
-    assert.equal((await saveCopy({ exec, on: null, dir: files, name: "a/b", bytes: Buffer.from("x"), mode: "600" })).ok, false);
-    assert.equal((await saveCopy({ exec, on: null, dir: files, name: "", bytes: Buffer.from("x"), mode: "600" })).ok, false);
-    assert.equal((await saveCopy({ exec, on: null, dir: files, name: "..", bytes: Buffer.from("x"), mode: "600" })).ok, false);
-    assert.equal((await saveCopy({ exec, on: null, dir: "rel", name: "a", bytes: Buffer.from("x"), mode: "600" })).ok, false);
-    assert.equal((await saveCopy({ exec, on: null, dir: files, name: "a", bytes: null, mode: "600" })).ok, false);
+    assert.equal((await saveCopy({ ...io(exec), on: null, dir: files, name: "a/b", bytes: Buffer.from("x"), mode: "600" })).ok, false);
+    assert.equal((await saveCopy({ ...io(exec), on: null, dir: files, name: "", bytes: Buffer.from("x"), mode: "600" })).ok, false);
+    assert.equal((await saveCopy({ ...io(exec), on: null, dir: files, name: "..", bytes: Buffer.from("x"), mode: "600" })).ok, false);
+    assert.equal((await saveCopy({ ...io(exec), on: null, dir: "rel", name: "a", bytes: Buffer.from("x"), mode: "600" })).ok, false);
+    assert.equal((await saveCopy({ ...io(exec), on: null, dir: files, name: "a", bytes: null, mode: "600" })).ok, false);
     assert.equal(calls.length, 0);
   });
 
   test("a name starting with a dash is fine, a missing folder is reported and cleaned up", async () => {
     const { root, files } = scratch();
     const { exec, cacheDir } = makeExec(root);
-    assert.equal((await saveCopy({ exec, on: null, dir: files, name: "-n", bytes: Buffer.from("x"), mode: "600" })).ok, true);
-    const r = await saveCopy({ exec, on: null, dir: path.join(files, "nope"), name: "a", bytes: Buffer.from("x"), mode: "600" });
+    assert.equal((await saveCopy({ ...io(exec), on: null, dir: files, name: "-n", bytes: Buffer.from("x"), mode: "600" })).ok, true);
+    const r = await saveCopy({ ...io(exec), on: null, dir: path.join(files, "nope"), name: "a", bytes: Buffer.from("x"), mode: "600" });
     assert.deepEqual(r, { ok: false, error: "Could not create the copy" });
     assert.deepEqual(cacheLeft(cacheDir), []);
   });
@@ -627,7 +633,7 @@ describe("saveCopy", () => {
     const { root, files } = scratch();
     const { exec, calls } = makeExec(root);
     const bytes = crypto.randomBytes(300000);
-    const r = await saveCopy({ exec, on: "box", dir: files, name: "big.bin", bytes, mode: "640" });
+    const r = await saveCopy({ ...io(exec), on: "box", dir: files, name: "big.bin", bytes, mode: "640" });
     assert.equal(r.ok, true, r.error);
     assert.ok(calls.length >= 6);
     assert.deepEqual(fs.readFileSync(r.path), bytes);
@@ -650,7 +656,9 @@ describe("scripts", () => {
       const run = (cmd, args) => spawnSync("/bin/sh", args.length ? ["-c", ...args] : [], { encoding: "utf8", env: { ...process.env, PATH: bin, HOME: path.join(root, "home"), XDG_CACHE_HOME: path.join(root, "cache") } });
       const p = path.join(files, `f${hide.length}`);
       fs.writeFileSync(p, "old\n");
-      const begin = run("sh", [BEGIN_SCRIPT, "begin", Buffer.from("new\n").toString("base64")]);
+      const src = path.join(root, `staged${hide.length}`);
+      fs.writeFileSync(src, Buffer.from("new\n").toString("base64"));
+      const begin = run("sh", [BEGIN_FILE_SCRIPT, "begin-file", src]);
       assert.equal(begin.status, 0, begin.stderr);
       const tmp = begin.stdout.trim();
       const c = run("sh", [COMMIT_SCRIPT, "commit", tmp, p, sha("old\n"), sha("new\n")]);
@@ -682,7 +690,9 @@ describe("scripts", () => {
     const real = spawnSync("sh", ["-c", "command -v base64"], { encoding: "utf8" }).stdout.trim();
     // BSD-like: -d is an error, -D decodes
     fs.writeFileSync(path.join(bin, "base64"), `#!/bin/sh\ncase "$1" in -D) shift; exec ${real} -d "$@" ;; -*) echo "illegal option" >&2; exit 1 ;; esac\nexec ${real} "$@"\n`, { mode: 0o755 });
-    const r = spawnSync("sh", ["-c", BEGIN_SCRIPT, "begin", Buffer.from("hello").toString("base64")], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_CACHE_HOME: path.join(root, "cache") } });
+    const src = path.join(root, "staged");
+    fs.writeFileSync(src, Buffer.from("hello").toString("base64"));
+    const r = spawnSync("sh", ["-c", BEGIN_FILE_SCRIPT, "begin-file", src], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_CACHE_HOME: path.join(root, "cache") } });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(fs.readFileSync(r.stdout.trim(), "utf8"), "hello");
   });
@@ -726,7 +736,7 @@ describe("security review fixes", () => {
     put(p, Buffer.from("TOKEN=old\n"), 0o600);
     const info = await open(exec, null, p);
     const bytes = bufferBytes("TOKEN=new-value-" + "x".repeat(200000) + "\n", info);
-    const r = await saveFile({ exec, on: null, path: p, info, bytes, stage: stager(root) });
+    const r = await saveFile({ ...io(exec), on: null, path: p, info, bytes, stage: stager(root) });
     assert.equal(r.ok, true, r.error);
     assert.deepEqual(fs.readFileSync(p), Buffer.from(bytes));
     const b64 = Buffer.from(bytes).toString("base64");
@@ -734,25 +744,90 @@ describe("security review fixes", () => {
     assert.ok(calls.some((c) => c.args[1] === BEGIN_FILE_SCRIPT));
     assert.deepEqual(fs.readdirSync(path.join(root, "stage")), [], "staged file removed");
     assert.deepEqual(cacheLeft(cacheDir), []);
-    const c = await saveCopy({ exec, on: null, dir: files, name: "copy.env", bytes, mode: "600", stage: stager(root) });
+    const c = await saveCopy({ ...io(exec), on: null, dir: files, name: "copy.env", bytes, mode: "600", stage: stager(root) });
     assert.equal(c.ok, true, c.error);
     assert.deepEqual(fs.readdirSync(path.join(root, "stage")), []);
   });
 
-  test("stage() is ignored on a machine, and a failing stage() refuses without exec", async () => {
+  test("a failing stage() refuses without any exec, locally and for a machine", async () => {
     const { root, files } = scratch();
     const { exec, calls } = makeExec(root);
     const p = path.join(files, "f");
     put(p, Buffer.from("a\n"));
-    const info = await open(exec, "box", p);
-    const r = await saveFile({ exec, on: "box", path: p, info, bytes: bufferBytes("b\n", info), stage: () => { throw new Error("no"); } });
-    assert.equal(r.ok, true, r.error);
-    calls.length = 0;
-    const r2 = await saveFile({ exec, on: null, path: p, info: await open(exec, null, p), bytes: Buffer.from("c\n"), stage: async () => { throw new Error("disk"); } });
-    assert.deepEqual(r2, { ok: false, error: "Could not prepare the text for saving" });
-    assert.equal(calls.filter((c) => c.args[1] !== PROBE_SCRIPT).length, 0);
-    assert.equal(fs.readFileSync(p, "utf8"), "b\n");
+    for (const on of [null, "box"]) {
+      const info = await open(exec, on, p);
+      calls.length = 0;
+      const r = await saveFile({ ...io(exec), on, path: p, info, bytes: Buffer.from("c\n"), stage: async () => { throw new Error("disk"); } });
+      assert.deepEqual(r, { ok: false, error: "Could not prepare the text for saving" });
+      assert.equal(calls.length, 0);
+      assert.equal(fs.readFileSync(p, "utf8"), "a\n");
+    }
+    // without stage, or for a machine without send, nothing is uploaded either
+    assert.equal((await saveFile({ exec, on: null, path: p, info: await open(exec, null, p), bytes: Buffer.from("c\n") })).ok, false);
+    assert.equal((await saveFile({ exec, stage: exec.stage, on: "box", path: p, info: await open(exec, "box", p), bytes: Buffer.from("c\n") })).ok, false);
   });
+
+  test("a save to a machine copies the staged file with scp (transfer.sh up): no content in any argv", async () => {
+    const { root, files } = scratch();
+    const { exec, calls, staged, cacheDir } = makeExec(root);
+    const p = path.join(files, "secret.env");
+    put(p, Buffer.from("TOKEN=old\n"), 0o600);
+    const info = await open(exec, "box", p);
+    const text = "TOKEN=" + "n3w-s3cr3t".repeat(30) + "\n";
+    const bytes = bufferBytes(text, info);
+    const r = await saveFile({ ...io(exec), on: "box", path: p, info, bytes });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(fs.readFileSync(p, "utf8"), text);
+    const b64 = Buffer.from(bytes).toString("base64");
+    for (const c of calls) for (const a of c.args) assert.ok(!a.includes(b64.slice(0, 40)) && !a.includes("n3w-s3cr3t"), "content in argv");
+    const up = calls.find((c) => c.args[0] === TRANSFER);
+    assert.ok(up, "transfer.sh ran");
+    assert.deepEqual(up.args.slice(1, 4), ["up", "new", "box"]);
+    assert.equal(up.on, null, "scp runs here");
+    assert.deepEqual(staged(), [], "local staged file and status removed");
+    assert.deepEqual(cacheLeft(cacheDir), [], "nothing left on the machine");
+    const c = await saveCopy({ ...io(exec), on: "box", dir: files, name: "copy.env", bytes, mode: "600" });
+    assert.equal(c.ok, true, c.error);
+    assert.equal(fs.readFileSync(path.join(files, "copy.env"), "utf8"), text);
+    assert.deepEqual(staged(), []);
+  });
+
+  test("a failed scp transfer keeps the file and removes the local staged file and the remote leftovers", async () => {
+    const { root, files } = scratch();
+    const p = path.join(files, "f");
+    put(p, Buffer.from("old\n"));
+    for (const fail of ["env", "throw", "machine"]) {
+      const { exec, staged, cacheDir } = makeExec(root, {
+        extraEnv: fail === "env" ? { FAKE_FAIL: "scp: connection lost" } : {}, // the fake scp copies, then fails
+        sendWrap: async (a, send) => {
+          if (fail === "throw") throw new Error("boom");
+          if (fail === "machine") return { ok: false, error: "Unknown machine: box" };
+          return send(a);
+        },
+      });
+      const info = await open(exec, "box", p);
+      const r = await saveFile({ ...io(exec), on: "box", path: p, info, bytes: Buffer.from("new\n") });
+      assert.equal(r.ok, false, fail);
+      assert.match(r.error, /^Could not copy the text to the machine: /, fail);
+      assert.equal(fs.readFileSync(p, "utf8"), "old\n");
+      assert.deepEqual(staged(), [], `${fail}: local staged file removed`);
+      assert.deepEqual(cacheLeft(cacheDir), [], `${fail}: nothing left on the machine`);
+    }
+  });
+
+  test("scpSender passes the SSH settings as transfer jobs do, and reports a bad machine list", async () => {
+    const seen = [];
+    const exec = async (cmd, args) => { seen.push([cmd, ...args]); return { code: 0, stdout: "", stderr: "" }; };
+    const hc = async () => ({ code: 0, stdout: MACHINES, stderr: "" });
+    const send = scpSender({ exec, hc, script: "/t.sh", trashDir: "/trash", limits: () => ({ ...numbers(null), ssh_connect_timeout: 7 }) });
+    assert.deepEqual(await send({ on: "box", src: "/s/x.b64", dir: "/r", name: "edit.up-1.b64" }), { ok: true });
+    assert.equal(seen[0][0], "env");
+    assert.ok(seen[0].includes("FILER_PRO_SSH_CONNECT_TIMEOUT=7"));
+    assert.deepEqual(seen[0].slice(seen[0].indexOf("/t.sh") + 1, -3), ["up", "new", "box", "/s/x.b64", "/r/edit.up-1.b64"]);
+    const bad = scpSender({ exec, hc: async () => ({ code: 0, stdout: "{}", stderr: "" }), script: "/t.sh", trashDir: "/trash", limits: () => numbers(null) });
+    assert.equal((await bad({ on: "box", src: "/s", dir: "/r", name: "n" })).ok, false);
+  });
+
 
   test("a folder writable by everyone without the sticky bit is refused; with the sticky bit it is fine", async () => {
     const { root, files } = scratch();
@@ -769,10 +844,10 @@ describe("security review fixes", () => {
     // The commit and the copy refuse it too (the folder may have been opened up after the probe).
     const info = await open(exec, null, path.join(sticky, "f"));
     fs.chmodSync(sticky, 0o777);
-    const r = await saveFile({ exec, on: null, path: path.join(sticky, "f"), info, bytes: Buffer.from("b\n") });
+    const r = await saveFile({ ...io(exec), on: null, path: path.join(sticky, "f"), info, bytes: Buffer.from("b\n") });
     assert.deepEqual(r, { ok: false, error: "The folder is writable by everyone; nothing was written" });
     assert.equal(fs.readFileSync(path.join(sticky, "f"), "utf8"), "a\n");
-    const c = await saveCopy({ exec, on: null, dir: open777, name: "c", bytes: Buffer.from("x"), mode: "644" });
+    const c = await saveCopy({ ...io(exec), on: null, dir: open777, name: "c", bytes: Buffer.from("x"), mode: "644" });
     assert.deepEqual(c, { ok: false, error: "The folder is writable by everyone; nothing was written" });
     assert.equal(fs.existsSync(path.join(open777, "c")), false);
   });
@@ -788,7 +863,7 @@ describe("security review fixes", () => {
     fs.writeFileSync(path.join(bin, "cp"), `#!/bin/sh\ncommand -p cp "$@" || exit 1\nrm -f '${p}' && ln -s '${other}' '${p}'\n`, { mode: 0o755 });
     const { exec } = makeExec(root, { pathPrefix: bin });
     const info = await open(exec, null, p);
-    const r = await saveFile({ exec, on: null, path: p, info, bytes: Buffer.from("new\n") });
+    const r = await saveFile({ ...io(exec), on: null, path: p, info, bytes: Buffer.from("new\n") });
     assert.equal(r.ok, false);
     assert.match(r.error, /changed since it was opened/);
     assert.equal(fs.readFileSync(other, "utf8"), "same\n", "the link target is untouched");
@@ -798,7 +873,7 @@ describe("security review fixes", () => {
     assert.ok(!/\bchmod\b/.test(COPY_SCRIPT), "no chmod by path in the copy script");
     const { root, files } = scratch();
     const { exec } = makeExec(root);
-    const r = await saveCopy({ exec, on: null, dir: files, name: "run.sh", bytes: Buffer.from("echo\n"), mode: "755" });
+    const r = await saveCopy({ ...io(exec), on: null, dir: files, name: "run.sh", bytes: Buffer.from("echo\n"), mode: "755" });
     assert.equal(r.ok, true, r.error);
     assert.equal(fs.statSync(r.path).mode & 0o777, 0o644);
   });

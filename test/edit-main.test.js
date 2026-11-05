@@ -11,6 +11,10 @@ import { mkTmpSync } from "./tmp-helper.js";
 import { PROBE_SCRIPT, COMMIT_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
 
+const FAKE_SSH = path.resolve(import.meta.dirname, "fake", "ssh");
+const FAKE_SCP = path.resolve(import.meta.dirname, "fake", "scp");
+const TRANSFER = path.resolve(import.meta.dirname, "..", "mods", "filer-pro", "bin", "transfer.sh");
+
 globalThis.__make = (kind) => {
   const node = { kind, calls: [], kids: [] };
   const el = new Proxy(node, {
@@ -46,7 +50,7 @@ register("data:text/javascript," + encodeURIComponent(hooks));
 const FilerPro = (await import("../mods/filer-pro/main.js")).default;
 
 const never = () => new Promise(() => {});
-const settle = async () => { for (let i = 0; i < 60; i++) await new Promise((r) => setImmediate(r)); };
+const settle = async (n = 60) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, double_click_files: false, double_click_apps: true };
 
 // One scratch world: ROOT holds the files; HOME and the cache folder of the edit scripts are scratch folders too.
@@ -55,7 +59,8 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
   const base = mkTmpSync("edit-main-");
   const ROOT = path.join(base, "files");
   fs.mkdirSync(ROOT);
-  const env = { ...process.env, HOME: path.join(base, "home"), XDG_CACHE_HOME: path.join(base, "cache") };
+  // transfer.sh (remote saves copy the staged text with scp) finds the fake scp and ssh of test/fake/.
+  const env = { ...process.env, HOME: path.join(base, "home"), XDG_CACHE_HOME: path.join(base, "cache"), FILER_PRO_SCP: FAKE_SCP, FILER_PRO_SSH: FAKE_SSH };
   const store = {};
   const log = { execs: [], overlays: [], closed: [], notes: [], writes: [], mkdirs: [], unlinks: [], states: [], inputs: [] };
   const state = { focused: {}, fireOnSet };
@@ -78,13 +83,14 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
       if (p === "/app/filer-pro.json") return config;
       try { return fs.readFileSync(p, "utf8"); } catch { return null; }
     },
-    writeTextFile: async () => {}, hc: async () => ({ code: 0, stdout: "{}", stderr: "" }),
+    writeTextFile: async () => {}, hc: async (a) => ({ code: 0, stdout: a[0] === "machine" ? JSON.stringify({ machines: [{ name: "box", target: "box", via: false }] }) : "{}", stderr: "" }),
     exec: async (cmd, args, opts = {}) => {
       log.execs.push({ cmd, args, opts });
-      if (cmd !== "sh") return { code: 1, stdout: "", stderr: "" };
-      // The fake appHome "/app" lives in the scratch folder for the scripts (the local save stages its text there).
-      const real = args.map((a) => (a.startsWith("/app/") ? path.join(base, a) : a));
-      const r = spawnSync("sh", real, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env });
+      if (!["sh", "rm", "env"].includes(cmd)) return { code: 1, stdout: "", stderr: "" };
+      // The fake appHome "/app" lives in the scratch folder for the scripts (saves stage their text there); its
+      // transfer.sh is the repo's.
+      const real = args.map((a) => (a === "/app/mods/filer-pro/bin/transfer.sh" ? TRANSFER : a.startsWith("/app/") ? path.join(base, a) : a));
+      const r = spawnSync(cmd, real, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: state.failScp ? { ...env, FAKE_FAIL: "scp: Connection closed" } : env });
       return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
     openOverlay: (o) => { log.overlays.push(o); return "ov1"; }, closeOverlay: (id) => log.closed.push(id),
@@ -613,17 +619,38 @@ test("a local save stages the text in a private file under appHome: no content i
   assert.deepEqual(fs.readdirSync(stage), [], "the save script removed the staged file");
 });
 
-test("on a machine nothing is staged locally", async () => {
+test("on a machine the staged text goes over scp: no content in any argv, nothing left behind", async () => {
+  const w = world({ machine: "box" });
+  w.put("a.txt", "one\n", 0o600);
+  const self = await panel(w);
+  await editing(w, self);
+  const secret = "TOKEN=" + "r3m0te".repeat(40) + "\n";
+  type(w, lastState(w), secret);
+  click(render(self, w), "files-save", w.cx);
+  await settle(200);
+  assert.equal(w.read("a.txt").toString(), secret);
+  const b64 = Buffer.from(secret).toString("base64");
+  for (const e of w.log.execs) for (const a of e.args) assert.ok(!a.includes(b64.slice(0, 40)) && !a.includes("r3m0te"), "content in argv");
+  assert.ok(w.log.execs.some((e) => e.args[0] === "/app/mods/filer-pro/bin/transfer.sh" && e.args[1] === "up"), "scp through transfer.sh");
+  assert.deepEqual(fs.readdirSync(path.join(w.base, "app", "filer-pro", "edit")), [], "local staged file removed");
+});
+
+test("on a machine a failed transfer keeps the buffer and edit mode and removes the local staged file", async () => {
   const w = world({ machine: "box" });
   w.put("a.txt", "one\n");
   const self = await panel(w);
   await editing(w, self);
   type(w, lastState(w), "two\n");
+  w.state.failScp = true; // the fake scp copies, then fails (FAKE_FAIL)
   click(render(self, w), "files-save", w.cx);
-  await settle();
-  assert.equal(w.read("a.txt").toString(), "two\n");
-  assert.equal(w.log.writes.some((x) => x.p.startsWith("/app/filer-pro/edit/")), false);
+  await settle(200);
+  assert.equal(w.read("a.txt").toString(), "one\n");
+  assert.ok(byId(render(self, w), "files-save"), "still editing");
+  assert.equal(lastState(w).value(), "two\n", "buffer kept");
+  assert.ok(texts(render(self, w)).some((t) => t.startsWith("Could not copy the text to the machine")));
+  assert.deepEqual(fs.readdirSync(path.join(w.base, "app", "filer-pro", "edit")), [], "local staged file removed");
 });
+
 
 test("the mirror file name never leaves the unsaved folder, whatever the remote name", async () => {
   const w = world();

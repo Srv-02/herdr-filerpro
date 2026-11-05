@@ -4,18 +4,18 @@
 // positional arguments, never inside the script text. No sudo, no prompts.
 // No Buffer, TextDecoder, crypto or Intl here (and no locale formatting): the QuickJS runtime has none of them.
 //
-// Remote exec probably joins argv into ONE string for the login shell, so every call stays far below
-// the Linux limit of 128 KiB per argument: one base64 chunk of at most CHUNK_CHARS per call, local or remote.
-// On a machine the text is visible in `ps` there for the moment of a call (exec has no stdin); local saves pass a
-// stage() that writes it into a private file instead, so only a path is in argv.
+// The text never travels in argv (other users could read it there with ps): stage() writes it as base64 into a private
+// local file; locally BEGIN_FILE_SCRIPT decodes that file, for a machine send() first copies it there with scp
+// (bin/transfer.sh, as uploads do) and BEGIN_FILE_SCRIPT decodes it on the machine.
 
 import { base64ToBytes, bytesToBase64, decodeUtf8, encodeUtf8, sha256Hex } from "./textcodec.js";
 import { validateName } from "./fileops.js";
 import { explainError } from "./errors.js";
-import { joinPath } from "./names.js";
+import { joinPath, tempName } from "./names.js";
+import { sshTarget } from "./machines.js";
+import { sshEnv } from "./jobs.js";
 
 export const EDIT_MAX_BYTES = 1048576;
-export const CHUNK_CHARS = 65536; // a multiple of 4, so each chunk decodes on its own
 
 // "@{" stands for the shell's dollar-brace (a template literal would swallow it).
 const sh = (s) => s.trim().replaceAll("@{", "$" + "{");
@@ -88,18 +88,18 @@ if [ "$s" -le ${EDIT_MAX_BYTES} ]; then
 fi
 `);
 
-// begin <b64>: makes the private folder, decodes the first chunk into a fresh file and prints its path.
-export const BEGIN_SCRIPT = sh(String.raw`
+// private-dir: makes the private upload folder on the machine (0700) and prints its path: send() copies the staged
+// text there before BEGIN_FILE_SCRIPT runs on the machine.
+export const PRIVATE_DIR_SCRIPT = sh(String.raw`
 umask 077
 ${CACHE}
 mkdir -p "$d" && chmod 700 "$d" || { echo nocache; exit 1; }
-${DECODER}
-t=$(mktemp "$d/edit.XXXXXX") || { echo nocache; exit 1; }
-if printf %s "$1" | base64 $dec > "$t"; then echo "$t"; else rm -f "$t"; echo upload; exit 1; fi
+printf '%s
+' "$d"
 `);
 
-// begin-file <src>: like begin, but the base64 comes from a staged file (local saves: no content in argv, where other
-// users could read it in ps). The staged file is removed in any case.
+// begin-file <src>: makes the private folder, decodes the staged base64 file <src> into a fresh file there and prints
+// its path. The staged file is removed in any case.
 export const BEGIN_FILE_SCRIPT = sh(String.raw`
 umask 077
 src=$1
@@ -108,14 +108,6 @@ mkdir -p "$d" && chmod 700 "$d" || { rm -f -- "$src"; echo nocache; exit 1; }
 ${DECODER}
 t=$(mktemp "$d/edit.XXXXXX") || { rm -f -- "$src"; echo nocache; exit 1; }
 if tr -d '\n\r' < "$src" | base64 $dec > "$t"; then rm -f -- "$src"; echo "$t"; else rm -f -- "$t" "$src"; echo upload; exit 1; fi
-`);
-
-// append <tmp> <b64>: appends one decoded chunk to the upload file.
-export const APPEND_SCRIPT = sh(String.raw`
-case $1 in */filer-pro/edit/edit.*) ;; *) echo upload; exit 1 ;; esac
-[ -f "$1" ] || { echo upload; exit 1; }
-${DECODER}
-printf %s "$2" | base64 $dec >> "$1" || { echo upload; exit 1; }
 `);
 
 // commit <tmp> <path> <oldHash> <newHash>: replaces the content of <path> in place (same inode, mode, owner, links),
@@ -345,14 +337,6 @@ export function createHistory({ maxEntries = 100, maxChars = 16 * 1024 * 1024, m
 
 // ---- exec: probe, upload, save
 
-// The base64 chunks of bytes, each at most CHUNK_CHARS long (always at least one, possibly empty).
-export function uploadChunks(bytes) {
-  const b64 = bytesToBase64(bytes);
-  const out = [];
-  for (let i = 0; i < b64.length; i += CHUNK_CHARS) out.push(b64.slice(i, i + CHUNK_CHARS));
-  return out.length > 0 ? out : [""];
-}
-
 export async function probeFile({ exec, on = null, path, maxChars }) {
   let res;
   try {
@@ -369,23 +353,40 @@ const lines = (s) => String(s ?? "").split("\n").map((l) => l.trim());
 
 const cannotReach = (e, on) => `Cannot reach the machine: ${explainError(String(e?.message ?? e), on)}`;
 
-// Uploads bytes into a fresh private file on the machine. -> { tmp } | { error }. The file is removed on failure.
-// stage(b64) (local only): writes the base64 into a private file and resolves with its path, so the content never
-// appears in argv; without it (on a machine: exec has no stdin) the chunks travel as arguments.
-async function upload(exec, on, bytes, stage) {
-  const chunks = uploadChunks(bytes);
-  let tmp = null;
+// Uploads bytes into a fresh private file on the machine. -> { tmp } | { error }. Nothing is left behind on failure.
+// stage(b64) writes the base64 into a private local file and resolves with its path; for a machine, send({ on, src, dir,
+// name }) copies that file to <dir>/<name> there (scpSender) -> { ok } | { ok: false, error }. The local file is removed
+// in any case (locally by BEGIN_FILE_SCRIPT, for a machine here, after the copy).
+async function upload(exec, on, bytes, stage, send) {
+  if (!stage || (on != null && !send)) return { error: "Could not prepare the text for saving" };
+  let src = null;
+  try { src = await stage(bytesToBase64(bytes)); } catch { src = null; }
+  if (typeof src !== "string" || !src.startsWith("/")) return { error: "Could not prepare the text for saving" };
+  let tmp = null, remote = null;
   const fail = async (error) => {
     if (tmp) await clean(exec, on, tmp);
+    if (remote) await clean(exec, on, remote);
     return { error };
   };
   try {
-    let src = null;
-    if (stage && on == null) {
-      try { src = await stage(bytesToBase64(bytes)); } catch { src = null; }
-      if (typeof src !== "string" || !src.startsWith("/")) return { error: "Could not prepare the text for saving" };
+    let from = src;
+    if (on != null) {
+      try {
+        const d = await exec("sh", ["-c", PRIVATE_DIR_SCRIPT, "private-dir", ""], { on });
+        const dir = firstLine(d.stdout);
+        if (d.code !== 0 || !dir.startsWith("/")) return { error: "Cannot create the private upload folder on the machine" };
+        const name = `edit.up-${randomId()}.b64`;
+        remote = joinPath(dir, name);
+        let sent;
+        try { sent = await send({ on, src, dir, name }); } catch (e) { sent = { ok: false, error: String(e?.message ?? e) }; }
+        if (!sent?.ok) return await fail(`Could not copy the text to the machine: ${sent?.error || "scp failed"}`);
+      } finally {
+        await removeLocal(exec, src);
+      }
+      from = remote;
     }
-    const res = src ? await exec("sh", ["-c", BEGIN_FILE_SCRIPT, "begin-file", src], { on }) : await exec("sh", ["-c", BEGIN_SCRIPT, "begin", chunks[0]], { on });
+    const res = await exec("sh", ["-c", BEGIN_FILE_SCRIPT, "begin-file", from], { on });
+    remote = null; // BEGIN_FILE_SCRIPT removed it
     if (res.code !== 0) {
       const word = firstLine(res.stdout);
       if (word === "nocache") return { error: "Cannot create the private upload folder on the machine" };
@@ -394,14 +395,45 @@ async function upload(exec, on, bytes, stage) {
     }
     tmp = firstLine(res.stdout);
     if (!tmp.startsWith("/")) return await fail("Could not upload the text");
-    for (let i = 1; !src && i < chunks.length; i++) {
-      const r = await exec("sh", ["-c", APPEND_SCRIPT, "append", tmp, chunks[i]], { on });
-      if (r.code !== 0) return await fail(explainError(r.stderr, on, "Could not upload the text"));
-    }
     return { tmp };
   } catch (e) {
+    if (on == null) await removeLocal(exec, src);
     return await fail(cannotReach(e, on));
   }
+}
+
+const randomId = () => (Math.random().toString(36).slice(2) + "00000000").slice(0, 8);
+
+// Removes a staged local file (best effort; it lives in a 0700 folder).
+async function removeLocal(exec, src) {
+  try { await exec("rm", ["-f", "--", src], { on: null }); } catch {}
+}
+
+// send() for upload: copies the staged local file to <dir>/<name> on the machine with bin/transfer.sh (scp in SFTP mode,
+// BatchMode, the SSH settings as FILER_PRO_SSH_* exactly as transfer jobs get them), mode "new" so nothing is
+// replaced. It runs as one exec (30 s limit; a save is at most about 1.4 MB of base64), without a job row, progress
+// or cancel. The status file lands next to the staged file and is removed again.
+// deps: { exec, hc, script (path of transfer.sh), trashDir, limits() -> config numbers }.
+export function scpSender({ exec, hc, script, trashDir, limits }) {
+  return async ({ on, src, dir, name }) => {
+    let t;
+    try {
+      const r = await hc(["machine", "ls", "--json"]);
+      t = r?.code === 0 ? sshTarget(r.stdout, on) : { error: "Cannot read the machine list" };
+    } catch (e) { t = { error: String(e?.message ?? e) }; }
+    if (t.error) return { ok: false, error: t.error };
+    const id = randomId(), status = `${src}.status`;
+    const argv = [...sshEnv(limits()), "sh", script, "up", "new", t.target, src, joinPath(dir, name), joinPath(dir, tempName(name, id)), status, trashDir];
+    let r;
+    try { r = await exec(argv[0], argv.slice(1), { on: null }); } catch (e) { r = { code: 1, stdout: "", stderr: String(e?.message ?? e) }; }
+    let detail = "";
+    try {
+      const st = await exec("sh", ["-c", 'cat -- "$1" 2>/dev/null; rm -f -- "$1" "$1.err" "$1.tmp"', "status", status], { on: null });
+      detail = String(st.stdout ?? "").split("\n").filter((l) => l && !l.startsWith("state=") && !l.startsWith("code=")).join(" ").trim();
+    } catch {}
+    if (r.code === 0) return { ok: true };
+    return { ok: false, error: explainError(detail || r.stderr, t.target, "scp failed") };
+  };
 }
 
 async function clean(exec, on, tmp) {
@@ -415,11 +447,11 @@ async function clean(exec, on, tmp) {
 // Writes bytes into the open file in place. info is the baseline the editor started from (info.bytes = what the file
 // held). -> { ok: true, bytes, hash } (the sent bytes are the new baseline) | { ok: false, error, kept? }.
 // kept: a path on the machine that still holds the text; backup: the backup of the original (only after "may be incomplete").
-export async function saveFile({ exec, on = null, path, info, bytes, stage }) {
+export async function saveFile({ exec, on = null, path, info, bytes, stage, send }) {
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
   const oldHash = sha256Hex(info.bytes);
   const hash = sha256Hex(bytes);
-  const up = await upload(exec, on, bytes, stage);
+  const up = await upload(exec, on, bytes, stage, send);
   if (up.error) return { ok: false, error: up.error };
   const tmp = up.tmp;
   let res;
@@ -452,14 +484,14 @@ export async function saveFile({ exec, on = null, path, info, bytes, stage }) {
 
 // Creates a new file <dir>/<name> with the bytes and the given mode (octal string). Never replaces anything.
 // -> { ok: true, path, bytes, hash } | { ok: false, error }.
-export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage }) {
+export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage, send }) {
   const bad = validateName(name ?? "");
   if (bad) return { ok: false, error: bad };
   if (typeof dir !== "string" || !dir.startsWith("/")) return { ok: false, error: "path must be absolute" };
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
   const dest = joinPath(dir, name);
   const hash = sha256Hex(bytes);
-  const up = await upload(exec, on, bytes, stage);
+  const up = await upload(exec, on, bytes, stage, send);
   if (up.error) return { ok: false, error: up.error };
   let res;
   try {

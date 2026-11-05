@@ -28,7 +28,7 @@ import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
-import { PROBE_SCRIPT, parseProbe, probeFile, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName } from "./lib/textedit.js";
+import { PROBE_SCRIPT, parseProbe, probeFile, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
@@ -860,7 +860,7 @@ export default class FilerPro extends View {
     const file = this.file, full = joinPath(this.root, file), on = this.on;
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64) }); }
+      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64), send: this.sender() }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       e.busy = false;
       if (!r.ok) { e.message = { text: r.error, error: true }; cx.notify(); return; }
@@ -888,14 +888,20 @@ export default class FilerPro extends View {
     });
   }
 
-  // Local saves (lib/textedit.js uses this only without a machine): the base64 goes into a file in a private folder under
-  // appHome, so only its path is in argv, where other users could read it. The save script removes the file.
+  // Every save stages the base64 in a file in a private folder under appHome, so the text is never in argv, where other
+  // users could read it. Locally the save script decodes and removes it; for a machine sender() copies it there first.
   async stageLocal(b64) {
     const dir = `${appHome()}/filer-pro/edit`;
     await this.privateDir(dir);
     const path = `${dir}/${this.newId()}.b64`;
     await fs.writeFile(path, b64);
     return path;
+  }
+
+  // The scp copy of a staged save to a machine (lib/textedit.js scpSender): bin/transfer.sh with the SSH settings of the
+  // config, as transfer jobs run it.
+  sender() {
+    return scpSender({ exec, hc, script: `${appHome()}/mods/filer-pro/bin/transfer.sh`, trashDir: platform.trashDir(home()), limits: () => this.fileCfg ?? this.conf });
   }
 
   // A local folder only this user can enter (0700): herdr's fs.mkdir and fs.writeFile take no mode.
@@ -932,7 +938,7 @@ export default class FilerPro extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode, stage: (b64) => this.stageLocal(b64) }); }
+      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode, stage: (b64) => this.stageLocal(b64), send: this.sender() }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       c.busy = false;
       if (!r.ok) { c.error = r.error; cx.notify(); return; }
