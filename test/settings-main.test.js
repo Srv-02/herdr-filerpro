@@ -358,7 +358,8 @@ test("hide settings: the listing gets both switches as 1/0 words, on an SSH mach
   Object.assign(self, { context });
   self.current = () => true;
   await self.loadFolder("", context);
-  assert.deepEqual([log.execs[0].args, log.execs[0].opts], [["-c", LIST_SCRIPT, "files", "/srv", "500", "0", "1"], { on: "box" }]);
+  assert.deepEqual([log.execs[0].args, log.execs[0].opts], [["-c", LIST_SCRIPT, "files", "/srv", "500", "1", "1"], { on: "box" }], "hidden files include the system files");
+  assert.equal(self.cfg.hide_system_files, false, "the stored switch is not changed");
   const win = host({ platform: "windows" });
   globalThis.__impl.exec = async (cmd, args) => { win.log.execs.push({ cmd, args }); return { code: 0, stdout: "[]", stderr: "" }; };
   self.cfg = { ...DEFAULTS };

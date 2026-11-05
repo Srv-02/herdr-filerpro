@@ -119,7 +119,7 @@ A missing key means its default. In the file, a number of the wrong type (or wit
 | `perf` | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart; config file only) |
 | `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | see [Editors](#editors) | | Edit in Terminal, Open in Editor (the lists are config file only) |
 | `hide_system_files` | `true` | `true` / `false` | Hide OS clutter: `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`, `.apdisk`, `Icon\r`, `Thumbs.db`, `desktop.ini` (the last two in any case). Hidden entries do not count against the list limits; copy, move and delete of a folder still include them |
-| `hide_dotfiles` | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot |
+| `hide_dotfiles` | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot; while on, system files are hidden too, whatever `hide_system_files` says |
 | `list_per_folder` | `500` | 10–10,000 | Entries shown per folder |
 | `list_total` | `5000` | 100–20,000 | Entries shown in the whole tree |
 | `tree_depth` | `40` | 1–200 | Deepest folder level shown |

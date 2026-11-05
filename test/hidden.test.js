@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { SYSTEM_FILES, isSystemFile, isHidden, hiddenPath, hideArgs, SYSTEM_CASE, psHideFilter } from "../mods/filer-pro/lib/hidden.js";
+import { SYSTEM_FILES, isSystemFile, isHidden, hiddenPath, hideArgs, effectiveHide, SYSTEM_CASE, psHideFilter } from "../mods/filer-pro/lib/hidden.js";
 import { LIST_SCRIPT, psListCommand } from "../mods/filer-pro/lib/tree.js";
 import { mkTmpSync } from "./tmp-helper.js";
 
@@ -37,7 +37,8 @@ test("isSystemFile: macOS names match exactly, the Windows ones in any case", ()
 test("isHidden: each switch alone, both, none; .git is not this module's business", () => {
   assert.equal(isHidden(".DS_Store", SYSTEM), true);
   assert.equal(isHidden(".env", SYSTEM), false);
-  assert.equal(isHidden("Thumbs.db", DOTS), false);
+  assert.equal(isHidden("Thumbs.db", DOTS), true, "hidden files include the system files, even those without a dot");
+  assert.equal(isHidden("desktop.ini", DOTS), true);
   assert.equal(isHidden(".env", DOTS), true);
   assert.equal(isHidden(".DS_Store", DOTS), true, "a dot name is hidden by the dot switch alone");
   assert.equal(isHidden("Thumbs.db", BOTH), true);
@@ -55,9 +56,21 @@ test("hiddenPath: a path is hidden when any of its folders or its name is", () =
   assert.equal(hiddenPath("", BOTH), false, "the shown root itself is never hidden");
 });
 
+test("effectiveHide: Hide hidden files includes the system files; the stored system switch is not changed", () => {
+  assert.deepEqual(effectiveHide(DOTS), { hide_system_files: true, hide_dotfiles: true });
+  assert.deepEqual(effectiveHide(SYSTEM), SYSTEM);
+  assert.deepEqual(effectiveHide(NONE), NONE);
+  assert.deepEqual(effectiveHide(undefined), NONE);
+  assert.deepEqual(effectiveHide({ hide_system_files: false, hide_dotfiles: "yes" }), NONE, "only true counts");
+  const cfg = { hide_system_files: false, hide_dotfiles: true };
+  effectiveHide(cfg);
+  assert.equal(cfg.hide_system_files, false, "the input stays as it is");
+});
+
 test("hideArgs: the two switches as the fixed words 1 and 0, never a config value", () => {
   assert.deepEqual(hideArgs(BOTH), ["1", "1"]);
   assert.deepEqual(hideArgs(NONE), ["0", "0"]);
+  assert.deepEqual(hideArgs(DOTS), ["1", "1"], "hidden files include the system files");
   assert.deepEqual(hideArgs({ hide_system_files: "rm -rf /", hide_dotfiles: 1 }), ["0", "0"], "only true counts");
   assert.deepEqual(hideArgs(undefined), ["0", "0"]);
 });
@@ -93,9 +106,17 @@ test("LIST_SCRIPT: the dot switch hides dot files and dot folders, .git stays ou
   const d = mkTmpSync("filer-pro-hidden-");
   for (const n of [".env", ".gitignore", "a.txt", "..b", "Thumbs.db"]) fs.writeFileSync(path.join(d, n), "");
   for (const n of [".github", ".git", "src"]) fs.mkdirSync(path.join(d, n));
-  assert.deepEqual(list(d, 500, DOTS), ["Thumbs.db", "a.txt", "src"]);
+  assert.deepEqual(list(d, 500, DOTS), ["a.txt", "src"], "Thumbs.db too: hidden files include the system files");
   assert.deepEqual(list(d, 500, BOTH), ["a.txt", "src"]);
   assert.deepEqual(list(d, 500, NONE), ["..b", ".env", ".github", ".gitignore", "Thumbs.db", "a.txt", "src"]);
+});
+
+test("LIST_SCRIPT: the dot word alone also hides system files without a dot (Thumbs.db, desktop.ini)", () => {
+  const d = mkTmpSync("filer-pro-hidden-");
+  for (const n of ["Thumbs.db", "desktop.ini", "Icon\r", "a.txt"]) fs.writeFileSync(path.join(d, n), "");
+  const r = spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, "500", "0", "1"], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.split("\0").filter((x, i) => i % 2 === 1), ["a.txt"]);
 });
 
 test("LIST_SCRIPT: hidden entries do not use up the per-folder limit", () => {
@@ -110,7 +131,7 @@ test("psHideFilter: nothing when both switches are off, else a Where-Object buil
   assert.equal(psHideFilter(NONE), "");
   assert.equal(psHideFilter(undefined), "");
   assert.match(psHideFilter(DOTS), /StartsWith\('\.'/);
-  assert.doesNotMatch(psHideFilter(DOTS), /DS_Store/);
+  assert.ok(psHideFilter(DOTS).includes("@('Thumbs.db', 'desktop.ini') -contains"), "hidden files include the system files");
   const sys = psHideFilter(SYSTEM);
   assert.match(sys, /-ccontains/);
   assert.ok(sys.includes("('Icon' + [char]13)"));
@@ -141,7 +162,7 @@ test("psListCommand: pwsh hides the same names as the shell script", { skip: !pw
   const sys = run(dirs, SYSTEM), dots = run(dirs, DOTS);
   names.forEach((name, i) => {
     assert.deepEqual(sys[i], CLUTTER.includes(name) ? [] : [name], `system: ${JSON.stringify(name)}`);
-    assert.deepEqual(dots[i], name.startsWith(".") ? [] : [name], `dots: ${JSON.stringify(name)}`);
+    assert.deepEqual(dots[i], name.startsWith(".") || CLUTTER.includes(name) ? [] : [name], `dots: ${JSON.stringify(name)}`);
   });
   const d = path.join(root, "limit");
   fs.mkdirSync(d);

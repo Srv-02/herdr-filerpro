@@ -288,7 +288,28 @@ test("view: the File list switches start at their defaults, flip on click, and o
   assert.equal(s.flags.hide_dotfiles, true);
   assert.deepEqual(collect(s), { hide_dotfiles: true });
   const row = byId(view(s), "filer-pro-settings-hide_system_files");
-  assert.deepEqual(texts(row.kids[0]), ["Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them."]);
+  assert.deepEqual(texts(row.kids[0]), ["Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them. Included while Hide hidden files is on."]);
   const off = createSettingsDialog(await snapshot({ hide_system_files: false }), cx);
   assert.equal(off.flags.hide_system_files, false);
+});
+
+test("view: while Hide hidden files is on, Hide system files shows on, is dimmed and cannot be switched; the stored value stays", async () => {
+  const s = createSettingsDialog(await snapshot({ hide_system_files: false, hide_dotfiles: true }), cx);
+  const row = byId(view(s), "filer-pro-settings-hide_system_files");
+  assert.deepEqual(called(row, "opacity"), [[0.45]]);
+  const sw = byId(view(s), "filer-pro-settings-hide_system_files-switch");
+  assert.equal(called(sw, "on_click").length, 0);
+  assert.deepEqual(called(sw, "bg"), [["accent"]], "drawn as on");
+  assert.ok(texts(row).some((x) => x.endsWith(" Included while Hide hidden files is on.")));
+  assert.equal(s.flags.hide_system_files, false, "the stored value is not overwritten");
+  assert.deepEqual(collect(s), {});
+  // Hide hidden files off again: the stored value (off) applies and the switch works.
+  called(byId(view(s), "filer-pro-settings-hide_dotfiles-switch"), "on_click")[0][0]({}, makeCx());
+  const back = byId(view(s), "filer-pro-settings-hide_system_files");
+  assert.equal(called(back, "opacity").length, 0);
+  assert.ok(!texts(back).some((x) => x.includes("Included while Hide hidden files is on.")));
+  const sw2 = byId(view(s), "filer-pro-settings-hide_system_files-switch");
+  assert.deepEqual(called(sw2, "bg"), [["hover"]], "drawn as off");
+  assert.equal(called(sw2, "on_click").length, 1);
+  assert.deepEqual(collect(s), { hide_dotfiles: false });
 });

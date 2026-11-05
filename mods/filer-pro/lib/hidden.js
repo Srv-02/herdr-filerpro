@@ -20,9 +20,17 @@ export function isSystemFile(name) {
   return EXACT.has(name) || SYSTEM_FILES.prefixes.some((p) => name.startsWith(p)) || ANY_CASE.has(name.toLowerCase());
 }
 
+// The switches as the filter applies them: Hide hidden files includes the system files (Thumbs.db and desktop.ini have
+// no dot). The stored hide_system_files is never changed; it applies again once hide_dotfiles is off. Only true counts.
+export function effectiveHide(hide) {
+  const dots = hide?.hide_dotfiles === true;
+  return { hide_system_files: dots || hide?.hide_system_files === true, hide_dotfiles: dots };
+}
+
 // hide: the settings { hide_system_files, hide_dotfiles }; only true switches a filter on.
 export function isHidden(name, hide) {
-  return (hide?.hide_dotfiles === true && name.startsWith(".")) || (hide?.hide_system_files === true && isSystemFile(name));
+  const h = effectiveHide(hide);
+  return (h.hide_dotfiles && name.startsWith(".")) || (h.hide_system_files && isSystemFile(name));
 }
 
 // A path relative to the shown root is hidden when its name or any folder above it is (an open folder that became hidden).
@@ -31,7 +39,10 @@ export function hiddenPath(path, hide) {
 }
 
 // The switches as the listing script's $3 (system files) and $4 (dot files).
-export const hideArgs = (hide) => [hide?.hide_system_files === true ? "1" : "0", hide?.hide_dotfiles === true ? "1" : "0"];
+export const hideArgs = (hide) => {
+  const h = effectiveHide(hide);
+  return [h.hide_system_files ? "1" : "0", h.hide_dotfiles ? "1" : "0"];
+};
 
 // --- shell: one `case` pattern. Every name is double-quoted (literal); a carriage return is the variable $cr the
 // listing script sets; a letter of an anyCase name is a bracket of both cases. ---
@@ -48,9 +59,9 @@ const psString = (name) => {
 const psList = (names) => `@(${names.map(psString).join(", ")})`;
 
 export function psHideFilter(hide) {
-  const tests = [];
-  if (hide?.hide_dotfiles === true) tests.push("$_.Name.StartsWith('.', [StringComparison]::Ordinal)");
-  if (hide?.hide_system_files === true) {
+  const tests = [], h = effectiveHide(hide);
+  if (h.hide_dotfiles) tests.push("$_.Name.StartsWith('.', [StringComparison]::Ordinal)");
+  if (h.hide_system_files) {
     tests.push(`${psList(SYSTEM_FILES.exact)} -ccontains $_.Name`);
     for (const p of SYSTEM_FILES.prefixes) tests.push(`$_.Name.StartsWith(${psString(p)}, [StringComparison]::Ordinal)`);
     tests.push(`${psList(SYSTEM_FILES.anyCase)} -contains $_.Name`);

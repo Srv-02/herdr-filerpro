@@ -4,8 +4,9 @@ import { SYSTEM_CASE, psHideFilter } from "./hidden.js";
 
 // `files <dir> <limit> [<system> <dots>]`: NUL-separated kind (d/f) and name of each entry but .git, at most <limit> + 1
 // of them (one past the limit tells main.js that the folder was cut); ends with `test -d`, see folderMissing.
-// <system> and <dots> are 1 or 0 (lib/hidden.js hideArgs): 1 skips system files or dot names before they are counted.
-export const LIST_SCRIPT = 'n=0; cr=$(printf \'\\r\'); for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ "$4" = 1 ]; then case $name in .*) continue;; esac; fi; if [ "$3" = 1 ]; then case $name in ' + SYSTEM_CASE + ') continue;; esac; fi; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
+// <system> and <dots> are 1 or 0 (lib/hidden.js hideArgs): 1 skips system files or dot names before they are counted;
+// <dots> 1 skips the system files too (lib/hidden.js effectiveHide), also for a caller that passes the raw settings.
+export const LIST_SCRIPT = 'n=0; cr=$(printf \'\\r\'); for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ "$4" = 1 ]; then case $name in .*) continue;; esac; fi; if [ "$3" = 1 ] || [ "$4" = 1 ]; then case $name in ' + SYSTEM_CASE + ') continue;; esac; fi; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
 
 // The Windows listing: JSON of { name, dir } for at most `limit` + 1 entries. Windows PowerShell otherwise uses the
 // console code page; exec decodes UTF-8. Reparse points keep directory attributes even when dangling; check their target.
