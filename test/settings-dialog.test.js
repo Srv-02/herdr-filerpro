@@ -87,8 +87,11 @@ test("dialog: own editors from the file, a broken one shows its reason, a new on
   assert.equal(s.terminal.slots.length, 4);
   assert.equal(s.terminal.slots[1].command.value, "x {path}");
   assert.equal(s.terminal.choice, "nvim");
-  assert.equal(collect(s), null);
+  assert.deepEqual(collect(s), {}, "untouched: not checked, not written");
+  s.terminal.slots[0].command.input.type("nvim -u NONE", cx);
+  assert.equal(collect(s), null, "touched: the broken entry must be fixed");
   assert.deepEqual(s.terminal.errors, [null, "Must not contain {path} (the path is appended)", null, null]);
+  s.terminal.slots[0].command.input.type("nvim", cx);
   s.terminal.slots[1].name.input.type("", cx); s.terminal.slots[1].command.input.type("", cx);
   s.gui.slots[0].name.input.type("Mine", cx); s.gui.slots[0].local.input.type("mine {path}", cx);
   assert.ok(editorChoices(s.gui).includes("Mine"));
@@ -123,4 +126,15 @@ test("view: every setting is listed, the SVG warning comes right after the SVG s
   assert.ok(out.slice(sw + 1, warn).every((x) => !x.startsWith("#")), "nothing in between");
   assert.ok(out.includes(SVG_WARNING));
   assert.ok(out.includes("Save") && out.includes("Cancel"));
+});
+
+test("dialog: untouched own editors are never rewritten, also when the file has entries the dialog would refuse", async () => {
+  const raw = { gui_editors: [{ name: "x", local: "x {path}", remote: null, note: "mine" }], terminal_editors: [{ name: "a", command: "a" }, { name: "a", command: "b" }] };
+  const s = createSettingsDialog(await snapshot(raw), cx);
+  type(s, "list_total", "6000");
+  assert.deepEqual(collect(s), { list_total: 6000 });
+  // Touching a slot validates the list again: then the duplicate must be fixed.
+  s.terminal.slots[1].command.input.type("c", cx);
+  assert.equal(collect(s), null);
+  assert.deepEqual(s.terminal.errors, [null, "Duplicate name", null, null]);
 });

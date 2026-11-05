@@ -33,7 +33,7 @@ export const SETTINGS = Object.freeze([
   bool("preview", true, "Preview Markdown, HTML, images and PDFs", "General"),
   bool("mermaid", true, "Draw Mermaid diagrams", "General"),
   bool("update_check", true, "Check for updates once a day", "General"),
-  bool("perf", false, "Write render timings (perf.jsonl)", "General"),
+  bool("perf", false, "Write render timings (perf.jsonl; takes effect after a restart)", "General"),
   Object.freeze({ key: "node_path", kind: "path", default: "", label: "Node for Mermaid (empty: automatic)", section: "Preview" }),
   ...NUMBERS,
   bool("svg_check", true, "Check SVG files before drawing them (recommended)", "Security"),

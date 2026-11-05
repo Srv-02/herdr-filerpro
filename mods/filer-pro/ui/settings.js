@@ -38,7 +38,9 @@ export function createSettingsDialog(snapshot, cx) {
     const slot = (e) => Object.fromEntries(names.map((n) => [n, field(str(e?.[n]), clear)]));
     const slots = [...list.map(slot), ...Array.from({ length: EXTRA_SLOTS }, () => slot(null))];
     state.initial[listKey] = list; state.initial[choiceKey] = config[choiceKey];
-    return { kind, listKey, choiceKey, names, slots, errors: [], choice: config[choiceKey], choiceError: null };
+    const ed = { kind, listKey, choiceKey, names, slots, errors: [], choice: config[choiceKey], choiceError: null };
+    ed.opened = JSON.stringify(slotValues(ed)); // the slots as shown: untouched, the list is neither checked nor written
+    return ed;
   };
   state.terminal = editors("terminal", "terminal_editors", "terminal_editor", ["name", "command"]);
   state.gui = editors("gui", "gui_editors", "gui_editor", ["name", "local", "remote"]);
@@ -66,6 +68,9 @@ export function collect(state) {
     if (r.error) bad = true; else current[key] = r.value;
   }
   for (const ed of [state.terminal, state.gui]) {
+    // Untouched slots and choice: nothing to write, and an entry the file holds by hand (a duplicate name, a broken
+    // remote that loadConfig drops alone) does not block saving the other settings.
+    if (ed.choice === state.initial[ed.choiceKey] && JSON.stringify(slotValues(ed)) === ed.opened) { ed.errors = []; ed.choiceError = null; continue; }
     const r = editorSlots(ed.kind, slotValues(ed), ed.choice);
     ed.errors = r.errors; ed.choiceError = r.choiceError;
     if (!r.value) { bad = true; continue; }

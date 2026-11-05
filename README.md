@@ -92,7 +92,7 @@ Code opens with syntax colors and line wrap, HTML and images open in place. One 
 
 #### Settings dialog
 
-Every setting below can also be changed in **Settings** (the button in the panel header while no file is open, or right click the free area below the tree, `Settings…`). The dialog checks each value and shows what is wrong next to the field; nothing is written until every field is valid. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart.
+Every setting below can also be changed in **Settings** (the button in the panel header while no file is open, or right click the free area below the tree, `Settings…`). The dialog checks each value and shows what is wrong next to the field; nothing is written until every field is valid. Saving changes only the keys you edited: it reads the file again, applies your changes, and writes only if nobody changed the file in between (else it reads it again and retries). Keys it does not know stay as they are. A file that is not valid JSON is never overwritten; fix or remove it first. Changes apply within a second, without a restart (only `perf` needs one).
 
 A missing key means its default. In the file, a number of the wrong type (or with a fraction) means the default, a whole number out of range the nearest bound.
 
@@ -102,7 +102,7 @@ A missing key means its default. In the file, a number of the wrong type (or wit
 | `preview` | `true` | `true` / `false` | Preview Markdown, HTML, images and PDFs |
 | `mermaid` | `true` | `true` / `false` | Draw Mermaid diagrams |
 | `update_check` | `true` | `true` / `false` | Daily update check |
-| `perf` | `false` | `true` / `false` | Render timings in `perf.jsonl` |
+| `perf` | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart) |
 | `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | see [Editors](#editors) | | Edit in Terminal, Open in Editor |
 | `list_per_folder` | `500` | 10–10,000 | Entries shown per folder |
 | `list_total` | `5000` | 100–20,000 | Entries shown in the whole tree |

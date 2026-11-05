@@ -253,3 +253,15 @@ test("settings: preview limits travel per call (source guard and loadLimits)", a
     { maxImage: 3 * MB, cacheLimit: 70 * MB, maxLocal: 8 * MB, maxRemote: 9 * MB, svgCheck: false });
   assert.deepEqual(panel({}).loadLimits(), { maxImage: 20 * MB, cacheLimit: 50 * MB, maxLocal: 100 * MB, maxRemote: 20 * MB, svgCheck: true }, "defaults before a file was shown");
 });
+
+test("settings: a file holding null is broken; non-default list settings reload the tree at the next tick", async () => {
+  const b = host({ files: { "/app/filer-pro.json": "null" } });
+  await panel({}).openSettings();
+  assert.equal(b.store["filer-pro.settings"].broken, true);
+  host({ files: { "/app/filer-pro.json": '{"list_total": 300}', "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' } });
+  const { cx } = fakeCx();
+  const self = Object.create(FilerPro.prototype);
+  self.init({}, cx);
+  await settle();
+  assert.equal(self.refreshedAt, 0);
+});

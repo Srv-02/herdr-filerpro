@@ -124,6 +124,8 @@ export default class FilerPro extends View {
     this.configSeen = shared("filer-pro.config")?.at ?? null;
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
+      // The first listing ran with the defaults: other list settings reload the tree at the next tick.
+      if (["list_per_folder", "list_total", "tree_depth"].some((k) => cfg[k] !== DEFAULTS[k])) this.refreshedAt = 0;
       this.version = await this.readVersion();
       if (cfg.perf) await this.startPerf(cx);
     });
@@ -169,7 +171,7 @@ export default class FilerPro extends View {
     try {
       const text = await readTextFile(`${appHome()}/filer-pro.json`).catch(() => null);
       raw = text == null ? null : JSON.parse(text);
-      broken = raw !== null && (typeof raw !== "object" || Array.isArray(raw));
+      broken = text != null && (raw === null || typeof raw !== "object" || Array.isArray(raw));
     } catch { broken = true; raw = null; }
     const config = await loadConfig(readTextFile, appHome, home);
     setShared("filer-pro.settings", { config, raw: broken ? null : raw, broken });
