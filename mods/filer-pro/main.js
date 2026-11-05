@@ -14,7 +14,8 @@ import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
 import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
-import { markBundles, treeDir, sortsAsFolder, bundleIcon, packageClick } from "./lib/bundles.js";
+import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
+import { fileClick } from "./lib/clicks.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
@@ -56,7 +57,7 @@ function location() {
 }
 const key = () => JSON.stringify(location());
 // The settings before the config file was read (and in copies that never read it): today's defaults.
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, double_click_files: false, double_click_apps: true };
 const MB = 1024 * 1024;
 // Title of the error toast per failed request action.
 const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Copy failed", paste: "Paste failed", rename: "Rename failed", mkdir: "New folder failed", delete: "Delete failed", clip: "Copy failed" };
@@ -877,12 +878,15 @@ export default class FilerPro extends View {
       .child(this.viewer(t));
   }
 
-  // A click on a macOS package (local only, lib/bundles.js packageClick): a single click marks the row as the tree marks
-  // the last opened file; a double click opens it like the Finder does (lib/open.js openBundle).
-  clickPackage(path, event, cx) {
-    const action = packageClick(event);
-    if (action === "select") { this.lastOpened = path; cx.notify(); }
-    else if (action === "open") openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
+  // A click on a file row or a macOS package row (local only, lib/bundles.js) under double_click_files or
+  // double_click_apps, read at each click (lib/clicks.js fileClick). "select" marks the row as the tree marks the last
+  // opened file; "open" shows a file in the viewer and starts a package like the Finder does (lib/open.js openBundle).
+  clickFile(path, bundle, event, cx) {
+    const action = fileClick(event, bundle ? this.conf.double_click_apps : this.conf.double_click_files);
+    if (action === "open" && !bundle) { this.show(path, cx); return; }
+    if (!action) return;
+    this.lastOpened = path; cx.notify();
+    if (action === "open") openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
   }
 
   // Cmd+click: remote rows are downloaded and shown in the Finder, local rows are only shown there.
@@ -912,7 +916,7 @@ export default class FilerPro extends View {
       const menuState = { paste: { enabled: false }, isDir: entry.dir, bundle, contents };
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
-        .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : dir ? this.toggle(path, cx) : bundle ? this.clickPackage(path, e, cx) : this.show(path, cx))
+        .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : dir ? this.toggle(path, cx) : this.clickFile(path, bundle, e, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });

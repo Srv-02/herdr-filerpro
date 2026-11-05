@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, ...numbers(null),
+    node_path: "", svg_check: true, double_click_files: false, double_click_apps: true, ...numbers(null),
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -114,4 +114,13 @@ test("settings dialog keys: numbers clamped or defaulted, node_path absolute or 
   assert.equal(c.node_path, "/usr/bin/node");
   c = await loadConfig(reader("{nope"), appHome, home);
   assert.deepEqual([c.list_total, c.svg_check, c.node_path], [5000, true, ""]);
+});
+
+test("double_click_files is off and double_click_apps on by default; each changes only with a boolean (issue #21)", async () => {
+  for (const text of [null, "{nope", '{"double_click_files":"yes","double_click_apps":0}']) {
+    const c = await loadConfig(reader(text), appHome, home);
+    assert.deepEqual([c.double_click_files, c.double_click_apps], [false, true], String(text));
+  }
+  const c = await loadConfig(reader('{"double_click_files":true,"double_click_apps":false}'), appHome, home);
+  assert.deepEqual([c.double_click_files, c.double_click_apps], [true, false]);
 });

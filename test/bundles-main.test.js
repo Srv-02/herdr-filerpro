@@ -41,7 +41,7 @@ const FilerPro = (await import("../mods/filer-pro/main.js")).default;
 
 const never = () => new Promise(() => {});
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, double_click_files: false, double_click_apps: true };
 const ROOT = "/Users/example/Downloads";
 const LISTING = ["d", "Example.app", "d", "Tool.xcodeproj", "d", "Setup.PKG", "d", "src", "f", "a.txt"].join("\0") + "\0";
 
@@ -331,4 +331,57 @@ test("Show and Hide Package Contents are applied without cx.notify() during rend
   await settle();
   assert.equal(self.folders.has("Example.app"), false, "hidden again");
   assert.ok(notified > 0, "redrawn from a task");
+});
+
+// Issue #21: double_click_files (default off) for files, double_click_apps (default on) for local packages, each on its own.
+for (const files of [false, true]) for (const apps of [false, true]) {
+  test(`clicks with double_click_files ${files} and double_click_apps ${apps}`, async () => {
+    const { log } = host();
+    const cx = fakeCx();
+    const self = await loaded(cx);
+    self.cfg = { ...DEFAULTS, double_click_files: files, double_click_apps: apps };
+    const click = (name, n) => handler(byId(self.render(cx), `file-${name}`), "on_click")({ modifiers: {}, click_count: n }, cx);
+    const opens = () => execsOf(log, OPEN_BUNDLE_SCRIPT).length;
+    log.execs.length = 0;
+
+    // A file: one press opens it with the switch off, only marks it with the switch on.
+    click("a.txt", 1);
+    assert.equal(self.lastOpened, "a.txt", "marked either way");
+    assert.equal(self.file, files ? null : "a.txt");
+    // An open file covers the tree (render), so it is closed before the next press.
+    self.show(null);
+    click("a.txt", 2);
+    assert.equal(self.file, files ? "a.txt" : null, "the second press opens only with the switch on");
+    self.show(null);
+    click("a.txt", 3);
+    assert.equal(self.file, null, "a third press does nothing");
+
+    // A package: one press starts it with the switch off, only marks it with the switch on; it is started once.
+    click("Example.app", 1);
+    await settle();
+    assert.equal(self.lastOpened, "Example.app");
+    assert.equal(opens(), apps ? 0 : 1);
+    click("Example.app", 2);
+    click("Example.app", 3);
+    await settle();
+    assert.equal(opens(), 1, "started exactly once");
+    assert.equal(self.file, null, "never read as a file");
+
+    // Folders are not affected: one press expands.
+    click("src", 1);
+    assert.equal(self.folders.has("src"), true);
+  });
+}
+
+test("the double click switches apply at the next click, without a restart", async () => {
+  host();
+  const cx = fakeCx();
+  const self = await loaded(cx);
+  const click = (n) => handler(byId(self.render(cx), "file-a.txt"), "on_click")({ modifiers: {}, click_count: n }, cx);
+  click(1);
+  assert.equal(self.file, "a.txt");
+  self.show(null);
+  self.cfg = { ...self.cfg, double_click_files: true };
+  click(1);
+  assert.equal(self.file, null);
 });

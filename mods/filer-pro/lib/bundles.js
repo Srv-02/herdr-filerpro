@@ -1,7 +1,7 @@
 // macOS packages (issue #14): folders the Finder shows and opens as one file. Pure.
 //
 // Only in a local tree on macOS: a folder whose name ends in one of BUNDLE_EXTENSIONS (any letter case) is a file row
-// that opens with `open` (lib/open.js openBundle); "Show Package Contents" turns it into a folder row until it is
+// that opens with `open` (lib/open.js openBundle; a click as double_click_apps says, lib/clicks.js); "Show Package Contents" turns it into a folder row until it is
 // collapsed. Developer packages (.xcodeproj, .framework, .bundle, ...) stay folders: people browse into them.
 // Everything that changes the file system (copy, cut, download, delete) still treats a package as the folder it is.
 import { icon } from "./icons.js";
@@ -44,13 +44,4 @@ export function sortsAsFolder(entry) {
 // The icon of a package shown as a file.
 export function bundleIcon(name, dark) {
   return icon(`package.${ICON_AS[bundleExt(name)] ?? "file"}`, false, false, dark);
-}
-
-// A click on a package row shown as a file (on_click's ClickEvent): "select" marks the row, "open" starts it, null
-// does nothing. Like the Finder, only a double click opens: GPUI reports it as two clicks, click_count 1 and then 2,
-// so the first press marks and the second opens; a third press of a triple click does not start it again.
-// Keyboard activation counts as one click. Open in the row menu starts a package directly.
-export function packageClick(event) {
-  const n = typeof event?.click_count === "number" ? event.click_count : 1;
-  return n <= 1 ? "select" : n === 2 ? "open" : null;
 }

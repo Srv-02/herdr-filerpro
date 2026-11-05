@@ -2,7 +2,7 @@ import { TERMINAL_EDITORS, GUI_EDITORS, DEFAULT_TERMINAL_EDITOR, DEFAULT_GUI_EDI
 import { numbers, terminalProblem, guiProblem, remoteProblem, validateField } from "./settings.js";
 
 // Config: appHome()/filer-pro.json. Keys: download_folder, preview, mermaid, perf, update_check, terminal_editor,
-// terminal_editors, gui_editor, gui_editors, node_path, svg_check and the numbers of lib/settings.js (NUMBERS).
+// terminal_editors, gui_editor, gui_editors, node_path, svg_check, double_click_files, double_click_apps and the numbers of lib/settings.js (NUMBERS).
 // A missing or broken file, or a value of the wrong type, means the default; a number out of range is clamped.
 
 const trimmed = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
@@ -57,7 +57,8 @@ export async function loadConfig(readTextFile, appHome, home) {
   }
   const flag = (key, fallbackValue) => (cfg && typeof cfg[key] === "boolean" ? cfg[key] : fallbackValue);
   const flags = { preview: flag("preview", true), mermaid: flag("mermaid", true), perf: flag("perf", false), update_check: flag("update_check", true), ...editors(cfg),
-    node_path: validateField("node_path", typeof cfg?.node_path === "string" ? cfg.node_path : "").value ?? "", svg_check: flag("svg_check", true), ...numbers(cfg) };
+    node_path: validateField("node_path", typeof cfg?.node_path === "string" ? cfg.node_path : "").value ?? "", svg_check: flag("svg_check", true),
+    double_click_files: flag("double_click_files", false), double_click_apps: flag("double_click_apps", true), ...numbers(cfg) };
   if (folder == null) return { download_folder: fallback, ...flags };
   if (folder === "~" || folder.startsWith("~/")) folder = home() + folder.slice(1);
   return { download_folder: folder, ...flags };
