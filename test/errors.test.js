@@ -32,8 +32,19 @@ test("target folder problems from scp and cp", () => {
   assert.equal(explainError('scp: dest open "/srv/in/.a.txt.fs-k3.part": No such file or directory'), "Target folder does not exist");
   assert.equal(explainError('scp: open local "/.a.txt.fs-k3.part": Read-only file system'), "Cannot write to the target folder: Read-only file system");
   assert.equal(explainError('scp: open local "/x": Permission denied'), "Cannot write to the target folder: Permission denied");
-  assert.equal(explainError("cp: /x/.a.part: Read-only file system"), "Cannot write to the target folder: Read-only file system");
-  assert.equal(explainError("cp: /x/.a.part: Permission denied"), "Cannot write to the target folder: Permission denied");
+  assert.equal(explainError("cp: /x/.a.txt.fs-k3.part: Read-only file system"), "Cannot write to the target folder: Read-only file system");
+  assert.equal(explainError("cp: /x/.a.txt.fs-k3.part: Permission denied"), "Cannot write to the target folder: Permission denied");
+});
+
+test("cp on macOS: temp name means target, plain path means unreadable source", () => {
+  assert.equal(explainError("cp: /x/.a.txt.fs-k3.part: Permission denied"), "Cannot write to the target folder: Permission denied");
+  assert.equal(explainError("cp: src/f: Permission denied"), "Cannot read the file: Permission denied");
+});
+
+test("cp from GNU coreutils: reading vs creating", () => {
+  assert.equal(explainError("cp: cannot open 'src/f' for reading: Permission denied"), "Cannot read the file: Permission denied");
+  assert.equal(explainError("cp: cannot create regular file '/x/.a.txt.fs-k3.part': Permission denied"), "Cannot write to the target folder: Permission denied");
+  assert.equal(explainError("cp: cannot create regular file '/x/.a.txt.fs-k3.part': Read-only file system"), "Cannot write to the target folder: Read-only file system");
 });
 
 test("old table wins over the target folder rules", () => {

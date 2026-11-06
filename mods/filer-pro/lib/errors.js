@@ -44,8 +44,13 @@ function explain(text, host, localPlatform, direction) {
     if (src) return /No such file or directory/.test(src[1]) ? "The file no longer exists" : `Cannot read the file: ${src[1]}`;
   }
   if (/(?:open local|dest open) "[^"]*": No such file or directory/.test(text)) return "Target folder does not exist";
-  const write = /(?:open local|dest open) "[^"]*": ([^\n]+)/.exec(text) ?? /^cp: .*: (Read-only file system|Permission denied)$/m.exec(text);
+  const write = /(?:open local|dest open) "[^"]*": ([^\n]+)/.exec(text)
+    ?? /^cp: .*\.fs-[^/\n]*\.part'?: (Read-only file system|Permission denied)$/m.exec(text)
+    ?? /^cp: .*: (Read-only file system)$/m.exec(text);
   if (write) return `Cannot write to the target folder: ${write[1]}`;
+  // cp names the temp file `.<name>.fs-<id>.part` only when the target is the problem
+  const read = /^cp: .*: (Permission denied)$/m.exec(text);
+  if (read) return `Cannot read the file: ${read[1]}`;
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   return lines.length === 0 ? "" : lines[lines.length - 1];
 }
