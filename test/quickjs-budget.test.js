@@ -16,7 +16,8 @@ const HAS_HERDR = spawnSync("herdr-app", ["--version"], { encoding: "utf8" }).st
 // setup takes little of the job's time: bin holds one char per byte, bytes() makes the Uint8Array.
 const SETUP = `
 import { EDIT_MAX_BYTES, parseProbe, checkEditable, bufferBytes } from "./lib/textedit.js";
-import { bytesToBase64, binaryToBytes, equalBytes, sha256Hex, SHA_SLICE } from "./lib/textcodec.js";
+import { bytesToBase64, binaryToBytes, equalBytes, sha256Hex, SHA_SLICE, decodeUtf8Lossy } from "./lib/textcodec.js";
+import { readResult, LOSSY_SLICE } from "./lib/readfile.js";
 import { View, div } from "gpui-kit";
 const unit = "Grüße € 😀 the quick brown fox\\r\\n";
 const unitBytes = unescape(encodeURIComponent(unit)).length;
@@ -91,4 +92,28 @@ const result = { same: a.r, ms: a.ms };
   assert.equal(click.same, true);
   assert.ok(upload.len > 1398000);
   assert.equal(after.same, true);
+});
+
+// #39: the bounded read of a 1 MiB file: parse, decode and edit check in the job that receives the exec output; a file
+// that is not UTF-8 is decoded lossily one slice per job (lib/readfile.js readFileGuarded), so each slice must fit.
+test("in herdr's QuickJS the read of a 1 MiB file and each lossy slice finish within one job", { skip: !HAS_HERDR && "herdr-app not installed" }, (t) => {
+  const read = runInHerdr(`
+const out = { code: 0, stdout: stdout.replace(" n\\n", " n n\\n"), stderr: "" };
+const c = timed(() => readResult(out, { maxChars: 2000000, defer: true }));
+const result = { ok: c.r.ok, edit: c.r.edit.ok, len: c.r.text.length, ms: c.ms };
+`);
+  // worst cases for one slice: all bytes >= 0x80 (a Cyrillic code page), and CJK UTF-8 with one stray byte
+  const slices = runInHerdr(`
+let high = ""; for (let i = 0; i < LOSSY_SLICE; i++) high += String.fromCharCode(0x80 + (i % 128));
+const cjk = unescape(encodeURIComponent("漢字かな交じり文".repeat(Math.ceil(LOSSY_SLICE / 24)))).slice(0, LOSSY_SLICE - 1) + "\\xff";
+const a = timed(() => decodeUtf8Lossy(binaryToBytes(high)).length);
+const b = timed(() => decodeUtf8Lossy(binaryToBytes(cjk)).length);
+const result = { a: a.r, aMs: a.ms, b: b.r, bMs: b.ms };
+`);
+  t.diagnostic(`readResult 1 MiB: ${read.ms} ms; lossy slice all-high ${slices.aMs} ms, CJK + 1 bad byte ${slices.bMs} ms`);
+  assert.equal(read.ok, true);
+  assert.equal(read.edit, true);
+  assert.ok(read.len > 800000);
+  assert.equal(slices.a, 65536);
+  assert.ok(slices.b > 20000);
 });

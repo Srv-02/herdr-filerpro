@@ -12,6 +12,7 @@ import {
   bytesToBinary,
   binaryToBytes,
   equalBytes,
+  decodeUtf8Lossy,
 } from "../mods/filer-pro/lib/textcodec.js";
 
 // Deterministic PRNG (mulberry32) so failures are reproducible.
@@ -346,4 +347,48 @@ test("sha256HexSliced: same hash as sha256Hex, pause between the slices only", a
   let pauses = 0;
   assert.equal(await sha256HexSliced(mib, async () => { pauses++; }), sha(mib));
   assert.equal(pauses, 1048576 / SHA_SLICE - 1);
+});
+
+// #39: a file that is not UTF-8 (Latin-1 and the like) is still shown, with U+FFFD for each byte that starts no valid
+// sequence. Natively (regex passes over the binary string), so 1 MiB fits one QuickJS job.
+test("decodeUtf8Lossy: valid UTF-8 passes unchanged, each invalid byte becomes one U+FFFD", () => {
+  const R = "\ufffd";
+  assert.equal(decodeUtf8Lossy(u8()), "");
+  assert.equal(decodeUtf8Lossy(new Uint8Array(Buffer.from("ok ä € 😀\r\n", "utf8"))), "ok ä € 😀\r\n");
+  assert.equal(decodeUtf8Lossy(u8(0x47, 0x72, 0xfc, 0xdf, 0x65)), `Gr${R}${R}e`, "Latin-1 Grüße");
+  assert.equal(decodeUtf8Lossy(u8(0xe4, 0xc3, 0xa4)), `${R}ä`, "an invalid byte right before a valid sequence");
+  assert.equal(decodeUtf8Lossy(u8(0xc3, 0xa4, 0xe4)), `ä${R}`, "a valid sequence right before an invalid byte");
+  assert.equal(decodeUtf8Lossy(u8(0xc3, 0xa4, 0xa4)), `ä${R}`, "a stray continuation byte");
+  assert.equal(decodeUtf8Lossy(u8(0xe2, 0x82, 0x41)), `${R}${R}A`, "a truncated sequence: one per byte");
+  assert.equal(decodeUtf8Lossy(u8(0xc0, 0x80)), `${R}${R}`, "overlong");
+  assert.equal(decodeUtf8Lossy(u8(0xed, 0xa0, 0x80)), `${R}${R}${R}`, "a surrogate");
+  assert.equal(decodeUtf8Lossy(u8(0xf4, 0x90, 0x80, 0x80)), `${R}${R}${R}${R}`, "above U+10FFFF");
+  assert.equal(decodeUtf8Lossy(u8(0x61, 0x00, 0xff)), `a\0${R}`, "NUL survives");
+  assert.equal(decodeUtf8Lossy(u8(0xf0, 0x9f, 0x98, 0x80, 0xff)), `😀${R}`);
+});
+
+test("decodeUtf8Lossy gives the same result with and without the native routes", () => {
+  const rnd = prng(39);
+  const samples = [u8(0xe4), u8(0xc3), u8(0xe2, 0x82), u8(0xef, 0xbf, 0xbd, 0x80)];
+  for (let i = 0; i < 400; i++) samples.push(randomBytes(rnd, Math.floor(rnd() * 40)));
+  for (let i = 0; i < 100; i++) {
+    const b = new Uint8Array(Buffer.from(randomString(rnd, 20), "utf8"));
+    if (b.length) b[Math.floor(rnd() * b.length)] = Math.floor(rnd() * 256);
+    samples.push(b);
+  }
+  const native = samples.map(decodeUtf8Lossy);
+  const loops = withoutNatives(() => samples.map(decodeUtf8Lossy));
+  assert.deepEqual(native, loops);
+  for (const s of native) assert.notEqual(encodeUtf8(s), null, "always well-formed text");
+});
+
+test("decodeUtf8Lossy of 1 MiB of Latin-1 and of all high bytes stays fast", () => {
+  const latin = new Uint8Array(1048576).map((_, i) => (i % 17 === 0 ? 0xe4 : 0x61));
+  const high = new Uint8Array(1048576).map((_, i) => 0x80 + (i % 128));
+  for (const b of [latin, high]) {
+    const t0 = Date.now();
+    const s = decodeUtf8Lossy(b);
+    assert.equal(s.length, b.length);
+    assert.ok(Date.now() - t0 < 2000);
+  }
 });

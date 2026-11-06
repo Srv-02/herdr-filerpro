@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
-import { PROBE_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
+import { PROBE_SCRIPT, READ_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
 import { LIST_SCRIPT } from "../mods/filer-pro/lib/tree.js";
 import { numbers, validateField } from "../mods/filer-pro/lib/settings.js";
 
@@ -171,7 +171,9 @@ const click = (tree, id, cx) => handler(byId(tree, id), "on_click")({ modifiers:
 const texts = (root) => [...walk(root)].flatMap((e) => (e.kids ?? []).filter((k) => typeof k === "string"));
 const LISTS = (w) => w.log.execs.filter((e) => e.cmd === "sh" && e.args[1] === LIST_SCRIPT);
 const PROBES = (w) => w.log.execs.filter((e) => e.cmd === "sh" && e.args[1] === PROBE_SCRIPT);
-const READS = (w, name) => w.log.reads.filter((r) => r.p === path.join(w.ROOT, name));
+// Every read of a file: herdr's readTextFile (locally) or the bounded READ_SCRIPT exec (on a machine, issue #39).
+const READS = (w, name) => [...w.log.reads.filter((r) => r.p === path.join(w.ROOT, name)),
+  ...w.log.execs.filter((e) => e.cmd === "sh" && e.args[1] === READ_SCRIPT && e.args[3] === path.join(w.ROOT, name)).map((e) => ({ p: e.args[3], on: e.on }))];
 const type = (w, state, text) => { state.v = text; state.handlers.change({}, w.cx); };
 
 async function opened(w, self, name = "a.txt") {
@@ -287,7 +289,8 @@ test("remote: the open file reloads after an own action (filer-pro.changed), in 
   await settle();
   assert.equal(self.code, code);
   assert.equal(code.value(), "two\n");
-  assert.ok(READS(w, "a.txt").every((r) => r.on === "box"));
+  assert.ok(READS(w, "a.txt").length > 0 && READS(w, "a.txt").every((r) => r.on === "box"));
+  assert.equal(w.log.reads.filter((r) => r.p === path.join(w.ROOT, "a.txt")).length, 0, "no readTextFile on a machine");
 });
 
 test("remote: an unchanged open file is not probed again after an own action", async () => {
@@ -773,4 +776,68 @@ test("chmod: a Markdown file shown as source is probed again too (its preview is
   await w.run(1000);
   await settle(100);
   assert.equal(self.editCheck?.state, "refused", "the edit check follows the new mode");
+});
+
+// ---- #39: one bounded exec per read on a machine, a local file that is not UTF-8 is shown
+
+const FILE_EXECS = (w) => w.log.execs.filter((e) => !(e.cmd === "sh" && e.args[1] === LIST_SCRIPT) && e.cmd !== "git");
+
+test("#39 remote: opening a text file and Refresh each cost one exec for the file (was cat + probe)", async () => {
+  const w = world({ machine: "box" });
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  const before = FILE_EXECS(w).length;
+  await opened(w, self);
+  await settle(50);
+  assert.equal(FILE_EXECS(w).length - before, 1, "open: one exec");
+  assert.equal(self.editCheck.state, "ok", "the edit decision came with the read");
+  w.put("a.txt", "two\n");
+  const mid = FILE_EXECS(w).length;
+  click(self.render(w.rcx), "files-refresh", w.cx);
+  await settle(200);
+  assert.equal(self.code.value(), "two\n");
+  assert.equal(FILE_EXECS(w).length - mid, 1, "Refresh: one exec for the file");
+  assert.equal(PROBES(w).length, 0, "no separate edit probe");
+});
+
+test("#39 remote: a clean edit buffer reloads with one exec and takes the new baseline", async () => {
+  const w = world({ machine: "box" });
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await opened(w, self);
+  await settle(50);
+  assert.ok(self.enterEdit(w.cx));
+  w.put("a.txt", "two\n");
+  const mid = FILE_EXECS(w).length;
+  w.store["filer-pro.changed"] = { at: 77 };
+  await w.run(250);
+  await settle(100);
+  assert.equal(FILE_EXECS(w).length - mid, 1);
+  assert.equal(self.edit.state.value(), "two\n");
+  assert.equal(self.edit.info.text, "two\n");
+});
+
+test("#39 local: a Latin-1 file is shown with U+FFFD; only a watch batch that names it reads it again", async () => {
+  const w = world();
+  const p = w.put("l.txt", Buffer.from("caf\xe9\n", "latin1"));
+  const self = await boot(w);
+  globalThis.__impl.readTextFile = async (q) => { if (q === p) { w.log.reads.push({ p: q, on: null }); throw new Error("stream did not contain valid UTF-8"); } return null; };
+  await opened(w, self, "l.txt");
+  await settle(50);
+  assert.equal(self.fileError, null);
+  assert.equal(self.code.value(), "caf\ufffd\n");
+  assert.equal(self.editCheck.reason, "Not UTF-8 (Latin-1 or other), use Edit in Terminal");
+  const execs = FILE_EXECS(w).length;
+  w.put("other.txt", "x\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "other.txt")]);
+  await settle(100);
+  await w.run(1000);
+  assert.equal(FILE_EXECS(w).length, execs, "an unrelated batch: no exec for the file");
+  fs.writeFileSync(p, Buffer.from("caf\xe8\n", "latin1"));
+  w.fire(w.ROOT, [p]);
+  await settle(100);
+  await w.run(1000);
+  assert.equal(FILE_EXECS(w).length, execs + 1, "named: one local exec");
+  assert.ok(FILE_EXECS(w).slice(execs).every((e) => e.on === null));
+  assert.equal(self.code.value(), "caf\ufffd\n");
 });

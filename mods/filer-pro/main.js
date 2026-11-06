@@ -16,7 +16,8 @@ import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick } from "./lib/clicks.js";
-import { isBinaryName, explainUnreadable, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
+import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
+import { readFileGuarded, GONE_MESSAGE } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
@@ -847,6 +848,17 @@ export default class FilerPro extends View {
         const cfg = await loadConfig(readTextFile, appHome, home), kind = previewKind(path);
         this.fileCfg = cfg; // the limits this file was prepared with: diagrams and page turns use the same
         let previewer = kind && cfg.preview ? await loadPreview() : null;
+        if (this.file !== path || !this.current(context)) return;
+        // The fullscreen dialog opened from an edit session: it shows and edits the handed-over buffer without reading
+        // the file (which may be above 1 MiB now), before the image branch (an SVG being edited is text).
+        if (this.handover?.path === path && this.showHandover(path, cx)) {
+          if (previewer && kind !== "image" && kind !== "pdf") {
+            cx.notify(); // the source is on screen
+            try { await this.preparePreview(path, this.shownText, previewer, cx, "source"); }
+            catch { this.previewer = null; this.doc = null; }
+          }
+          return;
+        }
         if ((kind === "image" || kind === "pdf") && previewer) {
           // Images and PDFs never go through readTextFile: the probe decides, the file or its page lands in the cache.
           const loader = kind === "pdf"
@@ -859,21 +871,26 @@ export default class FilerPro extends View {
           if (!doc.error) { this.previewer = previewer; this.doc = doc; this.mode = "preview"; if (doc.pages) { this.page = doc.page; this.pages = doc.pages; } return; }
           previewer = null; // an SVG without a size: its source in the editor
         }
-        let text;
-        try {
-          text = await readTextFile(joinPath(root, path), { on });
-        } catch {
-          // Over 1 MiB, not UTF-8 or unreadable: one more exec, only now (lib/binary.js), says which.
-          const why = await explainUnreadable({ exec, on, path: joinPath(root, path) });
-          if (this.file === path && this.current(context)) { this.fileError = why.message; this.openable = why.binary && !on; }
-          return;
+        // r: { ok: true, text, edit } | { ok: false, message, binary }. On a machine one bounded exec (lib/readfile.js)
+        // gives the text and the edit decision (issue #39); opts.read is that result when reloadOpen already has it.
+        // Locally readTextFile (no exec) and the edit probe; when it fails (over 1 MiB, not UTF-8, unreadable) the
+        // same bounded exec, locally, says why or shows a file that is not UTF-8 with U+FFFD.
+        let r = on ? opts.read ?? null : null;
+        if (!r && !on) {
+          try {
+            const text = await readTextFile(joinPath(root, path), { on });
+            r = text === null ? { ok: false, message: GONE_MESSAGE, binary: false }
+              : text.includes("\0") ? { ok: false, ...nulReason(text) } : { ok: true, text, edit: null };
+          } catch {}
         }
+        r ??= await this.readGuarded(joinPath(root, path), on, cfg, cx);
         if (this.file !== path || !this.current(context)) return;
-        if (text === null) { this.fileError = "This file is no longer available"; return; }
-        if (text.includes("\0")) { const why = nulReason(text); this.fileError = why.message; this.openable = why.binary && !on; return; }
+        if (!r.ok) { this.fileError = r.message; this.openable = r.binary && !on; return; }
+        const text = r.text;
         this.shownText = text; // what reloadOpen compares with
         this.code = EditorState.new(this.editorOptions(path, text.length > cfg.source_max_chars ? text.slice(0, cfg.source_max_chars) + "\n… (file truncated)" : text, true));
         if (text.length > cfg.source_max_chars) this.editCheck = { state: "refused", reason: "Display truncated" };
+        else if (r.edit) this.applyEdit(path, r.edit, cx);
         else this.checkEdit(path, cfg, cx);
         if (previewer) {
           // The source is on screen now; the preview follows in small steps, so typing and drawing never wait for it.
@@ -929,6 +946,36 @@ export default class FilerPro extends View {
   sourceShown() {
     if (!this.code || this.fileError || this.loader) return false;
     return !(this.previewer && this.doc && (this.mode === "preview" || this.doc.kind === "image" || this.doc.kind === "pdf"));
+  }
+
+  // The bounded read of a file (lib/readfile.js), guarded: always resolves, also when the runtime interrupts a job.
+  readGuarded(full, on, cfg, cx) {
+    const after = (ms, f) => cx.timer.after(ms, () => f());
+    return new Promise((done) => readFileGuarded({ exec, on, path: full, maxChars: cfg.source_max_chars, after, localPlatform: window()?.platform }, done));
+  }
+
+  // The edit decision that came with the read (no second probe). A fullscreen handover is taken first.
+  applyEdit(path, edit, cx) {
+    if (this.takeHandover(path, cx)) return;
+    if (!this.on && window()?.platform === "windows") { this.editCheck = { state: "refused", reason: "Editing is not available on Windows" }; return; }
+    this.editCheck = edit.ok ? { state: "ok", info: edit.info } : { state: "refused", reason: edit.reason };
+  }
+
+  // The dialog's show() with a handover: the buffer's file text read-only, edit mode with the buffer on top, no read.
+  // A buffer above 1 MiB verifies by size and hash on a reload, as after a save there (bigSaved). -> false when the
+  // handover could not be taken; nothing of it stays and show() reads the file instead.
+  showHandover(path, cx) {
+    const h = this.handover, text = h.info?.text;
+    if (typeof text !== "string") { this.handover = null; return false; }
+    this.shownText = text;
+    this.code = EditorState.new(this.editorOptions(path, text, true));
+    if (this.takeHandover(path, cx)) {
+      const size = Number(h.info.size);
+      if (size > EDIT_MAX_BYTES && h.info.hash) this.bigSaved = { path, size, hash: h.info.hash, text };
+      return true;
+    }
+    this.code.release(); this.code = null; this.shownText = null; this.editCheck = null;
+    return false;
   }
 
   // Probes the open file in the background (lib/textedit.js): this.editCheck says whether Edit is possible and why not.
@@ -1110,27 +1157,42 @@ export default class FilerPro extends View {
           this.show(path, cx, { mode: this.mode });
           return;
         }
-        let text = null;
-        try { text = await readTextFile(joinPath(root, path), { on }); } catch {}
+        // On a machine one bounded read gives text and edit decision (issue #39); show() takes it over when the file
+        // is shown anew, so a reload costs one exec there. Locally readTextFile; a file it refuses (one not UTF-8, shown
+        // with U+FFFD) is read with the bounded exec only when the trigger names it or forces, not on every watch batch.
+        let text = null, read = null;
+        if (on && cfg) {
+          read = await this.readGuarded(joinPath(root, path), on, cfg, cx);
+          if (read.ok) text = read.text;
+        } else {
+          let failed = false;
+          try { text = await readTextFile(joinPath(root, path), { on }); } catch { failed = true; }
+          if (failed && cfg && !force && !named) { if (!still()) retry(); return; }
+          if (failed && cfg) { read = await this.readGuarded(joinPath(root, path), on, cfg, cx); text = read.ok ? read.text : null; }
+        }
         if (!still()) { retry(); return; }
+        const again = { mode: this.mode, read: on ? read : null };
         const same = text !== null && this.shownText !== null && lf(text) === lf(this.shownText);
         if (same && !force) return;
         if (!e && this.previewer && doc) {
-          if (!same) { this.show(path, cx, { mode: this.mode }); return; }
+          if (!same) { this.show(path, cx, again); return; }
           this.syncPreview(cx, force);
           // Markdown or HTML shown as source: a forced reload (a chmod, issue #41) probes the edit check again too.
-          if (force && cfg && this.sourceShown()) this.checkEdit(path, cfg, cx);
+          if (force && cfg && this.sourceShown()) { if (read?.edit) this.applyEdit(path, read.edit, cx); else this.checkEdit(path, cfg, cx); }
           return;
         }
         // Gone, binary or too long for the source view: shown anew (a clean edit buffer loses nothing).
-        if (!cfg || text === null || text.includes("\0") || text.length > cfg.source_max_chars) { this.show(path, cx, { mode: this.mode }); return; }
+        if (!cfg || text === null || text.includes("\0") || text.length > cfg.source_max_chars) { this.show(path, cx, again); return; }
         if (!same) { code.set_value(text); this.shownText = text; }
-        if (!e) { this.checkEdit(path, cfg, cx); return; }
-        // A clean edit buffer: the probe gives the new text and the new save baseline.
-        const after = (ms, f) => cx.timer.after(ms, () => f());
-        const r = await new Promise((done) => probeFileGuarded({ exec, on, path: joinPath(root, path), maxChars: cfg.source_max_chars, after }, done));
-        if (!still()) { retry(); return; }
-        if (!r.ok) { this.show(path, cx, { mode: this.mode }); return; } // no longer editable: shown anew
+        if (!e) { if (read?.edit) this.applyEdit(path, read.edit, cx); else this.checkEdit(path, cfg, cx); return; }
+        // A clean edit buffer: the probe (or the read's edit decision) gives the new text and the new save baseline.
+        let r = read?.edit;
+        if (!r) {
+          const after = (ms, f) => cx.timer.after(ms, () => f());
+          r = await new Promise((done) => probeFileGuarded({ exec, on, path: joinPath(root, path), maxChars: cfg.source_max_chars, after }, done));
+          if (!still()) { retry(); return; }
+        }
+        if (!r.ok) { this.show(path, cx, again); return; } // no longer editable: shown anew
         const info = r.info;
         this.editCheck = { state: "ok", info }; // the same object as e.info, as enterEdit makes it
         const changed = info.text !== e.info.text;

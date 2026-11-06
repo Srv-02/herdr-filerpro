@@ -91,6 +91,57 @@ if [ "$s" -le ${EDIT_MAX_BYTES} ]; then
 fi
 `);
 
+// read <path>: the bounded read of a file to show (issue #39), one exec locally or on a machine. Unlike PROBE_SCRIPT it
+// follows a symbolic link (as cat does) and says so in the last field, so a linked text file is shown but not edited.
+// Line 1: dir | missing (also a dangling link) | special | unreadable <w> <mode> <size> <open> <link> |
+// file <w> <mode> <size> <open> <link>; for a file of at most EDIT_MAX_BYTES line 2 is its base64 (as PROBE_SCRIPT).
+// Mode and size are the target's (stat -L). A read that fails although [ -r ] passed (macOS privacy, a root-squashed
+// share) ends stderr with the line readfail.
+export const READ_SCRIPT = sh(String.raw`
+p=$1
+case $p in -*) p=./$p ;; esac
+l=n
+[ -L "$p" ] && l=y
+if [ -d "$p" ]; then echo dir; exit 0; fi
+if [ ! -e "$p" ]; then echo missing; exit 0; fi
+if [ ! -f "$p" ]; then echo special; exit 0; fi
+if stat -c%i / >/dev/null 2>&1; then
+  m=$(stat -L -c%a "$p"); s=$(stat -L -c%s "$p")
+else
+  m=$(stat -L -f%p "$p"); s=$(stat -L -f%z "$p")
+fi
+w=n
+[ -w "$p" ] && w=y
+o=n
+[ -n "$(find "$(dirname -- "$p")" -prune -perm -0002 ! -perm -1000 2>/dev/null)" ] && o=y
+if [ ! -r "$p" ]; then echo "unreadable $w $m $s $o $l"; exit 0; fi
+echo "file $w $m $s $o $l"
+if [ "$s" -le ${EDIT_MAX_BYTES} ]; then
+  { head -c ${EDIT_MAX_BYTES + 1} < "$p" || echo readfail >&2; } | base64 | tr -d '\n\r'
+  echo
+fi
+`);
+
+// stdout of READ_SCRIPT -> { kind: file | unreadable | dir | missing | special | error, link, writable, mode, size, bytes, openDir }.
+export function parseRead(stdout) {
+  const none = (kind) => ({ kind, link: false, writable: false, mode: null, size: 0, bytes: null, openDir: false });
+  const lines = String(stdout ?? "").split("\n");
+  const head = lines[0].trim();
+  if (head === "dir" || head === "missing" || head === "special") return none(head);
+  const m = /^(file|unreadable) (y|n) ([0-7]+) (\d+) (y|n) (y|n)$/.exec(head);
+  if (!m) return none("error");
+  const size = Number(m[4]);
+  let bytes = null;
+  if (m[1] === "file" && size <= EDIT_MAX_BYTES) {
+    // The script ends the base64 line with a newline: without it the output was cut (an empty file may omit it).
+    const line = lines.length >= 3 ? lines[1].trim() : size === 0 ? "" : null;
+    if (line === null) return none("error");
+    bytes = base64ToBytes(line);
+    if (bytes === null) return none("error");
+  }
+  return { kind: m[1], link: m[6] === "y", writable: m[2] === "y", mode: octalMode(m[3]), size, bytes, openDir: m[5] === "y" };
+}
+
 // verify <path>: the file as it is now, without its content (for files above EDIT_MAX_BYTES, which the probe sends no
 // bytes of): "file <mode> <size> <sha256>", or link | dir | missing | special, or nohash when no sha256 tool exists.
 export const VERIFY_SCRIPT = sh(String.raw`
@@ -417,7 +468,7 @@ const firstLine = (s) => String(s ?? "").split("\n")[0].trim();
 const lines = (s) => String(s ?? "").split("\n").map((l) => l.trim());
 
 // localPlatform (window().platform of this computer) decides the text of a local "Operation not permitted" (errors.js).
-const explain = (stderr, on, fallback, localPlatform) => explainError(stderr, on, fallback, { localPlatform });
+const explain = (stderr, on, fallback, localPlatform, direction) => explainError(stderr, on, fallback, { localPlatform, direction });
 const cannotReach = (e, on, localPlatform) => `Cannot reach the machine: ${explain(String(e?.message ?? e), on, undefined, localPlatform)}`;
 
 // Uploads bytes into a fresh private file on the machine. -> { tmp } | { error }. Nothing is left behind on failure.
@@ -499,7 +550,7 @@ export function scpSender({ exec, hc, script, trashDir, limits, localPlatform })
       detail = String(st.stdout ?? "").split("\n").filter((l) => l && !l.startsWith("state=") && !l.startsWith("code=")).join(" ").trim();
     } catch {}
     if (r.code === 0) return { ok: true };
-    return { ok: false, error: explain(detail || r.stderr, t.target, "scp failed", localPlatform) };
+    return { ok: false, error: explain(detail || r.stderr, t.target, "scp failed", localPlatform, "up") };
   };
 }
 

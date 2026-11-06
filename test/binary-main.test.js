@@ -6,7 +6,7 @@ import { register } from "node:module";
 import { LIST_SCRIPT } from "../mods/filer-pro/lib/tree.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
 import { OPEN_CHECK_SCRIPT } from "../mods/filer-pro/lib/open.js";
-import { PROBE_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
+import { PROBE_SCRIPT, READ_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
 import { SIZE_SCRIPT } from "../mods/filer-pro/lib/sizes.js";
 import { isBinaryName, looksUtf16Text, BINARY_MESSAGE } from "../mods/filer-pro/lib/binary.js";
 import { createFake } from "./fake/herdr.js";
@@ -68,7 +68,7 @@ function host({ machine = null } = {}) {
   return f;
 }
 function fakeCx() {
-  const cx = { notify() {}, sleep: never, stop_propagation() { cx.stopped = (cx.stopped ?? 0) + 1; }, spawn: (fn) => { const p = Promise.resolve().then(() => fn(cx)); p.catch(() => {}); return p; }, timer: { after() {}, every() {} } };
+  const cx = { notify() {}, sleep: never, stop_propagation() { cx.stopped = (cx.stopped ?? 0) + 1; }, spawn: (fn) => { const p = Promise.resolve().then(() => fn(cx)); p.catch(() => {}); return p; }, timer: { after: (ms, fn) => { if (ms === 0) setImmediate(() => fn(cx)); }, every() {} } };
   return cx;
 }
 async function loaded(cx, cfg = {}) {
@@ -88,35 +88,38 @@ const handler = (el, name) => el.calls.find(([k]) => k === name).at(-1);
 const texts = (root) => [...walk(root)].flatMap((e) => (e.kids ?? []).filter((k) => typeof k === "string"));
 const scriptRuns = (f, script) => f.execCalls.filter((c) => c.cmd === "sh" && c.args[1] === script);
 const fileReads = (f) => f.reads.filter((p) => p !== "/app/filer-pro.json");
-const probeOut = (bytes) => `file y 644 ${bytes.length} n\n${Buffer.from(bytes).toString("base64")}\n`;
+const readOut = (bytes, link = "n") => `file y 644 ${bytes.length} n ${link}\n${Buffer.from(bytes).toString("base64")}\n`;
 const click = (self, cx, name, n) => handler(byId(self.render(cx), `file-${name}`), "on_click")({ modifiers: {}, click_count: n }, cx);
 const shownMessage = (self, cx) => texts(self.render(cx));
 
 // ---- #32: the reason instead of the catch-all
 
-test("#32: a text file over 1 MiB names the limit and its size, locally, with one stat-like exec after the failed read", async () => {
+test("#32: a text file over 1 MiB names the limit and its size, locally, with one bounded read after the failed read", async () => {
   const f = host(); const cx = fakeCx(); const self = await loaded(cx);
   const p = `${ROOT}/big.log`;
   f.readErrors[p] = new Error("Text file exceeds 1 MiB");
-  f.probes[p] = `file y 644 3400000 n\n`;
+  f.readOuts[p] = `file y 644 3400000 n n\n`;
   self.show("big.log", cx);
   await settle();
   assert.equal(self.fileError, "File larger than 1 MiB (3.4 MB)");
   assert.notEqual(self.fileError, "Cannot preview this file (binary, too large, or unreadable)");
-  assert.equal(scriptRuns(f, PROBE_SCRIPT).length, 1, "one probe, after the failure");
+  assert.equal(scriptRuns(f, READ_SCRIPT).length, 1, "one bounded read, after the failure");
+  assert.equal(scriptRuns(f, READ_SCRIPT)[0].on, null, "locally, no SSH");
+  assert.equal(scriptRuns(f, PROBE_SCRIPT).length, 0);
   assert.deepEqual(f.reads.filter((r) => r === p), [p], "the file is read once");
   assert.equal(self.openable, false, "no Open button for a large text file");
 });
 
-test("#32: the same on a machine, the exec runs there", async () => {
+test("#39: on a machine a file over 1 MiB costs one bounded exec there, no readTextFile and no content", async () => {
   const f = host({ machine: "box" }); const cx = fakeCx(); const self = await loaded(cx);
   const p = `${ROOT}/big.log`;
-  f.readErrors[p] = new Error("Text file exceeds 1 MiB");
-  f.probes[p] = `file y 644 ${5 * MiB} n\n`;
+  f.readOuts[p] = `file y 644 ${5 * MiB} n n\n`;
+  const before = f.execCalls.length;
   self.show("big.log", cx);
   await settle();
   assert.equal(self.fileError, "File larger than 1 MiB (5.2 MB)");
-  assert.equal(scriptRuns(f, PROBE_SCRIPT)[0].on, "box");
+  assert.deepEqual(f.execCalls.slice(before).map((c) => [c.args[1] === READ_SCRIPT, c.on]), [[true, "box"]], "exactly one exec");
+  assert.deepEqual(fileReads(f), [], "herdr's readTextFile (a full cat) never runs on a machine");
 });
 
 test("#32: a normal preview adds no lookup of its own (only the edit check's probe from #22 runs; the size script never)", async () => {
@@ -129,33 +132,49 @@ test("#32: a normal preview adds no lookup of its own (only the edit check's pro
   assert.equal(scriptRuns(f, SIZE_SCRIPT).length, 0);
 });
 
-test("#32: a link to a large file is sized with the size script, which follows links", async () => {
+test("#32: a link to a large file is sized through the link (READ_SCRIPT follows it)", async () => {
   const f = host(); const cx = fakeCx(); const self = await loaded(cx);
   const p = `${ROOT}/big.log`;
   f.readErrors[p] = new Error("Text file exceeds 1 MiB");
-  f.probes[p] = "link\n";
-  f.sizes[p] = 2 * MiB;
+  f.readOuts[p] = `file y 644 ${2 * MiB} n y\n`;
   self.show("big.log", cx);
   await settle();
   assert.equal(self.fileError, "File larger than 1 MiB (2.1 MB)");
+  assert.equal(scriptRuns(f, SIZE_SCRIPT).length, 0, "no second exec for the size");
 });
 
-test("#32: a Latin-1 file says it is not UTF-8 instead of the catch-all", async () => {
+test("#39: a local Latin-1 file is shown with U+FFFD, Edit refused with the reason, one local exec", async () => {
   const f = host(); const cx = fakeCx(); const self = await loaded(cx);
   const p = `${ROOT}/latin.txt`;
   f.readErrors[p] = new Error("stream did not contain valid UTF-8");
-  f.probes[p] = probeOut([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+  f.readOuts[p] = readOut([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+  const before = f.execCalls.length;
   self.show("latin.txt", cx);
   await settle();
-  assert.equal(self.fileError, "Not UTF-8 text (Latin-1 or other encoding) · use Open or Edit in Terminal");
-  assert.equal(self.openable, false);
+  assert.equal(self.fileError, null);
+  assert.equal(self.shownText, "caf\ufffd\n");
+  assert.equal(self.code.opts.value, "caf\ufffd\n");
+  assert.deepEqual(self.editCheck, { state: "refused", reason: "Not UTF-8 (Latin-1 or other), use Edit in Terminal" });
+  assert.deepEqual(f.execCalls.slice(before).map((c) => [c.args[1] === READ_SCRIPT, c.on]), [[true, null]], "one local exec, no probe");
+});
+
+test("#39: a Latin-1 file on a machine is shown with U+FFFD in one exec, Edit refused", async () => {
+  const f = host({ machine: "box" }); const cx = fakeCx(); const self = await loaded(cx);
+  f.readOuts[`${ROOT}/latin.txt`] = readOut(Buffer.from("Gr\xfc\xdfe\n", "latin1"));
+  const before = f.execCalls.length;
+  self.show("latin.txt", cx);
+  await settle();
+  assert.equal(self.shownText, "Gr\ufffd\ufffde\n");
+  assert.equal(self.editCheck.reason, "Not UTF-8 (Latin-1 or other), use Edit in Terminal");
+  assert.equal(f.execCalls.length - before, 1);
+  assert.deepEqual(fileReads(f), []);
 });
 
 test("#32: a UTF-16 file (BOM, rejected by the read) says UTF-16", async () => {
   const f = host(); const cx = fakeCx(); const self = await loaded(cx);
   const p = `${ROOT}/wide.txt`;
   f.readErrors[p] = new Error("stream did not contain valid UTF-8");
-  f.probes[p] = probeOut([0xff, 0xfe, 0x68, 0, 0x69, 0, 0x0a, 0]);
+  f.readOuts[p] = readOut([0xff, 0xfe, 0x68, 0, 0x69, 0, 0x0a, 0]);
   self.show("wide.txt", cx);
   await settle();
   assert.equal(self.fileError, "UTF-16 file · use Open or Edit in Terminal");
@@ -174,15 +193,66 @@ test("#32: UTF-16 without a BOM is valid UTF-8 for the read (NULs): it says UTF-
 });
 
 test("#32: a failed read of a file that is gone, a folder or an unprobeable file gets its own reason, not the old catch-all", async () => {
-  for (const [probe, want] of [["missing\n", "This file is no longer available"], ["dir\n", "Not a regular file"], ["", "Cannot read this file"]]) {
+  for (const [out, want] of [["missing\n", "This file is no longer available"], ["dir\n", "Not a regular file"], ["", "Cannot read this file"]]) {
     const f = host(); const cx = fakeCx(); const self = await loaded(cx);
     const p = `${ROOT}/gone.txt`;
     f.readErrors[p] = new Error("os error");
-    f.probes[p] = probe;
+    f.readOuts[p] = out;
     self.show("gone.txt", cx);
     await settle();
     assert.equal(self.fileError, want);
   }
+});
+
+test("#39: on a machine an unreadable file names the reason, a missing one is no longer available (one exec each)", async () => {
+  for (const [out, want] of [["unreadable n 200 5 n n\n", "No read permission · cannot show this file"], ["missing\n", "This file is no longer available"],
+    [{ code: 1, stderr: "sh: /x: Input/output error\n" }, "Cannot read this file: sh: /x: Input/output error"]]) {
+    const f = host({ machine: "box" }); const cx = fakeCx(); const self = await loaded(cx);
+    f.readOuts[`${ROOT}/gone.txt`] = out;
+    const before = f.execCalls.length;
+    self.show("gone.txt", cx);
+    await settle();
+    assert.equal(self.fileError, want);
+    assert.equal(f.execCalls.length - before, 1);
+  }
+});
+
+test("#39: on a machine a small text file costs one exec: shown and edit-checked from the same bytes", async () => {
+  const f = host({ machine: "box" }); const cx = fakeCx(); const self = await loaded(cx);
+  f.readOuts[`${ROOT}/ok.txt`] = readOut(Buffer.from("hello\r\n"));
+  const before = f.execCalls.length;
+  self.show("ok.txt", cx);
+  await settle();
+  assert.equal(self.fileError, null);
+  assert.equal(self.shownText, "hello\r\n");
+  assert.equal(self.editCheck.state, "ok");
+  assert.equal(self.editCheck.info.eol, "CRLF");
+  assert.deepEqual(f.execCalls.slice(before).map((c) => [c.args[1] === READ_SCRIPT, c.on]), [[true, "box"]]);
+  assert.deepEqual(fileReads(f), []);
+});
+
+test("#39: on a machine a symbolic link to a text file is shown through the link, Edit refused", async () => {
+  const f = host({ machine: "box" }); const cx = fakeCx(); const self = await loaded(cx);
+  f.readOuts[`${ROOT}/ok.txt`] = readOut(Buffer.from("via link\n"), "y");
+  self.show("ok.txt", cx);
+  await settle();
+  assert.equal(self.shownText, "via link\n");
+  assert.deepEqual(self.editCheck, { state: "refused", reason: "Symbolic link" });
+});
+
+test("#39: a read the runtime interrupts never leaves Loading file…", async () => {
+  const f = host({ machine: "box" }); const cx = fakeCx(); const self = await loaded(cx);
+  f.readOuts[`${ROOT}/ok.txt`] = readOut(Buffer.from("x\n"));
+  self.readGuarded = (full, on, cfg, cx) => new Promise((done) => {
+    // what readFileGuarded's guard delivers when the job that parses is interrupted
+    cx.timer.after(0, () => done({ ok: false, message: "Could not check this file", binary: false }));
+  });
+  let state = null;
+  self.show("ok.txt", cx, { onDone: (s) => { state = s; } });
+  await settle();
+  assert.equal(self.fileError, "Could not check this file");
+  assert.equal(state.error, "Could not check this file");
+  assert.ok(!shownMessage(self, cx).includes("Loading file…"));
 });
 
 test("#32: an error that is not the read (here the editor) is not blamed on the file's type", async () => {
@@ -316,7 +386,7 @@ test("#33 remote: a double click on the shown message (or its first press) canno
 
 test("#33 remote: a file that turns out binary after the read shows the message without an Open button", async () => {
   const f = host({ machine: "box" }); const cx = fakeCx(); const self = await loaded(cx);
-  f.files[`${ROOT}/blob.dat`] = "ELF\0\u0001";
+  f.readOuts[`${ROOT}/blob.dat`] = readOut(Buffer.from("ELF\0\u0001"));
   self.show("blob.dat", cx);
   await settle();
   assert.equal(self.fileError, BINARY_MESSAGE);
