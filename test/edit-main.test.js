@@ -83,7 +83,8 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
     shared: (k) => store[k], setShared: (k, v) => { store[k] = v; },
     readTextFile: async (p) => {
       if (p === "/app/filer-pro.json") return config;
-      try { return fs.readFileSync(p, "utf8"); } catch { return null; }
+      // herdr's readTextFile refuses a file above 1 MiB
+      try { if (fs.statSync(p).size > 1048576) throw new Error("File too large"); return fs.readFileSync(p, "utf8"); } catch (e) { if (/too large/.test(e.message)) throw e; return null; }
     },
     writeTextFile: async () => {}, hc: async (a) => ({ code: 0, stdout: a[0] === "machine" ? JSON.stringify({ machines: [{ name: "box", target: "box", via: false }] }) : "{}", stderr: "" }),
     exec: async (cmd, args, opts = {}) => {
@@ -832,4 +833,79 @@ test("the mirror file name never leaves the unsaved folder, whatever the remote 
     assert.match(m.slice("/app/filer-pro/unsaved/".length), /^[A-Za-z0-9]+-[A-Za-z0-9_][A-Za-z0-9._-]*\.txt$/, m);
     self.leaveEdit();
   }
+});
+
+// Issue #38: a file saved above 1 MiB is not read back (herdr's readTextFile stops at 1 MiB); size and hash verify it.
+const BIG = "0123456789abcdef".repeat(70000) + "\n"; // about 1.07 MB
+
+test("saving above 1 MiB reports no false conflict and runs the follow-up (save then leave)", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  type(w, lastState(w), BIG);
+  let after = 0;
+  self.save(w.cx, () => { after++; self.leaveEdit(); });
+  await settle(200);
+  assert.equal(w.read("a.txt").toString(), BIG);
+  assert.equal(after, 1, "the follow-up ran");
+  assert.equal(self.edit, null);
+  assert.equal(self.code.value(), BIG, "the saved text stays on screen");
+});
+
+test("after a save above 1 MiB a reload keeps edit mode and the saved text", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  type(w, lastState(w), BIG);
+  click(render(self, w), "files-save", w.cx);
+  await settle(200);
+  assert.ok(texts(render(self, w)).includes("Saved"), "no conflict message");
+  const e = self.edit;
+  self.reloadOpen(w.cx, { force: true, named: true });
+  await settle(200);
+  assert.equal(self.edit, e, "still editing");
+  assert.equal(self.fileError, null);
+  assert.equal(e.state.value(), BIG);
+  // a second save from the in-memory baseline works
+  type(w, e.state, BIG + "more\n");
+  click(render(self, w), "files-save", w.cx);
+  await settle(200);
+  assert.equal(w.read("a.txt").toString(), BIG + "more\n");
+  assert.ok(texts(render(self, w)).includes("Saved"));
+});
+
+test("a change on disk after a save above 1 MiB is still detected by the reload", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  type(w, lastState(w), BIG);
+  click(render(self, w), "files-save", w.cx);
+  await settle(200);
+  fs.writeFileSync(path.join(w.ROOT, "a.txt"), BIG.replace("0", "X")); // same size, other content
+  self.reloadOpen(w.cx, { named: true });
+  await settle(200);
+  assert.equal(self.edit, null, "edit mode ended");
+  assert.match(self.fileError ?? "", /1 MiB/);
+});
+
+test("closing the fullscreen dialog after a save above 1 MiB hands the saved text to the panel without reading it", async () => {
+  const w = dialogWorld();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  const d = await openDialogFromPanel(w);
+  self.pollFull(w.cx);
+  await inDialog(w, async () => { type(w, d.edit.state, BIG); click(render(d, w), "files-save", w.cx); await settle(200); });
+  assert.equal(w.read("a.txt").toString(), BIG);
+  await inDialog(w, () => d.close());
+  self.pollFull(w.cx);
+  await settle(200);
+  assert.equal(self.full, null);
+  assert.equal(self.fileError, null, "no 1 MiB message");
+  assert.equal(self.code.value(), BIG, "the panel shows the saved text");
 });
