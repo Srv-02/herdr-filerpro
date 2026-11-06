@@ -1199,7 +1199,7 @@ export default class FilerPro extends View {
 
   // Icon and name of the open file: the panel's header (end: right-aligned before the buttons) and the dialog's title.
   fileTitle(t, dark, end) {
-    return h_flex().flex_1().min_w(0).gap(6).items_center().text_size(12).text_color(t.dim).when(end, el => el.justify_end())
+    return h_flex().flex_1().min_w(0).overflow_hidden().gap(6).items_center().text_size(12).text_color(t.dim).when(end, el => el.justify_end())
       .when(Boolean(this.file), el => el.child(image(icon(this.file, false, false, dark)).size(14).flex_none()))
       .child(div().min_w(0).truncate().child((this.edit?.dirty ? "● " : "") + (this.file ?? this.root?.split(/[\\/]/).pop() ?? "")));
   }
@@ -1311,7 +1311,7 @@ export default class FilerPro extends View {
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => this.requestLeave((cx) => { this.show(null); cx.notify(); }, cx)).child("←")))
-        .child(div().font_semibold().child("Filer Pro"))
+        .child(div().flex_none().font_semibold().child("Filer Pro"))
         .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
         .when(!this.file, el => el.child(this.gear(t)))

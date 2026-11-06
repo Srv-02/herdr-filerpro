@@ -202,7 +202,7 @@ test("refused files: Edit is dimmed with the reason as tooltip", async () => {
     const edit = byId(render(self, w), "files-edit");
     assert.ok(edit, name);
     assert.equal(has("on_click", edit), false, `${name}: no click`);
-    assert.equal(tooltipOf(edit), reason, name);
+    assert.equal(tooltipOf(edit), `Edit: ${reason}`, name);
     assert.equal(PROBES(w).length, probed ? 1 : 0, `${name}: probe`);
     self.enterEdit(w.cx);
     assert.equal(self.edit ?? null, null, `${name}: no edit mode`);
@@ -226,6 +226,59 @@ test("Edit on: an editable state with the text, and the edit buttons in the pane
     for (const id of ["files-edit", "files-undo", "files-redo", "files-cancel", "files-save", "files-save-copy"]) assert.ok(byId(tree, id), `${kind} ${id}`);
     assert.equal(editorOf(tree).state, s, "the editable state is drawn");
   }
+});
+
+// The edit toolbar is a group of icon buttons: a Lucide glyph in a fixed 24px hit area, a tooltip and an accessibility
+// label naming it; dimmed buttons keep their tooltip but have no click.
+const glyphOf = (el) => el.kids.find((k) => k.kind === "svg")?.args[0];
+const sizeOf = (el) => ["w", "h"].map((k) => el.calls.find(([c]) => c === k)?.[1]);
+test("the edit toolbar: icon buttons with glyph, tooltip and label, in the panel and in the dialog", async () => {
+  const BUTTONS = [
+    ["files-edit", "pencil", "Stop editing", true], ["files-undo", "undo-2", "Undo", false], ["files-redo", "redo-2", "Redo", false],
+    ["files-cancel", "circle-x", "Cancel editing", true], ["files-save", "save", "Save", false], ["files-save-copy", "copy-plus", "Save a Copy…", true],
+  ];
+  for (const kind of ["panel", "dialog"]) {
+    const w = dialogWorld();
+    w.put("a.txt", "one\n");
+    const self = kind === "panel" ? await panel(w) : await dialog(w, "a.txt", "source");
+    if (kind === "panel") await opened(w, self);
+    let edit = byId(render(self, w), "files-edit");
+    assert.equal(glyphOf(edit), "mods/filer-pro/pencil.svg", kind);
+    assert.equal(tooltipOf(edit), "Edit", kind);
+    assert.equal(edit.kids.some((k) => typeof k === "string"), false, `${kind}: no text label`);
+    click(render(self, w), "files-edit", w.cx);
+    const tree = render(self, w);
+    const group = byId(tree, "files-edit-tools");
+    assert.ok(group && has("flex_none", group), `${kind}: one group that does not shrink`);
+    for (const [id, glyph, tip, enabled] of BUTTONS) {
+      const el = byId(group, id);
+      assert.equal(glyphOf(el), `mods/filer-pro/${glyph}.svg`, `${kind} ${id}`);
+      assert.equal(tooltipOf(el), tip, `${kind} ${id}`);
+      assert.equal(el.calls.find(([c]) => c === "accessibility_label")?.[1], tip, `${kind} ${id}`);
+      assert.deepEqual(sizeOf(el), [24, 24], `${kind} ${id}: fixed hit area`);
+      assert.ok(has("flex_none", el), `${kind} ${id}`);
+      assert.equal(has("on_click", el), enabled, `${kind} ${id}: click`);
+    }
+    assert.ok(has("bg", byId(group, "files-edit")), `${kind}: Edit is marked while on`);
+    type(w, lastState(w), "two\n");
+    for (const id of ["files-undo", "files-save"]) assert.ok(has("on_click", byId(render(self, w), id)), `${kind} ${id} after typing`);
+  }
+});
+
+test("a dimmed Edit names itself and the reason: Checking… while the probe runs", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await opened(w, self);
+  self.editCheck = { state: "checking" };
+  const edit = byId(render(self, w), "files-edit");
+  assert.equal(has("on_click", edit), false);
+  assert.equal(tooltipOf(edit), "Edit: Checking…");
+});
+
+test("the panel title Filer Pro does not shrink beside the toolbar", () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "mods/filer-pro/main.js"), "utf8");
+  assert.ok(src.includes('div().flex_none().font_semibold().child("Filer Pro")'));
 });
 
 test("typing shows the dirty marker in the header, in the panel and in the dialog", async () => {
