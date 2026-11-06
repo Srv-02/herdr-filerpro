@@ -77,6 +77,30 @@ for (const where of ["local", "remote"]) {
   });
 }
 
+// Local listings pass a fifth argument "1": the first record is P and the folder's real path (issue #42). A denied folder
+// must still end with exit 3 and must not print anything else; a symlinked folder reports its target.
+test("LIST_SCRIPT with the local fifth argument: denied folders exit 3 with only the P record, a symlink gives its target", opts, () => {
+  for (const name of ["none", "noexec", "noread"]) {
+    const r = run("local", LIST_SCRIPT, "files", dirs[name], "100", "0", "0", "1");
+    assert.equal(r.status, LIST_DENIED, name);
+    const rec = r.stdout.split("\0");
+    assert.equal(rec[0], "P", `${name}: the P record comes first`);
+    assert.equal(rec.slice(2).filter(Boolean).length, 0, `${name}: no entries after it`);
+    assert.equal(rec[1], name === "noread" ? fs.realpathSync.native(dirs[name]) : "", `${name}: real path`);
+    assert.equal(folderMissing({ code: r.status, stdout: r.stdout, stderr: r.stderr }), false, `${name} is not a vanished folder`);
+  }
+  const ok = run("local", LIST_SCRIPT, "files", dirs.ok, "100", "0", "0", "1");
+  assert.equal(ok.status, 0);
+  assert.deepEqual(ok.stdout.split("\0").slice(0, 2), ["P", fs.realpathSync.native(dirs.ok)]);
+  const link = path.join(dirs.ok, "link-to-sub");
+  fs.symlinkSync(path.join(dirs.ok, "sub"), link);
+  try {
+    const l = run("local", LIST_SCRIPT, "files", link, "100", "0", "0", "1");
+    assert.equal(l.status, 0);
+    assert.deepEqual(l.stdout.split("\0").slice(0, 2), ["P", fs.realpathSync.native(path.join(dirs.ok, "sub"))], "P gives the target");
+  } finally { fs.unlinkSync(link); }
+});
+
 test("readResult: a file below an unsearchable folder gets a permission reason, a deleted one stays 'no longer available'", () => {
   const denied = readResult({ code: 0, stdout: "noaccess\n", stderr: "" });
   assert.deepEqual(denied, { ok: false, message: NO_SEARCH_MESSAGE, binary: false });
