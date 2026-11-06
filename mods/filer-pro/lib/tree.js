@@ -7,9 +7,10 @@ import { SYSTEM_CASE, psHideFilter } from "./hidden.js";
 // of them (one past the limit tells main.js that the folder was cut); ends with `test -d`, see folderMissing.
 // <system> and <dots> are 1 or 0 (lib/hidden.js hideArgs): 1 skips system files or dot names before they are counted;
 // <dots> 1 skips the system files too (lib/hidden.js effectiveHide), also for a caller that passes the raw settings.
+// A folder that is there but cannot be read or searched ends with exit code LIST_DENIED (3) instead of an empty listing.
 // <real> 1 (local listings, issue #42): the first pair is P and the folder's real path (cd -P, pwd -P; empty when it
 // cannot be entered), so a folder reached through a symlink can match the folder watch's paths without another exec.
-export const LIST_SCRIPT = 'if [ "$5" = 1 ]; then printf "P\\0%s\\0" "$(cd -P -- "$1" 2>/dev/null && pwd -P)"; fi; n=0; cr=$(printf \'\\r\'); for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ "$4" = 1 ]; then case $name in .*) continue;; esac; fi; if [ "$3" = 1 ] || [ "$4" = 1 ]; then case $name in ' + SYSTEM_CASE + ') continue;; esac; fi; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
+export const LIST_SCRIPT = 'if [ "$5" = 1 ]; then printf "P\\0%s\\0" "$(cd -P -- "$1" 2>/dev/null && pwd -P)"; fi; if [ -d "$1" ] && { [ ! -r "$1" ] || [ ! -x "$1" ]; }; then exit 3; fi; n=0; cr=$(printf \'\\r\'); for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ "$4" = 1 ]; then case $name in .*) continue;; esac; fi; if [ "$3" = 1 ] || [ "$4" = 1 ]; then case $name in ' + SYSTEM_CASE + ') continue;; esac; fi; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
 
 // The Windows listing: JSON of { name, dir } for at most `limit` + 1 entries. Windows PowerShell otherwise uses the
 // console code page; exec decodes UTF-8. Reparse points keep directory attributes even when dangling; check their target.
@@ -28,10 +29,13 @@ export function pruneFolder(folders, entries, path) {
   for (const p of [...entries.keys()]) if (gone(p)) entries.delete(p);
 }
 
+export const LIST_DENIED = 3;
+export const NO_LIST_MESSAGE = "No permission to list this folder";
+
 // The listing script ends with `test -d`: it fails silently exactly when the folder is not there.
 // Any message (unreachable machine, no access) is a real error.
 export function folderMissing(result) {
-  return result.code !== 0 && String(result.stderr ?? "").trim() === "";
+  return result.code !== 0 && result.code !== LIST_DENIED && String(result.stderr ?? "").trim() === "";
 }
 
 // The folder to open after a new folder was created, as a path relative to the shown root; null when
@@ -50,11 +54,14 @@ export const ROW_H = 28, TREE_PAD = 6;
 // The rows of the tree in display order: the entries of "" and, depth first, of every open folder.
 // Stops at `limit` rows; a folder deeper than `maxDepth` is not descended into (rows up to depth maxDepth show).
 // isDir(entry, path): does the row act as a folder (a macOS package only while its contents are shown, lib/bundles.js).
+// A folder whose loaded list has `denied` set shows one note row below it instead of looking empty (issue #49).
 export function visibleRows(entries, folders, { limit = 5000, maxDepth = 40, isDir = (entry) => entry.dir } = {}) {
   const out = [];
   const walk = (prefix, depth) => {
     if (out.length >= limit || depth > maxDepth) return;
-    for (const entry of entries.get(prefix) ?? []) {
+    const list = entries.get(prefix) ?? [];
+    if (list.denied && prefix && out.length < limit) out.push({ path: `${prefix}/`, entry: { name: NO_LIST_MESSAGE, dir: false, note: true }, depth });
+    for (const entry of list) {
       if (out.length >= limit) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       out.push({ path, entry, depth });
