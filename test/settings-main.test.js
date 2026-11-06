@@ -402,7 +402,7 @@ test("hide settings: a saved change applies at once; an open folder that is now 
   self.checkConfig(cx);
   await settle();
   assert.equal(self.conf.hide_dotfiles, true);
-  assert.deepEqual(listed, [["/data", "500", "1", "1"], ["/data/src", "500", "1", "1"]], "the hidden open folders are not listed again");
+  assert.deepEqual(listed, [["/data", "500", "1", "1"], ["/data/src", "500", "1", "1", "1"]], "the hidden open folders are not listed again (a local subfolder also asks for its real path, #42)");
   assert.deepEqual([...self.folders], ["src"]);
   assert.deepEqual(self.visible().map((r) => r.path), ["src", "src/x"]);
 });

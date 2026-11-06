@@ -66,30 +66,44 @@ export function watchRel(p, roots) {
 // lock files change on every git command and never change a mark by themselves. ".git" itself: a parent report.
 const gitRelevant = (rel) => rel === ".git" || rel === ".git/index" || rel === ".git/HEAD" || rel.startsWith(".git/refs/");
 
-// Which refresh a batch of watchFolder paths needs. roots: the shown root as given and as resolved; folders: the
-// expanded folders (relative, also those whose first load runs); file: the open file (relative) or null; hide: the
-// hide settings. Returns { refresh, file }: file "named" when the batch names the open file or a folder above it
-// (read it again), "text" when the paths cannot be compared (read and compare the text), else null.
+// Which refresh a batch of watchFolder paths needs. roots: the shown root as given and as resolved; links: [rel, real]
+// pairs, an expanded folder (or the open file's folder) and its real path as cd -P gives it: herdr reports a change
+// below a symlinked folder under the link's target, so such a path counts as one below the folder too (a target
+// outside the root is not watched at all); folders: the expanded folders (relative, also those whose first load runs);
+// file: the open file (relative) or null; fileKnown: the open file's real folder is known (it lies in the root
+// itself, or links holds its folder), so it is matched exactly; hide: the hide settings. Returns { refresh, file }:
+// file "named" when the batch names the open file or a folder above it (read it again), "text" when the paths cannot
+// be compared (read and compare the text), else null.
 // Rules, per path: the root (overflow: herdr bounds pending paths) refreshes everything; the open file or a folder
-// above it; a path with the open file's name (compare its text: a symlinked folder); .git index, HEAD, refs; a shown
-// folder or one above it; a .gitignore in a shown folder; anything else hidden by the hide settings is ignored; a
-// direct child of the root or of a shown folder refreshes; everything else (collapsed subtrees, package
-// contents, ignored folders like node_modules) is ignored. A path below no root, or a batch without paths, falls
-// back to the old behaviour: refresh and compare the open file.
-export function watchPlan(paths, { roots, folders = [], file = null, hide = null } = {}) {
+// above it; while the open file's real folder is not known, a path with its name (compare its text: it may lie
+// behind a symlinked folder); .git index, HEAD, refs; a shown folder or one above it; a .gitignore in a shown folder;
+// anything else hidden by the hide settings is ignored; a direct child of the root or of a shown folder refreshes;
+// everything else (collapsed subtrees, package contents, ignored folders like node_modules) is ignored. A path below
+// no root and no link, or a batch without paths, falls back to the old behaviour: refresh and compare the open file.
+export function watchPlan(paths, { roots, links = [], folders = [], file = null, fileKnown = false, hide = null } = {}) {
   const shown = new Set(folders);
-  const rels = Array.isArray(paths) ? paths.map((p) => watchRel(p, roots)) : [];
-  if (!rels.length || rels.includes(null)) {
+  // Every name a path has in the tree: below the root, and below each linked folder whose real path holds it.
+  const namesOf = (p) => {
+    const out = [];
+    const direct = watchRel(p, roots);
+    if (direct !== null) out.push(direct);
+    for (const [rel, real] of links) {
+      const below = typeof real === "string" && real !== "" ? watchRel(p, [real]) : null;
+      if (below !== null) out.push(below === "" ? rel : rel === "" ? below : `${rel}/${below}`);
+    }
+    return out;
+  };
+  const named = Array.isArray(paths) ? paths.map(namesOf) : [];
+  if (!named.length || named.some((n) => !n.length)) {
     const abs = file && typeof roots?.[0] === "string" ? absOf(roots[0], file) : null;
     return { refresh: true, file: !file ? null : Array.isArray(paths) && fileHit(paths, abs) ? "named" : "text" };
   }
   let refresh = false, text = false;
-  const name = file ? file.slice(file.lastIndexOf("/") + 1) : null;
-  for (const rel of rels) {
+  const name = file && !fileKnown && file.includes("/") ? file.slice(file.lastIndexOf("/") + 1) : null;
+  for (const rel of named.flat()) {
     if (rel === "" || (file && (rel === file || file.startsWith(rel + "/")))) return { refresh: true, file: file ? "named" : null };
     const i = rel.lastIndexOf("/"), parent = i < 0 ? "" : rel.slice(0, i), base = rel.slice(i + 1);
-    // The open file reached through a symlinked folder is reported under its real path: same name, compare the text
-    // (one local read, as before #42).
+    // The open file behind a symlinked folder whose real path is not known yet: same name, compare the text.
     if (name && base === name) { refresh = text = true; continue; }
     if (refresh) continue;
     if (gitRelevant(rel) || [...shown].some((f) => f === rel || f.startsWith(rel + "/"))) { refresh = true; continue; }
