@@ -27,6 +27,7 @@ import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menui
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
+import { gitPrefix, rootRelative } from "./lib/gitmarks.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
@@ -745,14 +746,15 @@ export default class FilerPro extends View {
           if (!this.current(context)) return;
           await this.loadFolder(path, context);
         }
-        const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
+        const top = await exec("git", ["rev-parse", "--show-prefix"], { cwd, on }).catch(() => null);
         const marks = {};
         if (top?.code === 0) {
+          const prefix = gitPrefix(top.stdout);
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
           const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
           if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, this.conf.list_total)) {
-            const xy = entry.slice(0, 2);
-            marks[joinPath(top.stdout.trim(), entry.slice(3))] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
+            const xy = entry.slice(0, 2), rel = rootRelative(prefix, entry.slice(3));
+            if (rel !== null) marks[joinPath(this.root, rel)] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
           }
         }
         if (!this.current(context)) return;
