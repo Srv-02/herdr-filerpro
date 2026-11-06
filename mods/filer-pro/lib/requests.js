@@ -311,11 +311,16 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
     if ((target ?? null) === on && typeof j.dest === "string") reserved.push(baseName(j.dest));
   }
   const out = await deps.fileOps.move({ on, src: plan.src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
-  if (out.ok) {
-    clearClipboard();
-    setShared("filer-pro.changed", { at: now() });
-  }
+  if (out.ok) clearClipboard();
+  changedAfter(setShared, now); // a failed move may have moved the old entry aside already
   return out;
+}
+
+// filer-pro.changed after an operation ran, whether it succeeded or not: a failure on a machine (a dropped connection,
+// a folder deleted halfway) may still have changed something, and without a timer (issue #31) nothing else reloads the
+// tree. Not sent when the user cancelled before anything ran.
+function changedAfter(setShared, now, extra = {}) {
+  setShared("filer-pro.changed", { at: now(), ...extra });
 }
 
 // Processing of one request. A download whose target exists or whose folder holds outside links
@@ -366,14 +371,14 @@ export async function handleRequest(req, deps) {
     }
     case "rename": {
       const out = await deps.fileOps.rename({ on: req.machine ?? null, path: req.path, root: req.root, name: req.name });
-      if (out.ok) setShared("filer-pro.changed", { at: now() });
+      changedAfter(setShared, now);
       return out;
     }
     case "mkdir": {
       const on = req.machine ?? null;
       const out = await deps.fileOps.mkdir({ on, path: req.path, name: req.name });
       // expand: the panel opens the parent so the new folder is visible.
-      if (out.ok) setShared("filer-pro.changed", { at: now(), expand: { machine: on, folder: req.path } });
+      changedAfter(setShared, now, out.ok ? { expand: { machine: on, folder: req.path } } : {});
       return out;
     }
     case "delete": {
@@ -391,7 +396,7 @@ export async function handleRequest(req, deps) {
       }
       // expect: the physical path shown in the dialog; remove checks again and refuses another one.
       const out = await deps.fileOps.remove({ on, path: req.path, root: req.root, expect: found.path });
-      if (out.ok) setShared("filer-pro.changed", { at: now() });
+      changedAfter(setShared, now); // a failed delete of a folder may have removed part of it
       return out;
     }
     case "open":

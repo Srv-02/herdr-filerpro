@@ -269,7 +269,7 @@ test("settings: preview limits travel per call (source guard and loadLimits)", a
   const main = await fs.readFile(new URL("../mods/filer-pro/main.js", import.meta.url), "utf8");
   const body = (name) => { const i = main.indexOf(`  ${name}(`); return main.slice(i, main.indexOf("\n  }\n", i)); };
   assert.ok(body("show").includes("cfg.source_max_chars") && !main.includes("400000"), "source truncation from the settings");
-  assert.ok(body("show").includes("maxChars: cfg.preview_max_chars, maxDiagrams: cfg.max_diagrams"));
+  assert.ok(body("show").includes("this.fileCfg = cfg") && body("async preparePreview").includes("cfg = this.fileCfg ?? DEFAULTS") && body("async preparePreview").includes("maxChars: cfg.preview_max_chars, maxDiagrams: cfg.max_diagrams"), "the preview with the settings the file was read with");
   assert.ok(body("show").includes("...this.loadLimits(cfg)") && body("turnPage").includes("...this.loadLimits()"), "images and PDFs, also when turning pages");
   assert.ok(body("renderDiagrams").includes("node: cfg.node_path") && body("renderDiagrams").includes("this.fileCfg"));
   const MB = 1024 * 1024;

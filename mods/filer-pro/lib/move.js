@@ -135,8 +135,9 @@ const OTHER_VOLUME = "The target is on another volume";
 const NO_CHECK = "Could not check the path";
 
 // The verdict on the answer of MOVE_CHECK_SCRIPT, in the order the user would hit the problems. destDir is the
-// folder as the caller named it (for the message), stderr the script's (for the mount message).
-export function moveVerdict({ info, src, destDir, stderr }) {
+// folder as the caller named it (for the message), stderr the script's (for the mount message), on the machine it ran
+// on (null: this computer) and localPlatform this computer's platform (both decide the text of "Operation not permitted").
+export function moveVerdict({ info, src, destDir, stderr, on = null, localPlatform }) {
   if (!info.destDir) return { error: `Target folder does not exist: ${destDir}` };
   if (info.into === "y") return { error: "Cannot move a folder into itself" };
   if (info.into !== "n") return { error: NO_CHECK };
@@ -148,7 +149,7 @@ export function moveVerdict({ info, src, destDir, stderr }) {
   if (info.exists) {
     if (info.above !== "n" && info.above !== "y") return { error: NO_CHECK };
     if (info.above === "y") replaceError = "Cannot replace a folder that contains the source";
-    else if (info.mounted === "y") replaceError = explainRaw(stderr, null, "Refusing to replace, a file system is mounted in the target");
+    else if (info.mounted === "y") replaceError = explainRaw(stderr, on, "Refusing to replace, a file system is mounted in the target", { localPlatform });
     else if (info.trashDev !== "" && info.trashDev !== info.destDev) replaceError = "Cannot replace here, the Trash lies on another volume";
   }
   return { exists: info.exists, destIsDir: info.type === "d", dest, replaceError };
@@ -179,7 +180,7 @@ export function createMoveOps({ exec, check, trashDir, mountTables = [], localPl
     }
     if (res.code !== 0) return { ok: false, error: explainError(res.stderr, on, NO_CHECK) };
     const info = parseMoveCheck(res.stdout);
-    const v = moveVerdict({ info, src: c.path, destDir, stderr: res.stderr });
+    const v = moveVerdict({ info, src: c.path, destDir, stderr: res.stderr, on, localPlatform: localPlatform?.() });
     if (v.error) return { ok: false, error: v.error };
     if (v.noop) return { ok: true, noop: true, src: c.path };
     if (v.crossVolume) return { ok: true, crossVolume: true, src: c.path, name: c.name, isDir: c.isDir };

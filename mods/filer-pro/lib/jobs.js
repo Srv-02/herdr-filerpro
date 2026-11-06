@@ -125,7 +125,9 @@ export function createJobs(deps) {
   function end(id, patch) {
     const job = update(id, { finishedAt: now(), ...patch });
     notifyEnd(job);
-    if (job.state === "done" && !job.preview) setShared("filer-pro.changed", { at: now() }); // the tree reloads at once
+    // The tree reloads at once, also after a failed or cancelled job: it may have written part of a folder (issue #31,
+    // no timer catches up on a machine).
+    if (!job.preview) setShared("filer-pro.changed", { at: now() });
     if (job.state === "done") { // a Cut waiting on this copy ("Copy instead", requests.js runMove) is complete now
       const clip = getShared("filer-pro.clipboard");
       if (Array.isArray(clip?.copyJobs) && clip.copyJobs.includes(id)) {
