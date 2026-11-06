@@ -773,11 +773,12 @@ test("remote tick measures the temp on the machine; done gives Copied without re
   assert.deepEqual(f.store["filer-pro.changed"], { at: f.t });
 });
 
-test("remote failed: Copy failed toast, no filer-pro.changed", async () => {
+// A failed or cancelled job may have written part of a folder: without a timer (#31) only this signal reloads the tree.
+test("remote failed: Copy failed toast, and filer-pro.changed (it may have written part of it)", async () => {
   const { f, jobs } = setup({ runError: "boom" });
   await jobs.start(REMOTE);
   assert.equal(f.notifications.at(-1).title, "Copy failed");
-  assert.equal(f.store["filer-pro.changed"], undefined);
+  assert.deepEqual(f.store["filer-pro.changed"], { at: f.t });
 });
 
 test("a finished download also sets filer-pro.changed", async () => {
@@ -789,14 +790,14 @@ test("a finished download also sets filer-pro.changed", async () => {
   assert.deepEqual(f.store["filer-pro.changed"], { at: f.t });
 });
 
-test("a cancelled job does not set filer-pro.changed", async () => {
+test("a cancelled job sets filer-pro.changed too", async () => {
   const { f, jobs } = setup();
   const job = await jobs.start(REMOTE);
   f.files[STATUS] = "state=cancelled\ncode=130\n";
   f.terminals[job.terminal] = { state: "finished", reason: "exited" };
   await jobs.tick();
   assert.equal(f.jobs().id1.state, "cancelled");
-  assert.equal(f.store["filer-pro.changed"], undefined);
+  assert.deepEqual(f.store["filer-pro.changed"], { at: f.t });
 });
 
 test("killed before it could report: the temp is removed on the destination side", async () => {

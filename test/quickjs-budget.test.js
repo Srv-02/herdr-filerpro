@@ -33,8 +33,13 @@ export default class Budget extends View { render() { return div(); } }
 throw new Error("RESULT " + JSON.stringify(result));
 `;
 
-// The limit is wall-clock time, and `npm test` runs the other test files in parallel: a run interrupted while the
-// machine is busy gets two more tries. The old per-byte code needed well over the limit and failed every try.
+// The limit is wall-clock time, and `npm test` runs the other test files in parallel, so under load a run can be
+// interrupted although its work fits. An interrupted run is tried again after a pause that grows (1, 2, 4, 8, 16, 30 s:
+// about a minute in all, as long as a whole `npm test` keeps the CPU busy), so a retry runs on a quieter machine. This
+// does not weaken the check: the old per-byte code needed well over the limit and was interrupted on every try,
+// so a pass still needs one complete run inside a single job.
+const PAUSES_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 function runInHerdr(body) {
   const dir = mkTmpSync("quickjs-budget-");
   fs.cpSync(path.join(MOD, "lib"), path.join(dir, "lib"), { recursive: true });
@@ -42,7 +47,8 @@ function runInHerdr(body) {
   fs.writeFileSync(path.join(dir, "mod.json"), '{ "place": "none" }\n');
   fs.writeFileSync(path.join(dir, "main.js"), SETUP + body + REPORT);
   let out = "";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt <= PAUSES_MS.length; attempt++) {
+    if (attempt > 0) pause(PAUSES_MS[attempt - 1]);
     const r = spawnSync("herdr-app", ["check", dir], { encoding: "utf8", timeout: 60000 });
     out = `${r.stdout}\n${r.stderr}`;
     if (!/interrupted/.test(out)) break;

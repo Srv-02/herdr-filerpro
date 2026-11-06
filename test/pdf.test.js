@@ -272,7 +272,7 @@ test("main.js: PDFs are decided before the text is read, Load starts a quiet job
   assert.ok(body("showHint").includes("previewJob(") && body("showHint").includes('" · Load it in the panel"'), "the dialog joins a running job or points to the panel");
   assert.ok(body("turnPage").includes("showHint("), "a hint while turning pages gets the same treatment");
   assert.ok(!body("fileOverlay").includes("jobs") && !body("overlayView").includes("jobs"), "the dialog never starts jobs");
-  assert.ok(main.includes('while (j?.state === "running" && this.file === path && this.current(context))'), "the poll stops with the file");
+  assert.ok(main.includes('while (j?.state === "running" && this.waiting === wait && this.file === path && this.current(context))'), "the poll stops with the file and with a newer wait");
   assert.ok(main.includes("loadOutcome(j)") && main.includes('"Loading… · progress in the transfers bar"'));
   assert.ok(main.includes('"PDFs have no source view"') && main.includes('"Images have no source view"'));
   assert.ok(main.includes('"Loading PDF…"') && main.includes('"Loading image…"'));
