@@ -1,7 +1,7 @@
 // Recording fakes for the herdr APIs the job manager gets by injection (not a test itself).
 import { SIZE_SCRIPT } from "../../mods/filer-pro/lib/sizes.js";
 import { LINKS_SCRIPT } from "../../mods/filer-pro/lib/links.js";
-import { PROBE_SCRIPT } from "../../mods/filer-pro/lib/textedit.js";
+import { PROBE_SCRIPT, READ_SCRIPT } from "../../mods/filer-pro/lib/textedit.js";
 import { EXISTS_SCRIPT, LIST_SCRIPT, RESOLVE_SCRIPT, REPLACE_CHECK_SCRIPT } from "../../mods/filer-pro/lib/jobs.js";
 
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
@@ -16,6 +16,7 @@ export function createFake(over = {}) {
     readErrors: {}, // path -> Error that readTextFile rejects with (over 1 MiB, invalid UTF-8)
     reads: [], // every path readTextFile was asked for
     probes: {}, // path -> stdout of PROBE_SCRIPT (absent: empty stdout)
+    readOuts: {}, // path -> stdout of READ_SCRIPT, or { code, stdout, stderr } (absent: "missing")
     sizes: {}, // path -> bytes; absent means -1 (missing)
     sizeError: null, // Error to throw from the size probe
     sizeDelay: 0, // ms the clock jumps during a size probe
@@ -74,6 +75,7 @@ export function createFake(over = {}) {
         return ok(`${f.sizes[path] ?? -1}\n`);
       }
       if (script === PROBE_SCRIPT) return ok(f.probes[path] ?? "");
+      if (script === READ_SCRIPT) { const r = f.readOuts[path] ?? "missing\n"; return typeof r === "string" ? ok(r) : { stdout: "", stderr: "", ...r }; }
       if (script === EXISTS_SCRIPT && f.execCode?.(path)) return { stdout: "", ...f.execCode(path) };
       if (script === EXISTS_SCRIPT) return ok((f.existing.has(path) ? "y\n" : "") + (f.dirs.has(path) ? "d\n" : "") + (f.symlinks.has(path) ? "l\n" : ""));
       if (script === RESOLVE_SCRIPT) return f.resolveFail ? { code: 1, stdout: "", stderr: "" } : ok(`${f.resolved[path] ?? path}\n`);

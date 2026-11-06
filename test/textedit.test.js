@@ -7,7 +7,7 @@ import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
 import {
   EDIT_MAX_BYTES, PROBE_SCRIPT, BEGIN_FILE_SCRIPT, PRIVATE_DIR_SCRIPT, COPY_SCRIPT, COMMIT_SCRIPT, CLEAN_SCRIPT,
-  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, probeFile, probeFileGuarded, CHECK_FAILED, CHECK_TIMEOUT_MS, saveFile, saveCopy, copyName, mirrorName, octalMode, scpSender,
+  READ_SCRIPT, parseRead, parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, probeFile, probeFileGuarded, CHECK_FAILED, CHECK_TIMEOUT_MS, saveFile, saveCopy, copyName, mirrorName, octalMode, scpSender,
 } from "../mods/filer-pro/lib/textedit.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
 
@@ -1077,4 +1077,69 @@ describe("localPlatform in the save texts", () => {
     assert.equal((await send("linux")).error, NEUTRAL);
     assert.equal((await send("macos")).error, MAC);
   });
+});
+
+// #39: the bounded read of a file to show. Unlike PROBE_SCRIPT it follows a symbolic link (as cat did) and says so.
+describe("READ_SCRIPT on real files, local and through the fake ssh", () => {
+  for (const on of [null, "box"]) {
+    const read = async (exec, p) => parseRead((await exec("sh", ["-c", READ_SCRIPT, "read", p], { on })).stdout);
+    test(`file, link, dangling link, folder, fifo, large, empty (${on ?? "local"})`, async () => {
+      const { root, files } = scratch();
+      const { exec } = makeExec(root);
+      const f = path.join(files, "real.txt");
+      put(f, "héllo\n");
+      fs.symlinkSync(f, path.join(files, "link"));
+      fs.symlinkSync(path.join(files, "nowhere"), path.join(files, "dangling"));
+      fs.mkdirSync(path.join(files, "folder"));
+      spawnSync("mkfifo", [path.join(files, "fifo")]);
+      put(path.join(files, "big"), Buffer.alloc(EDIT_MAX_BYTES + 1, 0x61));
+      put(path.join(files, "empty"), "");
+      const plain = await read(exec, f);
+      assert.deepEqual({ ...plain, bytes: Buffer.from(plain.bytes).toString() }, { kind: "file", link: false, writable: true, mode: "644", size: 7, openDir: false, bytes: "héllo\n" });
+      const link = await read(exec, path.join(files, "link"));
+      assert.equal(link.kind, "file");
+      assert.equal(link.link, true);
+      assert.equal(link.size, 7, "the size of the target");
+      assert.equal(Buffer.from(link.bytes).toString(), "héllo\n");
+      assert.equal((await read(exec, path.join(files, "dangling"))).kind, "missing");
+      assert.equal((await read(exec, path.join(files, "gone"))).kind, "missing");
+      assert.equal((await read(exec, path.join(files, "folder"))).kind, "dir");
+      assert.equal((await read(exec, path.join(files, "fifo"))).kind, "special");
+      const big = await read(exec, path.join(files, "big"));
+      assert.deepEqual([big.kind, big.size, big.bytes], ["file", EDIT_MAX_BYTES + 1, null], "no content above 1 MiB");
+      const empty = await read(exec, path.join(files, "empty"));
+      assert.deepEqual([empty.kind, empty.size, empty.bytes.length], ["file", 0, 0]);
+    });
+
+    test(`a file without read permission is reported as unreadable (${on ?? "local"})`, { skip: IS_ROOT && "root reads everything" }, async () => {
+      const { root, files } = scratch();
+      const { exec } = makeExec(root);
+      put(path.join(files, "secret"), "x", 0o200);
+      const r = await read(exec, path.join(files, "secret"));
+      assert.equal(r.kind, "unreadable");
+      assert.equal(r.bytes, null);
+    });
+  }
+
+  test("a file of exactly 1 MiB comes with its bytes", async () => {
+    const { root, files } = scratch();
+    const { exec } = makeExec(root);
+    put(path.join(files, "max"), Buffer.alloc(EDIT_MAX_BYTES, 0x61));
+    const r = parseRead((await exec("sh", ["-c", READ_SCRIPT, "read", path.join(files, "max")], { on: null })).stdout);
+    assert.equal(r.bytes.length, EDIT_MAX_BYTES);
+  });
+
+  test("parseRead: broken output is an error, never a file", () => {
+    assert.equal(parseRead("").kind, "error");
+    assert.equal(parseRead("file y 644 5 n n\n").kind, "error", "bytes missing");
+    assert.equal(parseRead("file y 644 5 n n\n!!\n").kind, "error", "bad base64");
+    assert.equal(parseRead("file y 644 0 n n\n").bytes.length, 0);
+  });
+});
+
+test("scpSender names the unreadable local source of the upload, not a target folder (direction up)", async () => {
+  const exec = async (cmd, args) => (cmd === "sh" && args[0] === "-c" ? { code: 0, stdout: 'open local "/x/stage.b64": Permission denied\n', stderr: "" } : { code: 1, stdout: "", stderr: "" });
+  const hc = async () => ({ code: 0, stdout: MACHINES, stderr: "" });
+  const r = await scpSender({ exec, hc, script: "/t.sh", trashDir: "/t", limits: () => numbers(null), localPlatform: "macos" })({ on: "box", src: "/x/stage.b64", dir: "/r", name: "n" });
+  assert.equal(r.error, "Cannot read the file: Permission denied");
 });
