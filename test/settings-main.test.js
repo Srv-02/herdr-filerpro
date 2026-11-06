@@ -278,16 +278,24 @@ test("settings: preview limits travel per call (source guard and loadLimits)", a
   assert.deepEqual(panel({}).loadLimits(), { maxImage: 20 * MB, cacheLimit: 50 * MB, maxLocal: 100 * MB, maxRemote: 20 * MB, svgCheck: true, ssh: { ssh_connect_timeout: 15, ssh_alive_interval: 15, ssh_alive_count: 4 } }, "defaults before a file was shown");
 });
 
-test("settings: a file holding null is broken; non-default list settings reload the tree at the next tick", async () => {
-  const b = host({ files: { "/app/filer-pro.json": "null" } });
-  await panel({}).openSettings();
-  assert.equal(b.store["filer-pro.settings"].broken, true);
-  host({ files: { "/app/filer-pro.json": '{"list_total": 300}', "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' } });
+// The first listing runs with the defaults; once the config is read, other list settings list the tree once more, at
+// once (with refresh_seconds 0 there is no timer to wait for, issue #31).
+const listings = (h) => h.log.execs.filter((e) => e.cmd === "sh" && e.args[1] === LIST_SCRIPT && e.args[3] === "/data").length;
+async function booted(cfg) {
+  const h = host({ files: { ...(cfg ? { "/app/filer-pro.json": cfg } : {}), "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' } });
   const { cx } = fakeCx();
   const self = Object.create(FilerPro.prototype);
   self.init({}, cx);
   await settle();
-  assert.equal(self.refreshedAt, 0);
+  return listings(h);
+}
+
+test("settings: a file holding null is broken; non-default list settings reload the tree once the config is read", async () => {
+  const b = host({ files: { "/app/filer-pro.json": "null" } });
+  await panel({}).openSettings();
+  assert.equal(b.store["filer-pro.settings"].broken, true);
+  assert.equal(await booted(null), 1, "control: defaults list once");
+  assert.equal(await booted('{"list_total": 300}'), 2);
 });
 
 // The settings overlay of main.js on a fake host, opened through openSettings like the real one.
@@ -399,13 +407,8 @@ test("hide settings: a saved change applies at once; an open folder that is now 
   assert.deepEqual(self.visible().map((r) => r.path), ["src", "src/x"]);
 });
 
-test("hide settings: non-default switches reload the tree at the next tick after the config was read", async () => {
+test("hide settings: non-default switches reload the tree once the config was read", async () => {
   for (const cfg of ['{"hide_system_files": false}', '{"hide_dotfiles": true}']) {
-    host({ files: { "/app/filer-pro.json": cfg, "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' } });
-    const { cx } = fakeCx();
-    const self = Object.create(FilerPro.prototype);
-    self.init({}, cx);
-    await settle();
-    assert.equal(self.refreshedAt, 0, cfg);
+    assert.equal(await booted(cfg), 2, cfg);
   }
 });

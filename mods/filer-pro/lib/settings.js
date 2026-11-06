@@ -5,7 +5,7 @@
 import { splitCommand } from "./editors.js";
 import { group } from "./numbers.js";
 
-const int = (key, def, min, max, label, help, section, unit) => ({ key, kind: "int", default: def, min, max, label, help, section, unit });
+const int = (key, def, min, max, label, help, section, unit, zero = false) => ({ key, kind: "int", default: def, min, max, label, help, section, unit, ...(zero ? { zero: true } : {}) });
 const bool = (key, def, label, help, section) => ({ key, kind: "bool", default: def, label, help, section });
 
 // ui/settings.js takes group from here, with the rest of the dialog's helpers.
@@ -20,7 +20,8 @@ export const NUMBERS = Object.freeze([
   int("list_per_folder", 500, 10, 10000, "Files shown per folder", "Bigger folders are cut off with a note.", "File list limits", "files"),
   int("list_total", 5000, 100, 20000, "Files shown in total", "Across all open folders together.", "File list limits", "files"),
   int("tree_depth", 40, 1, 200, "Deepest folder level", "Folders nested deeper than this are not listed.", "File list limits", "levels"),
-  int("refresh_seconds", 10, 2, 3600, "Look for changes every", "The list also updates right after your own actions.", "File list limits", "seconds"),
+  // zero: 0 is allowed besides min–max and means off (no timer, no exec while idle: issue #31).
+  int("refresh_seconds", 0, 2, 3600, "Look for changes every", "0 turns it off: the list and the open file then update after your own actions, on Refresh, when you switch folders, and on this Mac when files change.", "File list limits", "seconds", true),
   int("preview_max_chars", 200000, 10000, 2000000, "Longest formatted preview", "Longer Markdown and HTML files are cut off.", "Preview limits", "characters"),
   int("source_max_chars", 400000, 10000, 5000000, "Longest plain text view", "Longer text is cut off.", "Preview limits", "characters"),
   int("image_max_mb", 20, 1, 500, "Show images right away up to", "Bigger images show a Load button first.", "Preview limits", "MB"),
@@ -58,7 +59,7 @@ export function numbers(cfg) {
   const out = {};
   for (const s of NUMBERS) {
     const v = cfg?.[s.key];
-    out[s.key] = Number.isInteger(v) ? Math.min(s.max, Math.max(s.min, v)) : s.default;
+    out[s.key] = !Number.isInteger(v) ? s.default : s.zero && v === 0 ? 0 : Math.min(s.max, Math.max(s.min, v));
   }
   return out;
 }
@@ -72,7 +73,8 @@ export function validateField(key, input) {
   if (s.kind === "int") {
     if (!/^\d+$/.test(text)) return { error: "Enter a whole number." };
     const n = Number(text);
-    return n >= s.min && n <= s.max ? { value: n } : { error: `Enter a number from ${group(s.min)} to ${group(s.max)}.` };
+    if (s.zero && n === 0) return { value: 0 };
+    return n >= s.min && n <= s.max ? { value: n } : { error: `Enter ${s.zero ? "0 (off) or " : ""}a number from ${group(s.min)} to ${group(s.max)}.` };
   }
   if (s.kind === "path") {
     if (text === "") return { value: "" };

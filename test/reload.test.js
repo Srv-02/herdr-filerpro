@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createReloadGate } from "../mods/filer-pro/lib/reload.js";
+import { createReloadGate, fileHit } from "../mods/filer-pro/lib/reload.js";
 
 const clock = () => { let t = 0; return { now: () => t, tick: (ms) => { t += ms; } }; };
 
@@ -40,4 +40,17 @@ test("reload gate: a signal during a running load is kept and done after it", ()
   assert.equal(g.take(true), false);
   assert.equal(g.take(false), true); // the load is over: caught up
   assert.equal(g.take(false), false);
+});
+
+test("fileHit: the file itself or a folder above it, never a sibling or a longer name", () => {
+  const f = "/w/src/a.txt";
+  assert.equal(fileHit(["/w/src/a.txt"], f), true);
+  assert.equal(fileHit(["/w/src"], f), true, "the folder of the file");
+  assert.equal(fileHit(["/w/"], f), true, "the watched root: refresh everything");
+  assert.equal(fileHit(["/w/src/b.txt", "/w/other"], f), false);
+  assert.equal(fileHit(["/w/src/a.txt.swp", "/w/sr"], f), false);
+  assert.equal(fileHit(["C:\\w\\src"], "C:\\w\\src\\a.txt"), true);
+  assert.equal(fileHit([], f), false);
+  assert.equal(fileHit(null, f), false);
+  assert.equal(fileHit(["/w"], null), false);
 });

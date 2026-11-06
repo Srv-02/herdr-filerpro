@@ -19,3 +19,15 @@ export function createReloadGate({ now, gapMs = 1000, at = null }) {
     },
   };
 }
+
+// A batch of watchFolder paths (absolute) touches the file at `abs` when it names the file itself or a folder above it
+// (the watched root in a batch means "refresh everything"). Separators: / and \ (Windows).
+export function fileHit(paths, abs) {
+  if (!abs || !Array.isArray(paths)) return false;
+  const norm = (p) => String(p).replace(/[\\/]+$/, "");
+  const file = norm(abs);
+  return paths.some((p) => {
+    const q = norm(p);
+    return q === file || (q !== "" && (file.startsWith(q + "/") || file.startsWith(q + "\\")));
+  });
+}

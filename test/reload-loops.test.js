@@ -12,7 +12,7 @@ const STUBS = {
   herdr: stub(["spaces", "panes", "focused", "exec", "hc", "readTextFile", "writeTextFile", "watchFolder", "theme", "settings", "window", "shared", "setShared", "notify", "props", "appHome", "home", "nextCommand", "openOverlay", "closeOverlay", "pickFolder", "run", "layout"]),
   "gpui-kit": "export class View {}; export const div = () => ({}), svg = div, image = div;",
   "gpui-base": "export const v_flex = () => ({}), h_flex = v_flex; export class Editor {}; export class EditorState {}; export class InputState {}; export const Input = v_flex, TextView = v_flex, Scrollbar = { vertical: v_flex };",
-  "fs/promises": "export const exists = async () => false, readFile = async () => \"\", writeFile = readFile, mkdir = readFile, unlink = readFile, stat = readFile;",
+  "fs/promises": "export const exists = async () => false, readFile = async () => \"\", writeFile = readFile, mkdir = readFile, unlink = readFile, stat = readFile; export const readdir = (...a) => globalThis.__impl.readdir(...a);",
 };
 const hooks = `export async function resolve(s, c, next) { return s in ${JSON.stringify(STUBS)} ? { url: "stub:" + s, shortCircuit: true } : next(s, c); }
 export async function load(u, c, next) { return u.startsWith("stub:") ? { format: "module", shortCircuit: true, source: ${JSON.stringify(STUBS)}[u.slice(5)] } : next(u, c); }`;
@@ -35,6 +35,8 @@ function host({ props = {}, store = {} } = {}) {
     readTextFile: async () => { throw new Error("ENOENT"); }, writeTextFile: async () => {},
     shared: (k) => store[k], setShared: (k, v) => { store[k] = v; }, notify: () => {},
     exec: async (cmd, args) => { execs.push([cmd, ...args].join(" ")); return { code: 0, stdout: "", stderr: "" }; },
+    // The request scan lists its folder with fs.readdir (no process, issue #31): logged like an exec.
+    readdir: async (dir) => { execs.push(`readdir ${dir}`); return []; },
     nextCommand: commands.fn, watchFolder: watches.fn,
   };
   return { commands, watches, execs };
@@ -52,7 +54,7 @@ function fakeCx() {
 }
 
 const panel = () => Object.assign(Object.create(FilerPro.prototype), { jobs: { recover: async () => {}, tick: async () => {}, clearFinished() {} }, cfg: null });
-const scans = (execs) => execs.filter((e) => e.includes("ls -1")).length;
+const scans = (execs) => execs.filter((e) => e.startsWith("readdir ")).length;
 
 test("reload: the panel's command loop ends at the next command and does not act on it", async () => {
   const h = host();
