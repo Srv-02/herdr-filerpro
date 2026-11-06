@@ -62,8 +62,9 @@ Date.now = () => clock;
 
 // One scratch world. machine: the space's machine ("box": every exec and read carries on "box"). config: filer-pro.json.
 // hold: execs wait until the test answers them (w.release), to simulate a slow machine.
+// git: the git calls run the real git (otherwise: not a repository).
 // link: the space folder is a symbolic link to the real folder (herdr reports watch paths under the real one).
-function world({ machine = null, config = null, link = false } = {}) {
+function world({ machine = null, config = null, link = false, git = false } = {}) {
   const base = mkTmpSync("reload-open-");
   const ROOT = path.join(base, "files");
   const REAL = link ? path.join(base, "real-files") : ROOT;
@@ -84,8 +85,9 @@ function world({ machine = null, config = null, link = false } = {}) {
     timer: { after: (ms, fn) => { if (ms === 0) setImmediate(() => fn(cx)); }, every: (ms, fn) => timers.push({ ms, fn }) },
   };
   const rcx = { ...cx, notify() { throw new Error("cx.notify() during render"); } };
-  const run = (cmd, args) => {
+  const run = (cmd, args, cwd) => {
     if (!["sh", "rm", "env", "git"].includes(cmd)) return { code: 1, stdout: "", stderr: "" };
+    if (cmd === "git" && git) { const r = spawnSync(cmd, args, { encoding: "utf8", cwd, env }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
     if (cmd === "git") return { code: 128, stdout: "", stderr: "not a git repository" };
     const real = args.map((a) => (a === "/app/mods/filer-pro/bin/transfer.sh" ? TRANSFER : a.startsWith("/app/") ? path.join(base, a) : a));
     const r = spawnSync(cmd, real, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env });
@@ -110,7 +112,7 @@ function world({ machine = null, config = null, link = false } = {}) {
       state.inFlight++; state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
       try {
         if (state.hold) await new Promise((resolve) => state.held.push(resolve));
-        return run(cmd, args);
+        return run(cmd, args, opts.cwd);
       } finally { state.inFlight--; }
     },
     openOverlay: () => "ov1", closeOverlay: () => {}, notify: (n) => log.notes.push(n),
@@ -1063,4 +1065,59 @@ test("R5: realRoot failing (null): the watch compares the root as given", async 
   w.fire(w.ROOT, [path.join(w.ROOT, "new.txt")]);
   await settle();
   assert.equal(REFRESHES(w), n + 1);
+});
+
+// ---- issue #48: git marks do not depend on whether the root is a symlink
+
+const sh = (cwd, ...args) => { const r = spawnSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); };
+const GITS = (w) => w.log.execs.filter((e) => e.cmd === "git");
+function repo(dir) {
+  fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+  sh(dir, "init", "-q");
+  fs.writeFileSync(path.join(dir, "kept.txt"), "k\n");
+  fs.writeFileSync(path.join(dir, "sub", "a.txt"), "a\n");
+  sh(dir, "add", "."); sh(dir, "commit", "-qm", "init");
+  fs.appendFileSync(path.join(dir, "kept.txt"), "more\n");
+  fs.writeFileSync(path.join(dir, "sub", "new.txt"), "n\n");
+}
+const marksOf = (self) => Object.fromEntries(Object.entries(self.marks).map(([k, v]) => [path.relative(self.root, k), v]));
+
+for (const [where, machine] of [["local", null], ["remote", "box"]]) {
+  test(`marks: a repository reached through a symlinked root shows its marks (${where})`, async () => {
+    const w = world({ machine, link: true, git: true });
+    repo(w.REAL);
+    const self = await boot(w);
+    assert.deepEqual(marksOf(self), { "kept.txt": "M", "sub/new.txt": "A" });
+    assert.equal(self.marks[path.join(w.ROOT, "kept.txt")], "M", "keyed by the logical root the rows look up");
+  });
+
+  test(`marks: a normal root keeps its marks (${where})`, async () => {
+    const w = world({ machine, git: true });
+    repo(w.ROOT);
+    const self = await boot(w);
+    assert.deepEqual(marksOf(self), { "kept.txt": "M", "sub/new.txt": "A" });
+  });
+
+  test(`marks: the root is a symlink to a folder inside a repository above it; paths outside are dropped (${where})`, async () => {
+    const w = world({ machine, git: true });
+    const top = path.join(w.base, "top");
+    repo(top);
+    fs.writeFileSync(path.join(top, "sub", "mod.txt"), "x\n"); // untracked sibling, shown
+    fs.rmSync(w.ROOT, { recursive: true }); fs.symlinkSync(path.join(top, "sub"), w.ROOT);
+    const self = await boot(w);
+    assert.deepEqual(marksOf(self), { "mod.txt": "A", "new.txt": "A" }, "kept.txt lies outside the root");
+  });
+}
+
+test("marks: a refresh makes one git rev-parse and one git status, with a symlinked root as with a normal one", async () => {
+  for (const link of [false, true]) {
+    const w = world({ link, git: true });
+    repo(w.REAL);
+    const self = await boot(w);
+    const before = GITS(w).length;
+    self.refresh(w.cx);
+    await settle(40);
+    const calls = GITS(w).slice(before).map((e) => e.args[0] === "--no-optional-locks" ? "status" : e.args[0]);
+    assert.deepEqual(calls, ["rev-parse", "status"], `link=${link}`);
+  }
 });
