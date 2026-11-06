@@ -919,6 +919,25 @@ test("R2: a chmod of a clean edit buffer above 1 MiB that still may write keeps 
   assert.equal(self.editCheck.info, e.info);
 });
 
+test("R2: a file saved above 1 MiB whose folder then loses search permission drops the saved text and says why (noaccess)", { skip: process.getuid?.() === 0 && "root ignores permission bits" }, async () => {
+  const w = world();
+  refuseBig(w);
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await savedBig(w, self);
+  self.leaveEdit();
+  assert.ok(self.bigSaved, "the saved text is kept before the chmod");
+  fs.chmodSync(w.ROOT, 0o444); // read without search: the file cannot be reached
+  try {
+    const v = VERIFIES(w).length;
+    await chmodded(w, A(w));
+    assert.equal(VERIFIES(w).length, v + 1, "the reload went through VERIFY_SCRIPT");
+    assert.equal(self.bigSaved ?? null, null, "the saved text is dropped");
+    assert.equal(self.fileError, "No search permission on its folder \u00b7 cannot show this file");
+    assert.ok(!texts(self.render(w.rcx)).includes("This file is no longer available"));
+  } finally { fs.chmodSync(w.ROOT, 0o755); }
+});
+
 test("R5: a chmod of a local file that is not UTF-8 reads it again (forced, lossy) and gives its edit check", async () => {
   const w = world();
   const p = w.put("l.txt", Buffer.from("caf\xe9\n", "latin1"));
@@ -1108,6 +1127,21 @@ for (const [where, machine] of [["local", null], ["remote", "box"]]) {
     assert.deepEqual(marksOf(self), { "mod.txt": "A", "new.txt": "A" }, "kept.txt lies outside the root");
   });
 }
+
+test("marks: a .git/index change under a symlinked root refreshes the tree, and the marks stay keyed under the logical root", async () => {
+  const w = world({ link: true, git: true });
+  repo(w.REAL);
+  const self = await boot(w);
+  assert.deepEqual(marksOf(self), { "kept.txt": "M", "sub/new.txt": "A" });
+  sh(w.REAL, "commit", "-qam", "more"); // kept.txt is clean now; the index and HEAD changed
+  const n = REFRESHES(w);
+  w.fire(w.ROOT, [path.join(w.REAL, ".git", "index")]); // herdr reports the real path
+  await settle(60);
+  assert.equal(REFRESHES(w), n + 1, "one refresh");
+  assert.deepEqual(marksOf(self), { "sub/new.txt": "A" });
+  assert.equal(self.marks[path.join(w.ROOT, "sub", "new.txt")], "A", "keyed by this.root");
+  assert.ok(Object.keys(self.marks).every((k) => k.startsWith(self.root + "/")), "no key under the physical path");
+});
 
 test("marks: a refresh makes one git rev-parse and one git status, with a symlinked root as with a normal one", async () => {
   for (const link of [false, true]) {
