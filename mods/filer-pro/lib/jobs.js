@@ -71,7 +71,7 @@ export function createJobs(deps) {
   const { exec, hc, readTextFile, getShared, setShared, notify, now, newId, appHome, home } = deps;
   // The numbers of lib/settings.js, checked again here (whole numbers in range, else the default).
   const limits = () => numbers(deps.settings?.() ?? null);
-  const explainError = (stderr, host, fallback) => explainRaw(stderr, host, fallback, { localPlatform: deps.localPlatform?.() });
+  const explainError = (stderr, host, fallback, direction) => explainRaw(stderr, host, fallback, { localPlatform: deps.localPlatform?.(), direction });
   const mountTables = deps.mountTables ?? []; // [infoPath, mountPath] for REPLACE_CHECK_SCRIPT, tests only
 
   const all = () => getShared(KEY) || {};
@@ -331,7 +331,7 @@ export function createJobs(deps) {
       if (!status) await removeTemp(job);
       end(id, { state: "cancelled", error: null });
     } else if (status?.state === "failed") {
-      fail(id, explainError(status.stderr, job.target));
+      fail(id, explainError(status.stderr, job.target, undefined, job.direction));
     } else {
       fail(id, "Transfer ended unexpectedly");
     }

@@ -80,3 +80,14 @@ test("EPERM on this computer other than macOS gets the neutral text (#30)", () =
   assert.equal(explainError("Error: Operation not permitted", null, undefined, { localPlatform: "windows" }), "Not permitted (owner, sticky folder or locked item)");
   assert.equal(explainError('scp: open local "/x": Operation not permitted', "u@box", undefined, { localPlatform: "windows" }), "Not permitted (owner, sticky folder or locked item)");
 });
+
+test("upload: an unreadable or vanished local source is not blamed on the target folder (#40)", () => {
+  const up = { direction: "up" };
+  assert.equal(explainError('scp: open local "/Users/m/a.txt": Permission denied', "box", undefined, up), "Cannot read the file: Permission denied");
+  assert.equal(explainError('scp: open local "/Users/m/a.txt": No such file or directory', "box", undefined, up), "The file no longer exists");
+  // the remote side of an upload is still the target
+  assert.equal(explainError('scp: dest open "/srv/in/a.txt": Permission denied', "box", undefined, up), "Cannot write to the target folder: Permission denied");
+  assert.equal(explainError('scp: dest open "/srv/in/a.txt": No such file or directory', "box", undefined, up), "Target folder does not exist");
+  // downloads keep the target wording
+  assert.equal(explainError('scp: open local "/x/a.txt": Permission denied', "box", undefined, { direction: "down" }), "Cannot write to the target folder: Permission denied");
+});
