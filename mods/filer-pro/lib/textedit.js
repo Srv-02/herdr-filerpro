@@ -143,7 +143,8 @@ export function parseRead(stdout) {
 }
 
 // verify <path>: the file as it is now, without its content (for files above EDIT_MAX_BYTES, which the probe sends no
-// bytes of): "file <mode> <size> <sha256>", or link | dir | missing | special, or nohash when no sha256 tool exists.
+// bytes of): "file <mode> <size> <sha256> <w> <open>" (w and open as in PROBE_SCRIPT), or link | dir | missing |
+// special, or nohash when no sha256 tool exists.
 export const VERIFY_SCRIPT = sh(String.raw`
 p=$1
 case $p in -*) p=./$p ;; esac
@@ -154,15 +155,30 @@ if [ ! -f "$p" ]; then echo special; exit 0; fi
 ${STAT}
 ${HASHER}
 m=$(st_mode "$p"); s=$(st_size "$p"); h=$(sum < "$p")
-echo "file $m $s $h"
+w=n
+[ -w "$p" ] && w=y
+o=n
+[ -n "$(find "$(dirname -- "$p")" -prune -perm -0002 ! -perm -1000 2>/dev/null)" ] && o=y
+echo "file $m $s $h $w $o"
 `);
 
-// stdout of VERIFY_SCRIPT -> { kind: "file", mode, size, hash } | { kind: link | dir | missing | special | nohash } | null.
+// stdout of VERIFY_SCRIPT -> { kind: "file", mode, size, hash, writable, openDir } | { kind: link | dir | missing |
+// special | nohash } | null. writable and openDir are null when the line carries no such fields.
 export function parseVerify(stdout) {
   const head = String(stdout ?? "").split("\n")[0].trim();
   if (["link", "dir", "missing", "special", "nohash"].includes(head)) return { kind: head };
-  const m = /^file ([0-7]+) (\d+) ([0-9a-f]{64})$/.exec(head);
-  return m ? { kind: "file", mode: octalMode(m[1]), size: Number(m[2]), hash: m[3] } : null;
+  const m = /^file ([0-7]+) (\d+) ([0-9a-f]{64})(?: (y|n) (y|n))?$/.exec(head);
+  if (!m) return null;
+  return { kind: "file", mode: octalMode(m[1]), size: Number(m[2]), hash: m[3], writable: m[4] ? m[4] === "y" : null, openDir: m[5] ? m[5] === "y" : null };
+}
+
+// The edit decision for a file above EDIT_MAX_BYTES that this session saved (its text is known, the file was verified
+// by size and hash): the permission rules of checkEditable. v: parseVerify's file result. -> { ok } | { ok, reason }.
+export function verifiedEditable(v) {
+  if (v?.kind !== "file") return { ok: false, reason: "Not a regular file" };
+  if (v.writable === false || (parseInt(String(v.mode ?? ""), 8) & 0o222) === 0) return { ok: false, reason: "No write permission" };
+  if (v.openDir === true) return { ok: false, reason: "Folder writable by everyone" };
+  return { ok: true };
 }
 
 // private-dir: makes the private upload folder on the machine (0700) and prints its path: send() copies the staged

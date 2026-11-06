@@ -3,11 +3,13 @@ import { psQuoted } from "./names.js";
 import { group } from "./numbers.js";
 import { SYSTEM_CASE, psHideFilter } from "./hidden.js";
 
-// `files <dir> <limit> [<system> <dots>]`: NUL-separated kind (d/f) and name of each entry but .git, at most <limit> + 1
+// `files <dir> <limit> [<system> <dots> [<real>]]`: NUL-separated kind (d/f) and name of each entry but .git, at most <limit> + 1
 // of them (one past the limit tells main.js that the folder was cut); ends with `test -d`, see folderMissing.
 // <system> and <dots> are 1 or 0 (lib/hidden.js hideArgs): 1 skips system files or dot names before they are counted;
 // <dots> 1 skips the system files too (lib/hidden.js effectiveHide), also for a caller that passes the raw settings.
-export const LIST_SCRIPT = 'n=0; cr=$(printf \'\\r\'); for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ "$4" = 1 ]; then case $name in .*) continue;; esac; fi; if [ "$3" = 1 ] || [ "$4" = 1 ]; then case $name in ' + SYSTEM_CASE + ') continue;; esac; fi; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
+// <real> 1 (local listings, issue #42): the first pair is P and the folder's real path (cd -P, pwd -P; empty when it
+// cannot be entered), so a folder reached through a symlink can match the folder watch's paths without another exec.
+export const LIST_SCRIPT = 'if [ "$5" = 1 ]; then printf "P\\0%s\\0" "$(cd -P -- "$1" 2>/dev/null && pwd -P)"; fi; n=0; cr=$(printf \'\\r\'); for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ "$4" = 1 ]; then case $name in .*) continue;; esac; fi; if [ "$3" = 1 ] || [ "$4" = 1 ]; then case $name in ' + SYSTEM_CASE + ') continue;; esac; fi; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt "$2" ] && break; done; test -d "$1"';
 
 // The Windows listing: JSON of { name, dir } for at most `limit` + 1 entries. Windows PowerShell otherwise uses the
 // console code page; exec decodes UTF-8. Reparse points keep directory attributes even when dangling; check their target.

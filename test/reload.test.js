@@ -172,9 +172,31 @@ test("watch filter: .gitignore in a shown folder refreshes the marks even while 
   assert.deepEqual(plan(["/w/closed/.gitignore"], { hide: dots }), NOTHING, "a collapsed folder: no shown row changes");
 });
 
-test("watch filter: a path with the open file's name elsewhere in the root compares the text (a symlinked folder)", () => {
+test("watch filter: while the open file's real folder is unknown, a path with its name elsewhere compares the text", () => {
   assert.deepEqual(plan(["/w/real/a.txt"], { file: "link/a.txt" }), { refresh: true, file: "text" });
   assert.deepEqual(plan(["/w/real/b.txt"], { file: "link/a.txt" }), NOTHING);
+});
+
+test("watch filter: once the open file's real folder is known, only its real path names it (no name guess)", () => {
+  const known = { file: "link/a.txt", fileKnown: true, links: [["link", "/w/real"]] };
+  assert.deepEqual(plan(["/w/real/a.txt"], known), { refresh: true, file: "named" });
+  assert.deepEqual(plan(["/w/node_modules/x/a.txt"], known), NOTHING, "same name elsewhere: nothing");
+  assert.deepEqual(plan(["/w/deep/a.txt"], { file: "a.txt" }), NOTHING, "a file in the root itself is always matched exactly");
+});
+
+test("watch filter: an expanded symlinked folder (l -> a, a collapsed) refreshes on a change under its real path", () => {
+  const o = { folders: ["l"], links: [["l", "/w/a"]] };
+  assert.deepEqual(plan(["/w/a/x"], o), { refresh: true, file: null });
+  assert.deepEqual(plan(["/w/a/x"], { folders: ["l"] }), NOTHING, "without the link: a collapsed folder");
+  assert.deepEqual(plan(["/w/a/deep/y"], o), NOTHING, "below a collapsed folder inside the link: nothing");
+  assert.equal(plan(["/w/a"], o).refresh, true, "the target folder itself");
+  assert.deepEqual(plan(["/w/a/x.txt"], { ...o, file: "l/x.txt", fileKnown: true }), { refresh: true, file: "named" });
+});
+
+test("watch filter: a link target outside the root is compared too, and a path under no root nor link falls back", () => {
+  const o = { folders: ["l"], links: [["l", "/elsewhere/t"]] };
+  assert.deepEqual(plan(["/elsewhere/t/x"], o), { refresh: true, file: null });
+  assert.deepEqual(plan(["/elsewhere/u/x"], o), { refresh: true, file: null }, "fallback: refresh everything");
 });
 
 test("watchRel: a Windows extended-length prefix is ignored", () => {
