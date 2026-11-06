@@ -62,7 +62,7 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
   // transfer.sh (remote saves copy the staged text with scp) finds the fake scp and ssh of test/fake/.
   const env = { ...process.env, HOME: path.join(base, "home"), XDG_CACHE_HOME: path.join(base, "cache"), FILER_PRO_SCP: FAKE_SCP, FILER_PRO_SSH: FAKE_SSH };
   const store = {};
-  const log = { execs: [], overlays: [], closed: [], notes: [], writes: [], mkdirs: [], unlinks: [], states: [], inputs: [] };
+  const log = { reads: [], execs: [], overlays: [], closed: [], notes: [], writes: [], mkdirs: [], unlinks: [], states: [], inputs: [] };
   const state = { focused: {}, fireOnSet };
   const timers = [];
   // after(): zero-delay timers fire after the current job (as in the host); longer ones are only recorded (afters).
@@ -83,6 +83,7 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
     shared: (k) => store[k], setShared: (k, v) => { store[k] = v; },
     readTextFile: async (p) => {
       if (p === "/app/filer-pro.json") return config;
+      log.reads.push(p);
       // herdr's readTextFile refuses a file above 1 MiB
       try { if (fs.statSync(p).size > 1048576) throw new Error("File too large"); return fs.readFileSync(p, "utf8"); } catch (e) { if (/too large/.test(e.message)) throw e; return null; }
     },
@@ -908,4 +909,51 @@ test("closing the fullscreen dialog after a save above 1 MiB hands the saved tex
   assert.equal(self.full, null);
   assert.equal(self.fileError, null, "no 1 MiB message");
   assert.equal(self.code.value(), BIG, "the panel shows the saved text");
+});
+
+// PR #44 follow-up: maximize from an edit session whose file is above 1 MiB now (saved there). The dialog takes the
+// buffer over without reading the file, which herdr's readTextFile refuses above 1 MiB.
+test("maximize after a save above 1 MiB: the dialog takes the buffer over without reading the file", async () => {
+  const w = dialogWorld();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  type(w, lastState(w), BIG);
+  click(render(self, w), "files-save", w.cx);
+  await settle(200);
+  assert.equal(w.read("a.txt").toString(), BIG);
+  type(w, self.edit.state, BIG + "draft\n");
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  const reads = w.log.reads.length, execs = w.log.execs.length;
+  const d = await openDialogFromPanel(w);
+  await inDialog(w, async () => {
+    assert.equal(d.fileError, null);
+    assert.ok(d.edit, "the dialog is in edit mode");
+    assert.equal(d.edit.state.value(), BIG + "draft\n", "the unsaved buffer");
+    assert.equal(d.edit.info.text, BIG, "the save baseline");
+    assert.equal(d.edit.dirty, true);
+    assert.equal(d.bigSaved?.size, Buffer.byteLength(BIG), "a reload there verifies by size and hash");
+  });
+  assert.equal(w.log.reads.length, reads, "no readTextFile in the dialog");
+  assert.equal(w.log.execs.length, execs, "no exec in the dialog");
+  assert.equal(w.store["filer-pro.fullscreen"].state, "taken");
+  self.pollFull(w.cx);
+  assert.equal(self.edit, null, "the panel gave its buffer up");
+});
+
+test("a handover that cannot be taken leaves nothing behind: the dialog reads the file instead", async () => {
+  const w = dialogWorld();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  w.store["filer-pro.handover"] = { ...w.store["filer-pro.handover"], info: { ...w.store["filer-pro.handover"].info, b64: "!!" } };
+  const d = await openDialogFromPanel(w);
+  await inDialog(w, async () => {
+    assert.equal(d.edit ?? null, null);
+    assert.equal(d.code.value(), "one\n", "read from disk");
+    assert.equal(d.editCheck.state, "ok", "the normal edit check");
+  });
 });

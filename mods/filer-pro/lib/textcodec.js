@@ -185,6 +185,57 @@ function decodeUtf8Loop(bytes) {
   return parts.join("");
 }
 
+// Lossy decoder for showing a file that is not UTF-8 (Latin-1 and the like, issue #39): valid sequences as decodeUtf8,
+// every byte that starts no valid sequence becomes one U+FFFD (Rust's from_utf8_lossy merges a truncated sequence into
+// one; that difference only shows in broken multi-byte text). Natively, in passes over the binary string, so 1 MiB fits
+// one QuickJS job: M (U+0100, never in a binary string) goes before every byte >= 0x80; one pass keeps the marked valid
+// sequences and leaves only the marker of an invalid byte; a marker not followed by a byte >= 0x80 becomes the UTF-8 of
+// U+FFFD, the other markers go, and the result decodes strictly.
+const M = "\u0100", C = `${M}[\\x80-\\xbf]`;
+const LOSSY = new RegExp(`(${M}[\\xc2-\\xdf]${C}|${M}\\xe0${M}[\\xa0-\\xbf]${C}|${M}[\\xe1-\\xec\\xee\\xef]${C}${C}|${M}\\xed${M}[\\x80-\\x9f]${C}`
+  + `|${M}\\xf0${M}[\\x90-\\xbf]${C}${C}|${M}[\\xf1-\\xf3]${C}${C}${C}|${M}\\xf4${M}[\\x80-\\x8f]${C}${C})|(${M})[\\x80-\\xff]`, "g");
+export function decodeUtf8Lossy(bytes) {
+  const strict = decodeUtf8(bytes);
+  if (strict !== null) return strict;
+  if (typeof escape !== "function") return decodeUtf8LossyLoop(bytes);
+  const bin = bytesToBinary(bytes).replace(/[\x80-\xff]/g, `${M}$&`).replace(LOSSY, "$1$2")
+    .replace(/\u0100(?![\x80-\xff])/g, "\xef\xbf\xbd").replaceAll(M, "");
+  return decodeURIComponent(escape(bin));
+}
+
+// The same without the native route: at each byte a valid sequence (strict) or one U+FFFD.
+function decodeUtf8LossyLoop(bytes) {
+  const parts = [];
+  let i = 0, start = 0;
+  const n = bytes.length;
+  const seqLen = (i) => {
+    const b = bytes[i], c = (k) => i + k < n && (bytes[i + k] & 0xc0) === 0x80;
+    if (b < 0x80) return 1;
+    if (b >= 0xc2 && b <= 0xdf) return c(1) ? 2 : 0;
+    if (b >= 0xe0 && b <= 0xef) {
+      if (!c(1) || !c(2)) return 0;
+      if ((b === 0xe0 && bytes[i + 1] < 0xa0) || (b === 0xed && bytes[i + 1] >= 0xa0)) return 0;
+      return 3;
+    }
+    if (b >= 0xf0 && b <= 0xf4) {
+      if (!c(1) || !c(2) || !c(3)) return 0;
+      if ((b === 0xf0 && bytes[i + 1] < 0x90) || (b === 0xf4 && bytes[i + 1] >= 0x90)) return 0;
+      return 4;
+    }
+    return 0;
+  };
+  while (i < n) {
+    const k = seqLen(i);
+    if (k) { i += k; continue; }
+    if (i > start) parts.push(decodeUtf8Loop(bytes.subarray(start, i)));
+    parts.push("\ufffd");
+    i++;
+    start = i;
+  }
+  if (n > start) parts.push(decodeUtf8Loop(bytes.subarray(start, n)));
+  return parts.join("");
+}
+
 // Null when the string holds an unpaired surrogate (encodeURIComponent throws a URIError for one).
 export function encodeUtf8(text) {
   if (typeof unescape !== "function") return encodeUtf8Loop(text);
