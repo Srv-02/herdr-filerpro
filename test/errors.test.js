@@ -7,7 +7,7 @@ test("known patterns", () => {
   assert.equal(explainError("Host key verification failed.", "box"), "Unknown host key. Connect once in a terminal: ssh box");
   assert.equal(explainError("x\nPermission denied (publickey)\n"), "SSH login failed (key not loaded?)");
   assert.equal(explainError("No space left on device"), "Disk full");
-  assert.equal(explainError("scp: Operation not permitted"), "macOS blocked access. Allow Herdr in System Settings › Privacy & Security › Files and Folders");
+  assert.equal(explainError("scp: Operation not permitted"), "Not permitted: macOS privacy settings, owner, or a locked item."); // no machine: this computer
   assert.equal(explainError("Connection timed out"), "Machine not reachable");
   assert.equal(explainError("ssh: Could not resolve hostname box"), "Machine not reachable");
 });
@@ -37,7 +37,7 @@ test("target folder problems from scp and cp", () => {
 });
 
 test("old table wins over the target folder rules", () => {
-  assert.equal(explainError('scp: open local "/x": Operation not permitted'), "macOS blocked access. Allow Herdr in System Settings › Privacy & Security › Files and Folders");
+  assert.equal(explainError('scp: open local "/x": Operation not permitted', "u@box"), "Not permitted: macOS privacy settings, owner, or a locked item.");
   assert.equal(explainError('scp: open local "/x": No space left on device'), "Disk full");
 });
 
@@ -63,4 +63,20 @@ test("empty stderr gives the fallback of the caller, never an empty message (#34
   assert.equal(explainError("", null, ""), "Transfer failed");
   assert.equal(explainError("", null, "  "), "Transfer failed");
   assert.equal(explainError("boom", null, "Could not delete"), "boom"); // a real message wins
+});
+
+test("EPERM on a remote machine never shows the macOS hint (#30)", () => {
+  assert.equal(explainError("chmod: changing permissions of 'x': Operation not permitted", "box"), "Not permitted (owner, sticky folder or locked item)");
+  assert.equal(explainError("scp: dest open \"/srv/x\": Operation not permitted", "u@box"), "Not permitted (owner, sticky folder or locked item)");
+  assert.equal(explainError("rm: cannot remove 'x': Operation not permitted", "box", "Could not delete"), "Not permitted (owner, sticky folder or locked item)");
+});
+
+test("EPERM on the local write of a download on macOS keeps the macOS text (#30)", () => {
+  assert.equal(explainError('scp: open local "/Users/m/Documents/.a.part": Operation not permitted', "u@box"), "Not permitted: macOS privacy settings, owner, or a locked item.");
+  assert.equal(explainError('scp: open local "/Users/m/Documents/.a.part": Operation not permitted', "u@box", undefined, { localPlatform: "macos" }), "Not permitted: macOS privacy settings, owner, or a locked item.");
+});
+
+test("EPERM on this computer other than macOS gets the neutral text (#30)", () => {
+  assert.equal(explainError("Error: Operation not permitted", null, undefined, { localPlatform: "windows" }), "Not permitted (owner, sticky folder or locked item)");
+  assert.equal(explainError('scp: open local "/x": Operation not permitted', "u@box", undefined, { localPlatform: "windows" }), "Not permitted (owner, sticky folder or locked item)");
 });
