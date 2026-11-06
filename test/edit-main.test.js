@@ -647,16 +647,112 @@ test("the panel mirrors from its own tick", async () => {
   assert.equal(w.log.unlinks.length, 1, "removed after Discard");
 });
 
-test("the maximize button is dimmed while the panel buffer is dirty", async () => {
-  const w = world();
+// Panel and fullscreen dialog in one world: they share the shared() store; props() decides which copy a call is.
+const DIALOG_PROPS = ["overlay", "view", "root", "path", "mode", "full", "page", "pages", "force", "machine"];
+const asPanel = (w) => { for (const k of DIALOG_PROPS) delete w.props[k]; };
+const asDialog = (w) => { const o = w.log.overlays.at(-1).props; Object.assign(w.props, { ...o, overlay: "ov1", root: w.ROOT }); };
+async function openDialogFromPanel(w) {
+  const d = new FilerPro();
+  asDialog(w);
+  d.init(null, w.cx);
+  await settle();
+  asPanel(w);
+  return d;
+}
+const inDialog = async (w, fn) => { asDialog(w); try { return await fn(); } finally { asPanel(w); } };
+
+test("maximize hands the unsaved panel buffer to the fullscreen dialog; the panel is read-only while it is open", async () => {
+  const w = dialogWorld();
   w.put("a.txt", "one\n");
   const self = await panel(w);
   await editing(w, self);
-  assert.ok(has("on_click", byId(render(self, w), "files-full")));
-  type(w, lastState(w), "x\n");
-  const full = byId(render(self, w), "files-full");
-  assert.equal(has("on_click", full), false);
-  assert.equal(tooltipOf(full), "Save or cancel first");
+  type(w, lastState(w), "one\ndraft\n");
+  const mirrorPath = self.edit.mirrorPath;
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  // the unsaved text is on disk (the mirror) before it changes hands, and the dialog opens in the source view
+  assert.equal(w.log.writes.at(-1).p, mirrorPath);
+  assert.equal(w.log.writes.at(-1).text, "one\ndraft\n");
+  const opened = w.log.overlays.at(-1).props;
+  assert.equal(opened.mode, "source");
+  assert.ok(opened.full);
+  // read-only at once: Edit dimmed with the reason, no other edit button, maximize dimmed
+  let tree = render(self, w);
+  assert.equal(tooltipOf(byId(tree, "files-edit")), "Edit: Editing in full screen");
+  assert.equal(has("on_click", byId(tree, "files-edit")), false);
+  assert.equal(byId(tree, "files-save"), undefined);
+  assert.equal(has("on_click", byId(tree, "files-full")), false);
+
+  const d = await openDialogFromPanel(w);
+  await inDialog(w, async () => {
+    assert.ok(d.edit, "the dialog is in edit mode");
+    assert.equal(d.edit.state.value(), "one\ndraft\n");
+    assert.equal(d.edit.dirty, true);
+    assert.equal(d.edit.mirrorPath, mirrorPath, "the same mirror file");
+    assert.equal(d.edit.history.canUndo(), true, "one step back to the file's text");
+    assert.equal(PROBES(w).length, 1, "no second probe: the panel's baseline is used");
+  });
+  self.pollFull(w.cx);
+  assert.equal(self.edit, null, "the panel gave its buffer up");
+  assert.equal(self.context.fixed, true, "pinned while the dialog is open");
+  assert.equal(w.log.unlinks.length, 0, "the mirror stays for the dialog");
+  tree = render(self, w);
+  assert.equal(tooltipOf(byId(tree, "files-edit")), "Edit: Editing in full screen");
+
+  // Save in the dialog, then close it: the panel shows the file as saved and may edit again
+  await inDialog(w, async () => { click(render(d, w), "files-save", w.cx); await settle(); });
+  assert.equal(w.read("a.txt").toString(), "one\ndraft\n");
+  await inDialog(w, () => d.close());
+  self.pollFull(w.cx);
+  await settle();
+  assert.equal(self.full, null);
+  assert.equal(self.code.value(), "one\ndraft\n", "the panel shows the disk state");
+  assert.equal(self.context.fixed, false, "follows the focus again");
+  tree = render(self, w);
+  assert.equal(tooltipOf(byId(tree, "files-edit")), "Edit");
+  assert.ok(has("on_click", byId(tree, "files-full")));
+});
+
+test("closing the fullscreen dialog with unsaved text keeps it; the panel shows the file on disk", async () => {
+  const w = dialogWorld();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  type(w, lastState(w), "one\nkeep me\n");
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  const d = await openDialogFromPanel(w);
+  self.pollFull(w.cx);
+  await inDialog(w, async () => { type(w, d.edit.state, "one\nkeep me\nmore\n"); await d.close(); });
+  assert.equal(w.log.notes.at(-1).title, "Unsaved changes kept");
+  assert.equal(w.log.writes.at(-1).text, "one\nkeep me\nmore\n");
+  assert.equal(w.read("a.txt").toString(), "one\n");
+  self.pollFull(w.cx);
+  await settle();
+  assert.equal(self.full, null);
+  assert.equal(self.edit, null);
+  assert.equal(self.code.value(), "one\n");
+});
+
+test("maximize without edit mode: the panel's Edit is dimmed until the dialog closes or goes quiet", async () => {
+  const w = dialogWorld();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await opened(w, self);
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  assert.equal(w.store["filer-pro.handover"], undefined, "nothing to hand over");
+  assert.equal(tooltipOf(byId(render(self, w), "files-edit")), "Edit: Editing in full screen");
+  const d = await openDialogFromPanel(w);
+  await inDialog(w, async () => { assert.equal(d.edit ?? null, null); });
+  self.pollFull(w.cx);
+  assert.ok(self.full, "still open");
+  // a dialog that vanished without close(): no report for 8 s ends the read-only state
+  w.store["filer-pro.fullscreen"] = { ...w.store["filer-pro.fullscreen"], at: Date.now() - 9000 };
+  self.pollFull(w.cx);
+  await settle();
+  assert.equal(self.full, null);
+  assert.equal(tooltipOf(byId(render(self, w), "files-edit")), "Edit");
 });
 
 test("on a machine the probe and the save carry the machine", async () => {

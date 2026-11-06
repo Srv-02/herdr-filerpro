@@ -29,7 +29,7 @@ import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
 import { PROBE_SCRIPT, parseProbe, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
-import { equalBytes } from "./lib/textcodec.js";
+import { equalBytes, bytesToBase64, base64ToBytes } from "./lib/textcodec.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { createPermsDialog, permsView, showProbe, PERMS_SIZE } from "./ui/permsdialog.js";
@@ -117,6 +117,7 @@ export default class FilerPro extends View {
         this.context = { key: null, cwd: props().root, on: props().machine ?? null, fixed: true };
         this.root = this.context.cwd; this.on = this.context.on;
         this.show(props().path, cx, { mode: props().mode, page: props().page, pages: props().pages, force: props().force });
+        this.startFullscreen(cx);
       }
       return;
     }
@@ -166,7 +167,7 @@ export default class FilerPro extends View {
       this.refreshedAt = Date.now();
       this.reloadConfig(cx);
     });
-    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); });
+    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
     this.drive(cx);
   }
 
@@ -593,7 +594,10 @@ export default class FilerPro extends View {
       this.edit = null;
       this.releaseEdit(e);
     }
-    if (props()?.view === "file") { this.code?.release(); this.code = null; this.file = null; this.doc = null; this.loader = null; return; }
+    if (props()?.view === "file") {
+      if (props().full) { this.fullState = "closed"; setShared("filer-pro.fullscreen", { id: props().full, state: "closed", at: Date.now() }); }
+      this.code?.release(); this.code = null; this.file = null; this.doc = null; this.loader = null; return;
+    }
     if (props()?.view !== "conflict") return;
     const a = closeAnswer(this.batchId, shared("filer-pro.pending"), shared("filer-pro.answer"));
     if (a) setShared("filer-pro.answer", a);
@@ -826,6 +830,7 @@ export default class FilerPro extends View {
 
   // Probes the open file in the background (lib/textedit.js): this.editCheck says whether Edit is possible and why not.
   checkEdit(path, cfg, cx) {
+    if (this.takeHandover(path, cx)) return;
     const context = this.context, root = this.root, on = this.on;
     if (!on && window()?.platform === "windows") { this.editCheck = { state: "refused", reason: "Editing is not available on Windows" }; return; }
     const check = this.editCheck = { state: "checking" };
@@ -840,27 +845,124 @@ export default class FilerPro extends View {
   }
 
   // Edit on: a second, editable EditorState with the file's text (the read-only one stays for the display).
-  enterEdit(cx) {
+  // from (the fullscreen handover, see openFull): { text, id, mirrorPath, wroteFile } of the panel's buffer, so the
+  // unsaved text, its dirty state and its mirror file carry over. -> true when edit mode is on.
+  enterEdit(cx, from = null) {
     const c = this.editCheck;
-    if (this.edit || c?.state !== "ok" || !this.sourceShown()) return;
-    const info = c.info, state = EditorState.new(this.editorOptions(this.file, info.text, false));
+    if (this.edit || c?.state !== "ok" || !this.sourceShown() || this.full) return false;
+    const info = c.info, text = from ? from.text : info.text, state = EditorState.new(this.editorOptions(this.file, text, false));
     // An editor that rewrites the text (tabs, line ends) would make every file look changed.
-    if (state.value() !== info.text) {
+    if (state.value() !== text) {
       state.release();
       this.editCheck = { state: "refused", reason: "The editor changes this file's text" };
       cx.notify();
-      return;
+      return false;
     }
     const history = createHistory();
     history.reset(info.text);
-    const e = this.edit = { state, history, info, dirty: false, applying: null, prompt: null, message: null, modeBefore: null, busy: false, copy: null,
-      mirrored: null, mirrorAt: 0, wroteFile: false, id: this.newId(), context: this.context, wasFixed: Boolean(this.context?.fixed) };
-    e.mirrorPath = `${appHome()}/filer-pro/unsaved/${mirrorName(e.id, baseName(this.file))}`;
+    if (text !== info.text) history.record(text, 0); // one Undo step back to the file's text
+    const e = this.edit = { state, history, info, dirty: text !== info.text, applying: null, prompt: null, message: null, modeBefore: null, busy: false, copy: null,
+      mirrored: null, mirrorAt: 0, wroteFile: Boolean(from?.wroteFile), id: from?.id ?? this.newId(), context: this.context, wasFixed: Boolean(this.context?.fixed) };
+    e.mirrorPath = from?.mirrorPath ?? `${appHome()}/filer-pro/unsaved/${mirrorName(e.id, baseName(this.file))}`;
     if (this.context) this.context.fixed = true; // the file stays open while the focus moves
     state.on("change", (_ev, cx) => this.editChanged(cx));
     // The dialog has no other timer (it stays passive until editing starts): this one runs the mirror for it.
     if (props()?.overlay && !this.mirrorTimer) { this.mirrorTimer = true; cx.timer.every(2000, (cx) => this.mirrorUnsaved(cx)); }
     cx.notify();
+    return true;
+  }
+
+  // ---- fullscreen handover: the dialog edits, the panel is read-only while it is open
+  //
+  // Maximize hands the panel's edit buffer to the fullscreen dialog (a separate mod copy) through shared values:
+  // "filer-pro.handover" { id, path, text, info (bytes as base64), mirrorPath, wroteFile } and "filer-pro.fullscreen"
+  // { id, state: open | taken | closed, at } (the dialog renews `at` every 2 s). The panel keeps its buffer, with the
+  // unsaved text written to its mirror file first, until the dialog reports "taken"; while the dialog is open the
+  // panel's edit controls are dimmed ("Editing in full screen"). Once it reports "closed" (or goes quiet for 8 s) the
+  // panel shows the file as it is on disk again.
+
+  async openFull(cx) {
+    if (this.full) return;
+    const e = this.edit;
+    if (e && (e.busy || e.prompt || e.copy)) return;
+    const id = this.newId(), path = this.file;
+    let mode = this.doc ? this.mode : "preview";
+    // wasFixed: the pin from before edit mode (edit mode pins the panel itself)
+    this.full = { id, path, at: Date.now(), took: false, handing: Boolean(e), wasFixed: e ? e.wasFixed : Boolean(this.context?.fixed) };
+    if (this.context) this.context.fixed = true; // the panel stays on the file while the dialog is open
+    if (e) {
+      mode = "source";
+      if (e.dirty) await this.mirrorUnsaved(null, true); // the unsaved text is on disk before it changes hands
+      const i = e.info;
+      setShared("filer-pro.handover", { id, path, text: e.state.value(), mirrorPath: e.mirrorPath, wroteFile: e.wroteFile,
+        info: { b64: bytesToBase64(i.bytes), hash: i.hash ?? null, text: i.text, eol: i.eol, mode: i.mode, size: i.size } });
+    }
+    setShared("filer-pro.fullscreen", { id, state: "opening", at: Date.now() });
+    openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.on, root: this.root, path, mode, page: this.page, pages: this.pages, force: this.force, full: id }, kind: "dialog", width: 0.86, height: 0.9 });
+    cx.notify();
+  }
+
+  // The panel's side (250 ms timer): give up the buffer once the dialog took it, end read-only when it closed.
+  pollFull(cx) {
+    const f = this.full;
+    if (!f) return;
+    const s = shared("filer-pro.fullscreen"), mine = s?.id === f.id ? s : null;
+    if (mine?.state === "taken" && !f.took) {
+      f.took = true;
+      const e = this.edit;
+      if (e) { this.edit = null; this.releaseEdit(e); } // the mirror file now belongs to the dialog
+      if (this.context) this.context.fixed = true; // still pinned while the dialog is open
+      cx.notify();
+    }
+    if (mine?.state === "closed" || Date.now() - (mine?.at ?? f.at) > 8000) {
+      this.full = null;
+      if (this.context) this.context.fixed = f.wasFixed || Boolean(this.edit);
+      if (shared("filer-pro.handover")?.id === f.id) setShared("filer-pro.handover", null);
+      if (!this.edit && this.file === f.path) this.reloadShown(cx);
+      cx.notify();
+    }
+  }
+
+  // The dialog's side: report open and alive; the handover is taken in checkEdit once the source is on screen.
+  startFullscreen(cx) {
+    const id = props().full;
+    if (!id) return;
+    const h = shared("filer-pro.handover");
+    this.handover = h?.id === id && h.path === props().path ? h : null;
+    this.fullState = "open";
+    const report = () => setShared("filer-pro.fullscreen", { id, state: this.fullState, at: Date.now() });
+    report();
+    cx.timer.every(2000, () => { if (this.fullState !== "closed") report(); });
+  }
+
+  takeHandover(path, cx) {
+    const h = this.handover;
+    if (!h || h.path !== path) return false;
+    this.handover = null;
+    const bytes = base64ToBytes(h.info.b64);
+    if (!bytes) return false;
+    this.editCheck = { state: "ok", info: { bytes, hash: h.info.hash ?? undefined, text: h.info.text, eol: h.info.eol, mode: h.info.mode, size: h.info.size } };
+    if (!this.enterEdit(cx, h)) return false;
+    this.fullState = "taken";
+    setShared("filer-pro.fullscreen", { id: props().full, state: "taken", at: Date.now() });
+    return true;
+  }
+
+  // The open file again as it is on disk, without closing the view: the source in place (no flicker) and a new
+  // check; a preview, image or PDF is shown anew.
+  reloadShown(cx) {
+    const path = this.file, context = this.context, cfg = this.fileCfg;
+    if (!path) return;
+    if (!this.code || !cfg || this.doc || this.loader || this.fileError) { this.show(path, cx, { mode: this.mode }); return; }
+    cx.spawn(async (cx) => {
+      let text = null;
+      try { text = await readTextFile(joinPath(this.root, path), { on: this.on }); } catch {}
+      if (this.file !== path || !this.current(context) || this.edit || this.full) return;
+      if (text === null || text.includes("\0") || text.length > cfg.source_max_chars) { this.show(path, cx, { mode: this.mode }); cx.notify(); return; }
+      if (this.code.value() !== text) this.code.set_value(text);
+      this.checkEdit(path, cfg, cx);
+      cx.notify();
+    });
   }
 
   // A change of the editable buffer. The value that undo or redo just set is not a new step.
@@ -1048,6 +1150,7 @@ export default class FilerPro extends View {
   // Header buttons of the edit mode (ui/edit.js), only while the plain source is shown.
   editTools(t) {
     if (!this.sourceShown()) return [];
+    if (this.full) return editTools(t, { check: { state: "refused", reason: "Editing in full screen" }, edit: null }, {});
     return editTools(t, { check: this.editCheck, edit: this.edit }, {
       onToggle: (cx) => (this.edit ? this.requestLeave(null, cx) : this.enterEdit(cx)),
       onUndo: (cx) => this.step("undo", cx), onRedo: (cx) => this.step("redo", cx),
@@ -1322,9 +1425,8 @@ export default class FilerPro extends View {
         .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
         .children(this.editTools(t))
-        .when(Boolean(this.file) && this.edit?.dirty, el => el.child(div().id("files-full").px(7).py(2).rounded(6).text_color(t.dim).tooltip("Save or cancel first").child(svg(`${BASE}/maximize.svg`).size(13))))
-        .when(Boolean(this.file) && !this.edit?.dirty, el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t,
-          () => openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.on, root: this.root, path: this.file, mode: this.doc ? this.mode : "preview", page: this.page, pages: this.pages, force: this.force }, kind: "dialog", width: 0.86, height: 0.9 })))))
+        .when(Boolean(this.file) && Boolean(this.full), el => el.child(div().id("files-full").px(7).py(2).rounded(6).text_color(t.dim).tooltip("Open in full screen").child(svg(`${BASE}/maximize.svg`).size(13))))
+        .when(Boolean(this.file) && !this.full, el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t, (cx) => this.openFull(cx)))))
       // The tree stays mounted while a file is open, at zero height with a spacer of the same content height:
       // GPUI keeps a scroll offset only for elements rendered every frame (issue #5).
       .child(v_flex().id("files-tree").min_h(0).overflow_y_scrollbar()
