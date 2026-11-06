@@ -27,7 +27,7 @@ import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
-import { createReloadGate } from "./lib/reload.js";
+import { createReloadGate, fileHit } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
 import { PROBE_SCRIPT, parseProbe, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { equalBytes, bytesToBase64, base64ToBytes } from "./lib/textcodec.js";
@@ -67,6 +67,10 @@ const key = () => JSON.stringify(location());
 // The settings before the config file was read (and in copies that never read it): today's defaults.
 const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true };
 const MB = 1024 * 1024;
+// How much of the open file a refresh flight reloads at its end (refresh opts.file, this.fileWanted): TEXT only reads and
+// compares text (a watch batch that did not name the file: no exec), ALL also probes an image or PDF again.
+const FILE_TEXT = 1, FILE_ALL = 2;
+const lf = (text) => String(text ?? "").replace(/\r\n?/g, "\n");
 // A wait for a timer: herdr gives a job about 0.5 s; a timer starts a new job, an awaited resolved promise does not.
 const pauseOf = (cx) => () => new Promise((r) => cx.timer.after(0, () => r()));
 // Title of the error toast per failed request action.
@@ -152,21 +156,23 @@ export default class FilerPro extends View {
     this.packageSeen = shared("filer-pro.package")?.id ?? null; // an old Show Package Contents request is not applied again
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
-      // The first listing ran with the defaults: other list settings reload the tree at the next tick.
-      if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles"].some((k) => cfg[k] !== DEFAULTS[k])) this.refreshedAt = 0;
+      // The first listing ran with the defaults: other list settings reload the tree once more (no timer to wait for).
+      if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles"].some((k) => cfg[k] !== DEFAULTS[k])) this.refresh(cx);
       this.version = await this.readVersion();
       if (cfg.perf) await this.startPerf(cx);
     });
     this.saved = new Map();
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.refresh(cx);
-    // The periodic reload, every refresh_seconds (setting): a 1 s tick that checks the time itself, so a changed
-    // interval applies without a restart. The config is read again on the way, which picks up hand edits.
+    // The optional periodic reload, every refresh_seconds (setting, 0 = off, the default: issue #31, no exec while idle):
+    // a 1 s tick that checks the time itself, so a changed interval applies without a restart. It skips while a reload
+    // runs, so a slow machine never gets a second one stacked. The config is read again on the way (hand edits).
     this.refreshedAt = Date.now();
     cx.timer.every(1000, cx => {
-      if (Date.now() - this.refreshedAt < this.conf.refresh_seconds * 1000) return;
+      const every = this.conf.refresh_seconds;
+      if (!every || this.loading || Date.now() - this.refreshedAt < every * 1000) return;
       this.refreshedAt = Date.now();
-      this.reloadConfig(cx);
+      this.reloadConfig(cx, { file: FILE_ALL });
     });
     cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
     this.drive(cx);
@@ -176,10 +182,11 @@ export default class FilerPro extends View {
   get conf() { return this.cfg ?? DEFAULTS; }
 
   // Reads the config again, then reloads the tree, so new list limits apply to the folders already shown.
-  reloadConfig(cx) {
+  // opts (refresh): file also reloads the open file, force probes it again even when its text is unchanged.
+  reloadConfig(cx, opts) {
     cx.spawn(async (cx) => {
       try { this.cfg = await loadConfig(readTextFile, appHome, home); } catch {}
-      this.refresh(cx);
+      this.refresh(cx, opts);
       cx.notify();
     });
   }
@@ -234,8 +241,8 @@ export default class FilerPro extends View {
       try {
         do {
           again = false;
-          const r = await exec("sh", ["-c", 'cd -- "$1" && ls -1', "x", dir]).catch(() => null);
-          const names = r?.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
+          // fs.readdir, not an `ls` exec: this safety scan runs every 2 s and must not start a process (issue #31).
+          const names = ((await fs.readdir(dir).catch(() => null)) ?? []).filter((n) => !n.startsWith(".")).sort(); // as ls -1
           const have = new Set(names);
           for (const name of names) {
             if (!name.endsWith(".json") || name.endsWith(".result.json")) continue;
@@ -604,12 +611,22 @@ export default class FilerPro extends View {
     if (a) setShared("filer-pro.answer", a);
   }
 
+  // Local only (a machine has no folder watch; it reloads on the triggers of refresh, issue #31). A batch that names
+  // the open file or a folder above it reloads the file too.
   watch(root, cx) {
     if (this.on || this.watched === root) return;
     this.watched = root;
     const context = this.context;
     cx.spawn(async cx => {
-      try { while (this.context === context) { await watchFolder(root); if (this.current(context)) this.refresh(cx); } }
+      try {
+        while (this.context === context) {
+          const paths = await watchFolder(root);
+          if (!this.current(context)) continue;
+          // Text is read and compared on every batch (a local read, no exec: a symlinked root may name the file
+          // differently); an image or PDF is probed again only when the batch names it or a folder above it.
+          this.refresh(cx, { file: !this.file ? 0 : fileHit(paths, joinPath(this.root, this.file)) ? FILE_ALL : FILE_TEXT });
+        }
+      }
       catch { if (this.context === context) this.watched = null; }
     });
   }
@@ -636,7 +653,11 @@ export default class FilerPro extends View {
     if (entries.length > perFolder || used + entries.length > total) this.limited = true;
   }
 
-  refresh(cx) {
+  // Reloads the tree (listing and git marks) of the shown folder; opts.file also the open file afterwards (reloadOpen),
+  // opts.force probes it even when its text is unchanged. One flight at a time: a call during a reload is remembered
+  // and runs once when it ends, so triggers never stack and none is lost (issue #31). All in cx.spawn: a slow machine
+  // never blocks drawing.
+  refresh(cx, { file = 0, force = false } = {}) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
       if (this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
@@ -644,10 +665,14 @@ export default class FilerPro extends View {
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
-      this.loading = false; this.lastOpened = saved?.lastOpened ?? null;
-      if (saved?.file) this.show(saved.file, cx);
+      this.loading = false; this.again = false; this.fileWanted = 0; this.fileForce = false; this.lastOpened = saved?.lastOpened ?? null;
+      if (saved?.file) this.show(saved.file, cx); // read fresh: no file reload needed
+      file = 0; force = false;
     }
-    if (!cwd || this.loading) return;
+    this.fileWanted = Math.max(this.fileWanted ?? 0, file === true ? FILE_ALL : file || 0);
+    if (force) this.fileForce = true;
+    if (!cwd) return;
+    if (this.loading) { this.again = true; return; }
     const context = this.context;
     this.loading = true;
     this.limited = false;
@@ -672,7 +697,20 @@ export default class FilerPro extends View {
         if (!this.current(context)) return;
         this.marks = marks; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
-      finally { if (this.context === context) this.loading = false; cx.notify(); }
+      finally {
+        if (this.context === context) this.loading = false;
+        cx.notify();
+        // The end of a flight: a trigger from meanwhile runs the next one; else the open file follows (after the tree,
+        // so this copy never has two commands on a machine at once).
+        if (this.context === context && this.current(context)) {
+          if (this.again) { this.again = false; this.refresh(cx); }
+          else if (this.fileWanted) {
+            const opts = { force: Boolean(this.fileForce), textOnly: this.fileWanted === FILE_TEXT };
+            this.fileWanted = 0; this.fileForce = false;
+            this.reloadOpen(cx, opts);
+          }
+        }
+      }
     });
   }
 
@@ -755,7 +793,7 @@ export default class FilerPro extends View {
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
     this.leaveEdit(); this.editCheck = null;
-    this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false;
+    this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false; this.shownText = null;
     if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
@@ -806,6 +844,7 @@ export default class FilerPro extends View {
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { const why = nulReason(text); this.fileError = why.message; this.openable = why.binary && !on; return; }
+        this.shownText = text; // what reloadOpen compares with
         this.code = EditorState.new(this.editorOptions(path, text.length > cfg.source_max_chars ? text.slice(0, cfg.source_max_chars) + "\n… (file truncated)" : text, true));
         if (text.length > cfg.source_max_chars) this.editCheck = { state: "refused", reason: "Display truncated" };
         else this.checkEdit(path, cfg, cx);
@@ -935,7 +974,7 @@ export default class FilerPro extends View {
       this.full = null;
       if (this.context) this.context.fixed = f.wasFixed || Boolean(this.edit);
       if (shared("filer-pro.handover")?.id === f.id) setShared("filer-pro.handover", null);
-      if (!this.edit && this.file === f.path) this.reloadShown(cx);
+      if (!this.edit && this.file === f.path) this.reloadOpen(cx, { force: true });
       cx.notify();
     }
   }
@@ -965,20 +1004,74 @@ export default class FilerPro extends View {
     return true;
   }
 
-  // The open file again as it is on disk, without closing the view: the source in place (no flicker) and a new
-  // check; a preview, image or PDF is shown anew.
-  reloadShown(cx) {
-    const path = this.file, context = this.context, cfg = this.fileCfg;
-    if (!path) return;
-    if (!this.code || !cfg || this.doc || this.loader || this.fileError) { this.show(path, cx, { mode: this.mode }); return; }
+  // The open file again as it is on disk (issue #31), without flicker and never over unsaved text. Runs at the end of a
+  // refresh flight and when the fullscreen dialog closed (pollFull). Plain source (and every file in edit mode): read,
+  // compare with the text on screen, set in place, probe again; a clean edit buffer takes the new text and save baseline.
+  // Markdown and HTML that changed are shown anew; an image or PDF is probed and swapped only when its cache key (size,
+  // mtime) changed. opts.force: probe although the text is unchanged (Refresh, after the dialog); opts.textOnly: leave
+  // images and PDFs alone (their probe is an exec). One read at a time: a call meanwhile runs once afterwards.
+  reloadOpen(cx, { force = false, textOnly = false } = {}) {
+    const path = this.file, context = this.context, cfg = this.fileCfg, e = this.edit, code = this.code, doc = this.doc;
+    const busy = (e) => Boolean(e && (e.dirty || e.busy || e.prompt || e.copy));
+    if (!path || !context || this.full || busy(e)) return; // the save's hash check guards unsaved text
+    if (this.fileLoading) {
+      const prev = this.fileAgain;
+      this.fileAgain = { force: force || Boolean(prev?.force), textOnly: textOnly && (prev ? prev.textOnly : true) };
+      return;
+    }
+    if (this.loader) { if (force) this.show(path, cx, { page: this.page, pages: this.pages }); return; }
+    if (this.fileError) { if (!textOnly) this.show(path, cx, { mode: this.mode }); return; }
+    if (!code && !doc) return; // the first read still runs
+    const image = !e && (doc?.kind === "image" || doc?.kind === "pdf");
+    if (image && textOnly) return;
+    const root = this.root, on = this.on;
+    // Anything that changed the view meanwhile (another file, edit mode, the dialog, a new show) ends this reload.
+    const still = () => this.file === path && this.current(context) && !this.full && this.edit === e && !busy(e) && this.code === code && this.doc === doc && !this.loader;
+    const retry = () => { if (this.file === path && this.current(context)) this.fileAgain ??= { force, textOnly }; };
+    this.fileLoading = true;
     cx.spawn(async (cx) => {
-      let text = null;
-      try { text = await readTextFile(joinPath(this.root, path), { on: this.on }); } catch {}
-      if (this.file !== path || !this.current(context) || this.edit || this.full) return;
-      if (text === null || text.includes("\0") || text.length > cfg.source_max_chars) { this.show(path, cx, { mode: this.mode }); cx.notify(); return; }
-      if (this.code.value() !== text) this.code.set_value(text);
-      this.checkEdit(path, cfg, cx);
-      cx.notify();
+      try {
+        if (image) {
+          const loader = doc.kind === "pdf" ? this.pdfs : this.images;
+          if (!loader) return;
+          const fresh = await loader.load({ on, path: joinPath(root, path), page: this.page, pages: this.pages, force: this.force, ...this.loadLimits(cfg ?? undefined) });
+          if (!still()) { retry(); return; }
+          if (fresh.error || fresh.load) { this.show(path, cx, { page: this.page, pages: this.pages, force: this.force }); return; }
+          if (fresh.path !== doc.path) { this.doc = fresh; if (fresh.pages) { this.page = fresh.page; this.pages = fresh.pages; } }
+          return;
+        }
+        let text = null;
+        try { text = await readTextFile(joinPath(root, path), { on }); } catch {}
+        if (!still()) { retry(); return; }
+        const same = text !== null && this.shownText !== null && lf(text) === lf(this.shownText);
+        if (same && !force) return;
+        if (!e && this.previewer && doc) { if (!same) this.show(path, cx, { mode: this.mode }); return; }
+        // Gone, binary or too long for the source view: shown anew (a clean edit buffer loses nothing).
+        if (!cfg || text === null || text.includes("\0") || text.length > cfg.source_max_chars) { this.show(path, cx, { mode: this.mode }); return; }
+        if (!same) { code.set_value(text); this.shownText = text; }
+        if (!e) { this.checkEdit(path, cfg, cx); return; }
+        // A clean edit buffer: the probe gives the new text and the new save baseline.
+        const after = (ms, f) => cx.timer.after(ms, () => f());
+        const r = await new Promise((done) => probeFileGuarded({ exec, on, path: joinPath(root, path), maxChars: cfg.source_max_chars, after }, done));
+        if (!still()) { retry(); return; }
+        if (!r.ok) { this.show(path, cx, { mode: this.mode }); return; } // no longer editable: shown anew
+        const info = r.info;
+        this.editCheck = { state: "ok", info }; // the same object as e.info, as enterEdit makes it
+        const changed = info.text !== e.info.text;
+        e.info = info;
+        if (changed) {
+          e.applying = info.text;
+          e.state.set_value(info.text);
+          e.history.reset(info.text);
+          e.dirty = false; e.message = null;
+        }
+      } finally {
+        this.fileLoading = false;
+        const again = this.fileAgain;
+        this.fileAgain = null;
+        cx.notify();
+        if (again && this.file === path && this.current(context)) this.reloadOpen(cx, again);
+      }
     });
   }
 
@@ -1053,6 +1146,7 @@ export default class FilerPro extends View {
       e.busy = false;
       if (!r.ok) { e.message = { text: r.error, error: true }; cx.notify(); return; }
       const text = value.replace(/\r\n?/g, "\n"), modeBefore = e.info.mode;
+      if (this.file === file) this.shownText = text; // the own write: a reload (watch event, signal) finds it unchanged
       Object.assign(e.info, { bytes: r.bytes, hash: r.hash, text, size: r.bytes.length });
       e.message = { text: "Saved", error: false };
       // The mode is read again; bytes that are not the ones just sent mean someone wrote in between.
@@ -1065,7 +1159,7 @@ export default class FilerPro extends View {
         }
       } catch {}
       e.modeBefore = modeBefore;
-      setShared("filer-pro.changed", { at: Date.now() });
+      this.signalOwn();
       if (this.edit === e) {
         e.dirty = e.state.value() !== text;
         if (this.file === file) this.code?.set_value(text);
@@ -1074,6 +1168,14 @@ export default class FilerPro extends View {
       cx.notify();
       if (this.edit === e && !e.dirty && !e.message.error) after?.(cx);
     });
+  }
+
+  // filer-pro.changed from this copy's own write (save, save a copy): the other copies reload as usual; this one
+  // reloads its tree but not the open file, its buffer already is the file (pollReload compares the `at`).
+  signalOwn() {
+    const at = Date.now();
+    this.ownChanged = at;
+    setShared("filer-pro.changed", { at });
   }
 
   // Every save stages the base64 in a file in a private folder under appHome, so the text is never in argv, where other
@@ -1130,7 +1232,7 @@ export default class FilerPro extends View {
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       c.busy = false;
       if (!r.ok) { c.error = r.error; cx.notify(); return; }
-      setShared("filer-pro.changed", { at: Date.now() });
+      this.signalOwn(); // a new file beside the open one: the tree reloads, the open file is not read again
       if (this.edit === e && e.copy === c) { this.closeCopy(cx); e.message = { text: `Saved a copy as ${name}`, error: false }; }
       cx.notify();
     });
@@ -1336,6 +1438,15 @@ export default class FilerPro extends View {
       .on_click((_e, cx) => onClick(cx)).child(child);
   }
 
+  // The Refresh button in the panel header, always shown: reads the config again (hand edits), then reloads the tree and
+  // the open file (issue #31: without refresh_seconds nothing polls; this is how an outside change on a machine shows).
+  refreshButton(t) {
+    return div().id("files-refresh").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).tooltip("Refresh").accessibility_label("Refresh")
+      .on_click((_e, cx) => this.reloadConfig(cx, { file: FILE_ALL, force: true }))
+      .child(svg(`${BASE}/refresh-cw.svg`).size(14).text_color(t.muted));
+  }
+
   // The Settings button in the panel header while no file is open: a gear in a 24px hit area, muted at rest.
   gear(t) {
     return div().id("files-settings").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
@@ -1436,13 +1547,15 @@ export default class FilerPro extends View {
     });
   }
 
-  // A rename, a delete or a finished job changed the file system: reload soon, not at the next periodic reload.
+  // A rename, a delete or a finished job changed the file system: reload the tree and the open file soon.
   // The gate (lib/reload.js) makes a burst of signals one reload and catches up a signal from during a load.
   pollReload(cx) {
     const changed = shared("filer-pro.changed");
     if (this.reload.signal(changed?.at ?? null)) {
       const open = expandPath(changed?.expand, this.root, this.on);
       if (open) this.folders.add(open);
+      // Kept on the copy, not passed along: take() may only let the reload through later (gap, running load).
+      if (changed?.at !== this.ownChanged) this.fileWanted = FILE_ALL;
     }
     if (this.context && this.reload.take(this.loading)) this.refresh(cx);
   }
@@ -1465,6 +1578,7 @@ export default class FilerPro extends View {
         .child(div().flex_none().font_semibold().child("Filer Pro"))
         .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
+        .child(this.refreshButton(t))
         .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
         .children(this.editTools(t))

@@ -15,7 +15,7 @@ test("settings: numeric defaults equal today's constants", () => {
   assert.deepEqual(d, {
     list_per_folder: 500, list_total: 5000, tree_depth: 40, source_max_chars: 400000, preview_max_chars: 200000,
     image_max_mb: 20, image_cache_mb: 50, pdf_local_max_mb: 100, pdf_remote_max_mb: 20, max_diagrams: 20, max_diagram_chars: 20000,
-    ssh_connect_timeout: 15, ssh_alive_interval: 15, ssh_alive_count: 4, stall_seconds: 120, keep_done_seconds: 10, refresh_seconds: 10,
+    ssh_connect_timeout: 15, ssh_alive_interval: 15, ssh_alive_count: 4, stall_seconds: 120, keep_done_seconds: 10, refresh_seconds: 0,
   });
   assert.equal(d.preview_max_chars, PREVIEW_MAX_CHARS);
   assert.equal(d.max_diagrams, MAX_DIAGRAMS);
@@ -26,7 +26,8 @@ test("settings: numeric defaults equal today's constants", () => {
   assert.equal(d.pdf_remote_max_mb * MB, MAX_PDF_REMOTE);
   assert.equal(d.stall_seconds * 1000, STALL_MS);
   assert.equal(d.keep_done_seconds * 1000, KEEP_DONE_MS);
-  for (const s of NUMBERS) assert.ok(s.min <= s.default && s.default <= s.max, s.key);
+  // zero: 0 (off) is allowed besides min–max (refresh_seconds, issue #31)
+  for (const s of NUMBERS) assert.ok((s.zero && s.default === 0) || (s.min <= s.default && s.default <= s.max), s.key);
 });
 
 test("settings: a wrong type or a fraction falls back to the default, an integer out of range is clamped", () => {
