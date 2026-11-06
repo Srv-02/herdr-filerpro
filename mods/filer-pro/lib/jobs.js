@@ -4,7 +4,7 @@
 // newId, appHome, home; optional settings() -> the config of lib/config.js, read at each use). Jobs live in shared("filer-pro.jobs") as a plain object id -> job.
 import { keepBothName, tempName, joinPath, parentOf, baseName, nameKey } from "./names.js";
 import { sshTarget } from "./machines.js";
-import { explainError, cleanText } from "./errors.js";
+import { explainError as explainRaw, cleanText } from "./errors.js";
 import { platform } from "./platform.js";
 import { afterDownload } from "./open.js";
 import { SIZE_SCRIPT, parseSize } from "./sizes.js";
@@ -71,6 +71,7 @@ export function createJobs(deps) {
   const { exec, hc, readTextFile, getShared, setShared, notify, now, newId, appHome, home } = deps;
   // The numbers of lib/settings.js, checked again here (whole numbers in range, else the default).
   const limits = () => numbers(deps.settings?.() ?? null);
+  const explainError = (stderr, host, fallback) => explainRaw(stderr, host, fallback, { localPlatform: deps.localPlatform?.() });
   const mountTables = deps.mountTables ?? []; // [infoPath, mountPath] for REPLACE_CHECK_SCRIPT, tests only
 
   const all = () => getShared(KEY) || {};

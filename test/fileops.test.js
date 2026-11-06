@@ -700,7 +700,7 @@ test("remove local: no trash tool gives the macOS 15 message, a failing trash is
   const none = recorder({ env, answer: (cmd) => { if (cmd === "/usr/bin/trash") throw new Error("spawn /usr/bin/trash ENOENT"); } });
   assert.deepEqual(await none.ops.remove({ on: null, path: `${root}/a.txt`, root }), { ok: false, error: "Moving to the Trash needs macOS 15 or later" });
   const blocked = recorder({ env, answer: (cmd) => cmd === "/usr/bin/trash" ? { code: 5, stdout: "", stderr: "Error: Operation not permitted" } : undefined });
-  assert.match((await blocked.ops.remove({ on: null, path: `${root}/a.txt`, root })).error, /^macOS blocked access/);
+  assert.match((await blocked.ops.remove({ on: null, path: `${root}/a.txt`, root })).error, /^Not permitted: macOS privacy settings/);
 });
 
 test("remove remote: REMOVE_SCRIPT on the machine, no trash", async () => {
