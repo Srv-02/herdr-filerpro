@@ -27,7 +27,7 @@ import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menui
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
-import { gitPrefix, rootRelative } from "./lib/gitmarks.js";
+import { GIT_PLACE_ARGS, gitPlace, gitPrefix, gitWatchDirs, gitWatchHit, rootRelative } from "./lib/gitmarks.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
@@ -670,6 +670,32 @@ export default class FilerPro extends View {
     });
   }
 
+  // Local only. The root watch never reports the .git of a repository above the root (the root is a subfolder of it,
+  // also through a symlink), so git add, commit, reset --soft or restore --staged there would leave the marks stale.
+  // While the prefix is not "", the folders of that .git are watched too (gitWatchDirs: the common dir, which holds a
+  // linked worktree's git dir, and a git dir elsewhere); only index, HEAD, refs/ and packed-refs refresh (gitWatchHit),
+  // through the same gate as the root watch. place comes from the refresh's rev-parse: no exec of its own. A new place
+  // starts new loops; the old ones, and all of them after a root change or at the repository top, end at their next batch.
+  watchGit(place, cx) {
+    const dirs = this.on ? [] : gitWatchDirs(place);
+    const id = dirs.join("\n");
+    if ((this.gitWatch?.id ?? "") === id) return;
+    if (!dirs.length) { this.gitWatch = null; return; }
+    const watch = { id }, context = this.context;
+    this.gitWatch = watch;
+    for (const dir of dirs) cx.spawn(async cx => {
+      try {
+        while (this.context === context && this.gitWatch === watch) {
+          const paths = await watchFolder(dir);
+          if (this.gitWatch !== watch || !this.current(context) || !gitWatchHit(paths, place)) continue;
+          this.reload.mark();
+          if (this.reload.take(this.loading)) this.refresh(cx);
+        }
+      }
+      catch { if (this.gitWatch === watch) this.gitWatch = null; }
+    });
+  }
+
   // What watchPlan compares a batch with: the root (as given and as resolved), every expanded folder whose real path
   // lies elsewhere (a symlinked folder, from its listing) and, once resolved, the open file's real folder. A link
   // target outside the root is never reported (herdr watches the root only), so a change there shows at the next
@@ -729,7 +755,7 @@ export default class FilerPro extends View {
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.realFolders = new Map(); this.fileReal = null; this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
-      this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
+      this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.gitWatch = null; this.error = null; this.limited = false;
       this.loading = false; this.again = false; this.fileWanted = 0; this.fileForce = false; this.lastOpened = saved?.lastOpened ?? null;
       if (saved?.file) this.show(saved.file, cx); // read fresh: no file reload needed
       file = 0; force = false;
@@ -749,10 +775,13 @@ export default class FilerPro extends View {
           if (!this.current(context)) return;
           await this.loadFolder(path, context);
         }
-        const top = await exec("git", ["rev-parse", "--show-prefix"], { cwd, on }).catch(() => null);
+        // Locally the same exec also names the git dir and common dir (watchGit); a machine keeps the plain call.
+        const top = await exec("git", on ? ["rev-parse", "--show-prefix"] : GIT_PLACE_ARGS, { cwd, on }).catch(() => null);
         const marks = {};
+        let place = null;
         if (top?.code === 0) {
-          const prefix = gitPrefix(top.stdout);
+          place = on ? null : gitPlace(top.stdout);
+          const prefix = place ? place.prefix : gitPrefix(top.stdout.split("\n")[0] + "\n");
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
           const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
           if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, this.conf.list_total)) {
@@ -761,7 +790,7 @@ export default class FilerPro extends View {
           }
         }
         if (!this.current(context)) return;
-        this.marks = marks; this.error = null; this.watch(cwd, cx);
+        this.marks = marks; this.error = null; this.watch(cwd, cx); this.watchGit(place, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally {
         if (this.context === context) this.loading = false;

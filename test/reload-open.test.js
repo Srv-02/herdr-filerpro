@@ -73,7 +73,7 @@ function world({ machine = null, config = null, link = false, git = false } = {}
   fs.mkdirSync(path.join(base, "app", "filer-pro", "requests"), { recursive: true });
   const env = { ...process.env, HOME: path.join(base, "home"), XDG_CACHE_HOME: path.join(base, "cache"), FILER_PRO_SCP: FAKE_SCP, FILER_PRO_SSH: FAKE_SSH };
   const store = {};
-  const log = { execs: [], reads: [], readdirs: [], states: [], notes: [] };
+  const log = { execs: [], reads: [], readdirs: [], states: [], notes: [], watches: [] };
   const state = { hold: false, held: [], inFlight: 0, maxInFlight: 0 };
   const watches = new Map(); // path -> resolve of the pending watchFolder call
   const timers = [];
@@ -97,7 +97,7 @@ function world({ machine = null, config = null, link = false, git = false } = {}
   globalThis.__impl = {
     props: () => ({}), appHome: () => "/app", home: () => "/Users/example", window: () => ({ platform: "macos" }),
     theme: () => new Proxy({}, { get: (_t, k) => String(k) }), settings: () => ({ dark: true, font_family: "mono" }),
-    spaces: () => [{ active: true, id: "s1", folder: ROOT, machine }], panes: () => [], focused: () => ({}),
+    spaces: () => [{ active: true, id: "s1", folder: state.folder ?? ROOT, machine }], panes: () => [], focused: () => ({}),
     shared: (k) => store[k], setShared: (k, v) => { store[k] = v; },
     readTextFile: async (p, opts = {}) => {
       if (p === "/app/filer-pro.json") return config;
@@ -116,7 +116,7 @@ function world({ machine = null, config = null, link = false, git = false } = {}
       } finally { state.inFlight--; }
     },
     openOverlay: () => "ov1", closeOverlay: () => {}, notify: (n) => log.notes.push(n),
-    watchFolder: (p) => new Promise((resolve) => watches.set(p, resolve)),
+    watchFolder: (p) => { log.watches.push(p); return new Promise((resolve) => watches.set(p, resolve)); },
     nextCommand: never, layout: () => ({}), pickFolder: async () => null, run: () => {},
     fsReaddir: async (p) => { log.readdirs.push(p); return fs.readdirSync(path.join(base, p)); },
     fsWrite: async (p, text) => { if (p.startsWith("/app/")) { fs.mkdirSync(path.dirname(path.join(base, p)), { recursive: true }); fs.writeFileSync(path.join(base, p), text); } },
@@ -1153,5 +1153,163 @@ test("marks: a refresh makes one git rev-parse and one git status, with a symlin
     await settle(40);
     const calls = GITS(w).slice(before).map((e) => e.args[0] === "--no-optional-locks" ? "status" : e.args[0]);
     assert.deepEqual(calls, ["rev-parse", "status"], `link=${link}`);
+  }
+});
+
+// ---- the git dir watch: the root is a subfolder of a repository, whose .git the root watch never reports
+
+// A repository at <base>/top whose subfolder sub/ is the root (the space folder is <base>/top/sub). kept.txt above the
+// root and a.txt in it are modified.
+function subRepo(w, name = "top") {
+  const top = path.join(fs.realpathSync(w.base), name);
+  fs.mkdirSync(path.join(top, "sub"), { recursive: true });
+  sh(top, "init", "-q");
+  fs.writeFileSync(path.join(top, "kept.txt"), "k\n");
+  fs.writeFileSync(path.join(top, "sub", "a.txt"), "a\n");
+  sh(top, "add", "."); sh(top, "commit", "-qm", "init");
+  fs.appendFileSync(path.join(top, "kept.txt"), "more\n");
+  fs.appendFileSync(path.join(top, "sub", "a.txt"), "more\n");
+  w.state.folder = path.join(top, "sub");
+  return { top, sub: path.join(top, "sub"), git: path.join(top, ".git") };
+}
+const gitWatchesOf = (w, dir) => w.log.watches.filter((p) => p === dir).length;
+async function until(w, ok, ms = 2000) { let t = 0; await settle(); while (!ok() && t < ms) { await w.run(250); t += 250; } return t; }
+
+test("git dir watch: a commit in a subfolder root refreshes the marks via the git dir watch, and reset --soft brings them back", async () => {
+  const w = world({ git: true });
+  const r = subRepo(w);
+  const self = await boot(w);
+  assert.deepEqual(marksOf(self), { "a.txt": "M" });
+  assert.equal(gitWatchesOf(w, r.git), 1, "the repository's .git is watched");
+  sh(r.sub, "add", "a.txt"); sh(r.sub, "commit", "-qm", "c");
+  await w.run(1000);
+  const n = REFRESHES(w);
+  w.fire(r.git, [path.join(r.git, "objects", "ab", "cdef"), path.join(r.git, "index"), path.join(r.git, "refs", "heads", "main")]);
+  const ms = await until(w, () => !Object.keys(self.marks).length);
+  console.log(`# git dir watch: marks clear ${ms} ms (simulated) after the commit batch`);
+  assert.deepEqual(marksOf(self), {}, "the commit cleared the mark");
+  assert.equal(REFRESHES(w), n + 1, "one refresh");
+  assert.ok(ms <= 1000);
+  assert.equal(gitWatchesOf(w, r.git), 2, "the loop waits again, no second loop");
+  sh(r.sub, "reset", "-q", "--soft", "HEAD~1");
+  await w.run(1000);
+  w.fire(r.git, [path.join(r.git, "HEAD"), path.join(r.git, "logs", "HEAD")]);
+  await until(w, () => Object.keys(self.marks).length > 0);
+  assert.deepEqual(marksOf(self), { "a.txt": "M" }, "reset --soft: staged again");
+  sh(r.sub, "restore", "--staged", "a.txt");
+  fs.writeFileSync(path.join(r.sub, "n.txt"), "n\n"); sh(r.sub, "add", "n.txt");
+  await w.run(1000);
+  w.fire(r.git, [path.join(r.git, "index")]);
+  await until(w, () => self.marks[path.join(self.root, "n.txt")] === "A");
+  assert.deepEqual(marksOf(self), { "a.txt": "M", "n.txt": "A" });
+});
+
+test("git dir watch: objects/ and logs/ events are ignored (no refresh, no exec)", async () => {
+  const w = world({ git: true });
+  const r = subRepo(w);
+  await boot(w);
+  await w.run(1000);
+  const execs = w.log.execs.length;
+  for (let i = 0; i < 20; i++) {
+    w.fire(r.git, [path.join(r.git, "objects", "ab", `c${i}`), path.join(r.git, "logs", "HEAD"), path.join(r.git, "logs", "refs", "heads", "main"), path.join(r.git, "index.lock"), path.join(r.git, "ORIG_HEAD")]);
+    await w.run(500);
+  }
+  assert.equal(w.log.execs.length - execs, 0, "no exec for objects, logs and locks");
+  assert.equal(gitWatchesOf(w, r.git), 21, "the loop kept waiting");
+});
+
+test("git dir watch: restarted for another repository and stopped when the root changes or becomes the repository top", async () => {
+  const w = world({ git: true });
+  const a = subRepo(w, "one"), b = subRepo(w, "two");
+  w.state.folder = a.sub;
+  const self = await boot(w);
+  assert.equal(gitWatchesOf(w, a.git), 1);
+  w.state.folder = b.sub; // another terminal folder: the other repository
+  self.refresh(w.cx); await settle(80);
+  assert.equal(gitWatchesOf(w, b.git), 1, "restarted on the new repository");
+  await w.run(1000);
+  let n = REFRESHES(w);
+  w.fire(a.git, [path.join(a.git, "index")]);
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n, "the old loop ends at its next batch without refreshing");
+  assert.equal(gitWatchesOf(w, a.git), 1, "and does not wait again");
+  w.state.folder = b.top; // the repository top: the root watch covers .git
+  self.refresh(w.cx); await settle(80);
+  await w.run(1000);
+  n = REFRESHES(w);
+  w.fire(b.git, [path.join(b.git, "index")]);
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n, "no git dir watch at the repository top");
+  assert.equal(gitWatchesOf(w, b.git), 1);
+  w.state.folder = a.sub; // back to the first subfolder: a new context starts a new loop
+  self.refresh(w.cx); await settle(80);
+  assert.equal(gitWatchesOf(w, a.git), 2, "started again after coming back");
+});
+
+test("git dir watch: stopped when the same root becomes the top of its own repository (prefix empty)", async () => {
+  const w = world({ git: true });
+  const r = subRepo(w);
+  const self = await boot(w);
+  sh(r.sub, "init", "-q"); // a repository of its own: the prefix is "" now
+  self.refresh(w.cx); await settle(80);
+  await w.run(1000);
+  const n = REFRESHES(w);
+  w.fire(r.git, [path.join(r.git, "index")]);
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n, "the old git dir watch no longer refreshes");
+  assert.equal(gitWatchesOf(w, r.git), 1, "and is not restarted");
+});
+
+test("git dir watch: a linked worktree watches the common dir; its refs/ and its own index count, the main worktree's index does not", async () => {
+  const w = world({ git: true });
+  const r = subRepo(w);
+  const wt = path.join(fs.realpathSync(w.base), "wt");
+  sh(r.top, "worktree", "add", "-q", wt, "-b", "side");
+  fs.appendFileSync(path.join(wt, "sub", "a.txt"), "w\n");
+  w.state.folder = path.join(wt, "sub");
+  const self = await boot(w);
+  assert.deepEqual(marksOf(self), { "a.txt": "M" });
+  assert.equal(gitWatchesOf(w, r.git), 1, "the common dir");
+  assert.equal(gitWatchesOf(w, path.join(r.git, "worktrees", "wt")), 0, "its git dir lies inside: not watched twice");
+  await w.run(1000);
+  let n = REFRESHES(w);
+  w.fire(r.git, [path.join(r.git, "index"), path.join(r.git, "HEAD")]);
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n, "the main worktree's index and HEAD: nothing");
+  sh(path.join(wt, "sub"), "commit", "-qam", "w");
+  w.fire(r.git, [path.join(r.git, "refs", "heads", "side")]);
+  await until(w, () => !Object.keys(self.marks).length);
+  assert.equal(REFRESHES(w), n + 1, "refs/ in the common dir: one refresh");
+  assert.deepEqual(marksOf(self), {});
+  await w.run(1000);
+  n = REFRESHES(w);
+  w.fire(r.git, [path.join(r.git, "worktrees", "wt", "index")]);
+  await settle(60);
+  assert.equal(REFRESHES(w), n + 1, "the worktree's own index: one refresh");
+});
+
+test("git dir watch: a subfolder root stays at 0 exec calls per minute while idle", async () => {
+  const w = world({ git: true });
+  subRepo(w);
+  const self = await boot(w);
+  w.put = (name, content) => fs.writeFileSync(path.join(w.state.folder, name), content);
+  self.show("a.txt", w.cx); await settle();
+  const before = w.log.execs.length;
+  await w.run(60_000);
+  assert.equal(w.log.execs.length - before, 0);
+});
+
+test("git dir watch: one rev-parse per refresh (locally with the git dir, on a machine the plain prefix call)", async () => {
+  for (const machine of [null, "box"]) {
+    const w = world({ machine, git: true });
+    subRepo(w);
+    const self = await boot(w);
+    const before = GITS(w).length;
+    self.refresh(w.cx);
+    await settle(40);
+    const calls = GITS(w).slice(before);
+    assert.deepEqual(calls.map((e) => e.args[0] === "--no-optional-locks" ? "status" : e.args[0]), ["rev-parse", "status"], `machine=${machine}`);
+    assert.deepEqual(calls[0].args, machine ? ["rev-parse", "--show-prefix"] : ["rev-parse", "--show-prefix", "--absolute-git-dir", "--git-common-dir", "--show-toplevel"]);
+    if (machine) assert.equal(w.log.watches.length - w.log.watches.filter((p) => p.includes("/app/")).length, 0, "no watch on a machine");
   }
 });
