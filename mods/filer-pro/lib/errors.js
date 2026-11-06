@@ -15,8 +15,10 @@ const FALLBACK = "Transfer failed";
 // toasts shorten themselves, the transfer bar wraps, request results keep the full path). Empty stderr gives the
 // caller's fallback (a blank one: "Transfer failed"), so the text is never "" and always counts as an error.
 // opts.localPlatform: platform of this computer (macOS when absent; "windows" or "linux" gives the neutral text), decides the text of "Operation not permitted".
+// opts.direction: "up" for an upload. scp names the local file in `open local` for both directions: the unreadable
+// source on an upload, the target on a download. Only the caller knows which.
 export function explainError(stderr, host, fallback = FALLBACK, opts = {}) {
-  const text = cleanText(explain(typeof stderr === "string" ? stderr.replaceAll("\r\n", "\n") : "", host, opts?.localPlatform));
+  const text = cleanText(explain(typeof stderr === "string" ? stderr.replaceAll("\r\n", "\n") : "", host, opts?.localPlatform, opts?.direction));
   return text || (typeof fallback === "string" && fallback.trim()) || FALLBACK;
 }
 
@@ -30,13 +32,17 @@ function notPermitted(text, host, localPlatform) {
   return local && localPlatform !== "windows" && localPlatform !== "linux" ? NOT_PERMITTED_LOCAL : NOT_PERMITTED;
 }
 
-function explain(text, host, localPlatform) {
+function explain(text, host, localPlatform, direction) {
   const unknown = /unknown machine "([^"]*)"/.exec(text);
   if (unknown) return `Unknown machine: ${unknown[1]}`;
   for (const [needle, make] of PATTERNS) {
     if (text.includes(needle)) return make(host);
   }
   if (text.includes("Operation not permitted")) return notPermitted(text, host, localPlatform);
+  if (direction === "up") {
+    const src = /open local "[^"]*": ([^\n]+)/.exec(text);
+    if (src) return /No such file or directory/.test(src[1]) ? "The file no longer exists" : `Cannot read the file: ${src[1]}`;
+  }
   if (/(?:open local|dest open) "[^"]*": No such file or directory/.test(text)) return "Target folder does not exist";
   const write = /(?:open local|dest open) "[^"]*": ([^\n]+)/.exec(text) ?? /^cp: .*: (Read-only file system|Permission denied)$/m.exec(text);
   if (write) return `Cannot write to the target folder: ${write[1]}`;

@@ -708,6 +708,15 @@ test("failed status with CRLF stderr (A4): job error has no carriage return", as
   assert.equal(f.notifications[0].body, j.error);
 });
 
+test("upload of an unreadable local file does not say the target folder is unwritable (#40)", async () => {
+  const { f, jobs } = setup();
+  await jobs.start({ direction: "up", machine: "box", src: "/Users/m/a.txt", destDir: "/srv/in", choice: "new" });
+  f.terminals["term-fs-id1"] = { state: "finished", exit_code: 1 };
+  f.files[STATUS] = 'state=failed\ncode=1\nscp: open local "/Users/m/a.txt": Permission denied\n';
+  await jobs.tick();
+  assert.equal(f.jobs().id1.error, "Cannot read the file: Permission denied");
+});
+
 test("inspect folder with a loop (and an outside link) is blocked; example is the loop link", async () => {
   const { f, jobs } = setup();
   f.existing.add("/srv/a");
