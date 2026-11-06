@@ -62,10 +62,13 @@ Date.now = () => clock;
 
 // One scratch world. machine: the space's machine ("box": every exec and read carries on "box"). config: filer-pro.json.
 // hold: execs wait until the test answers them (w.release), to simulate a slow machine.
-function world({ machine = null, config = null } = {}) {
+// link: the space folder is a symbolic link to the real folder (herdr reports watch paths under the real one).
+function world({ machine = null, config = null, link = false } = {}) {
   const base = mkTmpSync("reload-open-");
   const ROOT = path.join(base, "files");
-  fs.mkdirSync(ROOT);
+  const REAL = link ? path.join(base, "real-files") : ROOT;
+  fs.mkdirSync(REAL);
+  if (link) fs.symlinkSync(REAL, ROOT);
   fs.mkdirSync(path.join(base, "app", "filer-pro", "requests"), { recursive: true });
   const env = { ...process.env, HOME: path.join(base, "home"), XDG_CACHE_HOME: path.join(base, "cache"), FILER_PRO_SCP: FAKE_SCP, FILER_PRO_SSH: FAKE_SSH };
   const store = {};
@@ -129,7 +132,7 @@ function world({ machine = null, config = null } = {}) {
     inputNew: (o) => ({ v: o?.value ?? "", value() { return this.v; }, set_value(v) { this.v = v; }, on() {}, set_selected_range() {}, focus() {}, release() {} }),
   };
   const w = {
-    base, ROOT, log, store, state, cx, rcx, timers, watches,
+    base, ROOT, REAL, log, store, state, cx, rcx, timers, watches,
     put(name, content) { const p = path.join(ROOT, name); fs.writeFileSync(p, content); fs.chmodSync(p, 0o640); return p; },
     read: (name) => fs.readFileSync(path.join(ROOT, name), "utf8"),
     // Fires the folder watch of `dir` with these changed paths.
@@ -265,6 +268,7 @@ test("local: an image is probed again only when the watch batch names it", async
   w.fire(w.ROOT, [path.join(w.ROOT, "b.txt")]);
   await settle();
   assert.equal(loads, 0, "another file: no probe exec for the image");
+  await w.run(1000); // past the gap of 1 s between watch refreshes (#42)
   w.fire(w.ROOT, [path.join(w.ROOT, "a.txt")]);
   await settle();
   assert.equal(loads, 1);
@@ -519,6 +523,7 @@ test("error state (local): a watch event that names the file reads it again", as
   w.fire(w.ROOT, [path.join(w.ROOT, "other.txt")]);
   await settle(100);
   assert.equal(READS(w, "bin.txt").length, reads, "another file: not read");
+  await w.run(1000); // past the gap of 1 s between watch refreshes (#42)
   w.put("bin.txt", "fine now\n");
   w.fire(w.ROOT, [path.join(w.ROOT, "bin.txt")]);
   await settle(100);
@@ -553,4 +558,219 @@ test("loading a large file through a job: signals and Refresh read nothing and l
   await settle(100);
   assert.equal(outcomes, 1, "one wait loop ends, not two");
   assert.equal(self.fileError, "Load failed");
+});
+
+// ---- issue #42: only watch batches that can change what the panel shows refresh it
+
+const REFRESHES = (w) => w.log.execs.filter((e) => e.cmd === "git" && e.args[0] === "rev-parse").length;
+const shownNames = (self, folder = "") => (self.entries.get(folder) ?? []).map((e) => e.name);
+// What a home folder as the root reports all the time: caches, shell history, editor state, git objects.
+const NOISE = ["Library/Caches/com.example.app/Cache.db-wal", ".zsh_history", "Library/Application Support/Code/User/state.vscdb",
+  "src/node_modules/pkg/index.js", "Downloads/sub/part.crdownload", ".git/objects/ab/cdef01", ".git/logs/HEAD", ".DS_Store"];
+
+async function home(w) {
+  w.put("a.txt", "one\n");
+  fs.mkdirSync(path.join(w.ROOT, "src"));
+  w.put("src/b.txt", "b\n");
+  const self = await boot(w);
+  self.toggle("src", w.cx); // one expanded folder
+  await settle();
+  await opened(w, self);
+  return self;
+}
+
+test("watch filter (~ case): 2 batches/s of irrelevant paths for a minute cause no refresh, no exec and no read", async () => {
+  const w = world({ config: '{"hide_dotfiles": true}' });
+  const self = await home(w);
+  const refreshes = REFRESHES(w), execs = w.log.execs.length, reads = READS(w, "a.txt").length;
+  for (let i = 0; i < 120; i++) {
+    w.fire(w.ROOT, NOISE.map((p) => path.join(w.ROOT, p)));
+    await w.run(500);
+  }
+  const r = REFRESHES(w) - refreshes, e = w.log.execs.length - execs, f = READS(w, "a.txt").length - reads;
+  console.log(`# watch noise: ${r} refreshes/min, ${e} exec spawns/min, ${f} reads of the open file/min (120 batches)`);
+  // A relevant change still shows: a new file in the root, after the noise.
+  w.put("new.txt", "n\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "Library/Caches/x"), path.join(w.ROOT, "new.txt")]);
+  let ms = 0;
+  await settle();
+  while (!shownNames(self).includes("new.txt") && ms < 3000) { await w.run(250); ms += 250; }
+  console.log(`# watch noise: a new file in the root shows after ${ms} ms (simulated)`);
+  assert.equal(r, 0, "no refresh for irrelevant paths");
+  assert.equal(e, 0, "no exec for irrelevant paths");
+  assert.equal(f, 0, "the open file is not read for irrelevant paths");
+  assert.ok(shownNames(self).includes("new.txt") && ms <= 1000, `shown within 1 s (${ms} ms)`);
+});
+
+test("watch filter: a change in an expanded folder and the open file still refresh; collapsed ones do not", async () => {
+  const w = world();
+  const self = await home(w);
+  fs.mkdirSync(path.join(w.ROOT, "closed"));
+  await w.run(1000);
+  let n = REFRESHES(w);
+  w.put("closed/c.txt", "c\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "closed/c.txt")]);
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n, "a collapsed folder: nothing");
+  w.put("src/new.txt", "x\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "src/new.txt")]);
+  await settle();
+  assert.equal(REFRESHES(w), n + 1, "an expanded folder: refreshed");
+  assert.ok(shownNames(self, "src").includes("new.txt"));
+  await w.run(1000);
+  w.put("a.txt", "two\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "a.txt")]);
+  await settle();
+  assert.equal(self.code.value(), "two\n", "the open file follows (#31)");
+});
+
+test("watch filter: a burst of relevant batches gives one refresh at once and one trailing refresh, none lost", async () => {
+  const w = world();
+  const self = await home(w);
+  await w.run(1000);
+  const n = REFRESHES(w);
+  for (let i = 0; i < 10; i++) {
+    w.put(`f${i}.txt`, "x\n");
+    w.fire(w.ROOT, [path.join(w.ROOT, `f${i}.txt`)]);
+    await settle(10);
+  }
+  assert.equal(REFRESHES(w), n + 1, "one refresh at once");
+  await w.run(1250);
+  assert.equal(REFRESHES(w), n + 2, "one trailing refresh after the gap of 1 s");
+  await w.run(3000);
+  assert.equal(REFRESHES(w), n + 2, "no more");
+  assert.ok(shownNames(self).includes("f9.txt"), "the last change shows");
+});
+
+test("watch filter: with a symlinked root, paths under the real folder are compared (no refresh-all)", async () => {
+  const w = world({ link: true, config: '{"hide_dotfiles": true}' });
+  const self = await home(w);
+  await w.run(1000);
+  const n = REFRESHES(w), reads = READS(w, "a.txt").length;
+  w.fire(w.ROOT, NOISE.map((p) => path.join(w.REAL, p)));
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n, "noise under the real path: nothing");
+  assert.equal(READS(w, "a.txt").length, reads, "and no read of the open file");
+  w.put("new.txt", "n\n");
+  w.fire(w.ROOT, [path.join(w.REAL, "new.txt")]);
+  await settle();
+  assert.equal(REFRESHES(w), n + 1);
+  assert.ok(shownNames(self).includes("new.txt"));
+  await w.run(1000);
+  w.put("a.txt", "two\n");
+  w.fire(w.ROOT, [path.join(w.REAL, "a.txt")]);
+  await settle();
+  assert.equal(self.code.value(), "two\n", "the open file named under the real path reloads");
+});
+
+test("watch filter: .git index changes refresh the marks, .git objects do not; hidden entries only while hidden", async () => {
+  const w = world({ config: '{"hide_dotfiles": true}' });
+  await home(w);
+  await w.run(1000);
+  const n = REFRESHES(w);
+  w.fire(w.ROOT, [path.join(w.ROOT, ".git/objects/12/3456"), path.join(w.ROOT, ".zsh_history")]);
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n);
+  w.fire(w.ROOT, [path.join(w.ROOT, ".git/index")]);
+  await settle();
+  assert.equal(REFRESHES(w), n + 1);
+  const v = world();
+  await home(v);
+  await v.run(1000);
+  const m = REFRESHES(v);
+  v.fire(v.ROOT, [path.join(v.ROOT, ".zsh_history")]);
+  await settle();
+  assert.equal(REFRESHES(v), m + 1, "dot files shown: a change to one refreshes");
+});
+
+// ---- issue #41: a chmod in the Permissions dialog re-probes the open file of the copy it covers, and only that one
+
+async function chmodded(w, perms, mode) {
+  if (mode !== undefined) fs.chmodSync(path.join(w.REAL, "a.txt"), mode);
+  w.store["filer-pro.changed"] = { at: 9000 + Math.random(), perms };
+  await w.run(1000);
+  await settle(100);
+}
+
+test("chmod: a chmod of the open file re-probes it; the edit check follows the new mode", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await opened(w, self);
+  await settle(100);
+  assert.equal(self.editCheck?.state, "ok");
+  const probes = PROBES(w).length;
+  await chmodded(w, { machine: null, path: path.join(w.ROOT, "a.txt"), recursive: false }, 0o440);
+  assert.equal(PROBES(w).length, probes + 1, "one new probe");
+  assert.equal(self.editCheck?.state, "refused", "read only now");
+});
+
+test("chmod: an unrelated chmod does not re-probe the open file", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  w.put("b.txt", "b\n");
+  const self = await boot(w);
+  await opened(w, self);
+  await settle(100);
+  const probes = PROBES(w).length;
+  await chmodded(w, { machine: null, path: path.join(w.ROOT, "b.txt"), recursive: false });
+  assert.equal(PROBES(w).length, probes, "no probe");
+  assert.equal(self.editCheck?.state, "ok");
+});
+
+test("chmod: a recursive chmod of a folder above the open file re-probes it", async () => {
+  const w = world();
+  fs.mkdirSync(path.join(w.ROOT, "src"));
+  w.put("src/a.txt", "one\n");
+  const self = await boot(w);
+  await opened(w, self, "src/a.txt");
+  await settle(100);
+  assert.equal(self.editCheck?.state, "ok");
+  const probes = PROBES(w).length;
+  fs.chmodSync(path.join(w.ROOT, "src/a.txt"), 0o440);
+  await chmodded(w, { machine: null, path: w.ROOT, recursive: true });
+  assert.equal(PROBES(w).length, probes + 1);
+  assert.equal(self.editCheck?.state, "refused");
+});
+
+test("chmod: the same path on another machine does not re-probe the open file", async () => {
+  for (const [machine, other] of [["box", null], [null, "box"]]) {
+    const w = world({ machine });
+    w.put("a.txt", "one\n");
+    const self = await boot(w);
+    await opened(w, self);
+    await settle(100);
+    const probes = PROBES(w).length;
+    await chmodded(w, { machine: other, path: path.join(w.ROOT, "a.txt"), recursive: false });
+    assert.equal(PROBES(w).length, probes, `shown on ${machine}, chmod on ${other}: no probe`);
+  }
+});
+
+test("chmod: a clean edit buffer whose file became read only leaves edit mode", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await editing(w, self);
+  await chmodded(w, { machine: null, path: path.join(w.ROOT, "a.txt"), recursive: false }, 0o440);
+  assert.equal(self.edit, null, "edit mode ended");
+  assert.equal(self.editCheck?.state, "refused");
+});
+
+test("chmod: a Markdown file shown as source is probed again too (its preview is prepared in the background)", async () => {
+  const w = world();
+  quickSleep(w);
+  w.put("a.md", "# one\n");
+  const self = await boot(w);
+  await opened(w, self, "a.md");
+  await settle(100);
+  self.mode = "source";
+  self.checkEdit("a.md", self.fileCfg, w.cx);
+  await settle(100);
+  assert.equal(self.editCheck?.state, "ok");
+  assert.ok(self.previewer && self.doc, "a previewer is set in the source view too");
+  fs.chmodSync(path.join(w.ROOT, "a.md"), 0o440);
+  w.store["filer-pro.changed"] = { at: 9100, perms: { machine: null, path: path.join(w.ROOT, "a.md"), recursive: false } };
+  await w.run(1000);
+  await settle(100);
+  assert.equal(self.editCheck?.state, "refused", "the edit check follows the new mode");
 });

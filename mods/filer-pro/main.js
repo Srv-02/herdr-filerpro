@@ -27,7 +27,7 @@ import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
-import { createReloadGate, fileHit } from "./lib/reload.js";
+import { createReloadGate, watchPlan, permsCover } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
 import { EDIT_MAX_BYTES, PROBE_SCRIPT, VERIFY_SCRIPT, parseProbe, parseVerify, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { equalBytes, bytesToBase64, base64ToBytes } from "./lib/textcodec.js";
@@ -587,7 +587,9 @@ export default class FilerPro extends View {
     try { out = await this.fileOps.chmod({ on: p.machine ?? null, path: p.path, root: p.root, mode: s.mode, recursive: s.recursive }); }
     catch (e) { out = { ok: false, error: String(e?.message ?? e) }; }
     s.busy = false;
-    setShared("filer-pro.changed", { at: Date.now() }); // also after a failure: a recursive change may have run halfway
+    // Also after a failure: a recursive change may have run halfway. perms names the entry, so the copy whose open file
+    // it covers probes it again (edit check and mode, issue #41); every other copy only compares its text.
+    setShared("filer-pro.changed", { at: Date.now(), perms: { machine: p.machine ?? null, path: p.path, recursive: s.recursive === true } });
     if (!out.ok) { s.error = out.error; cx?.notify(); return; }
     const name = baseName(p.path);
     if (out.mismatch) notify({ title: "Permissions differ from the request", body: mismatchText(name, out.requested, out.mode), level: "warning" });
@@ -615,24 +617,45 @@ export default class FilerPro extends View {
     if (a) setShared("filer-pro.answer", a);
   }
 
-  // Local only (a machine has no folder watch; it reloads on the triggers of refresh, issue #31). A batch that names
-  // the open file or a folder above it reloads the file too.
+  // Local only (a machine has no folder watch; it reloads on the triggers of refresh, issue #31). The watch is
+  // recursive and reports everything below the root, also ignored folders: only a batch that can change what the
+  // panel shows refreshes it (watchPlan, issue #42: the root's and the expanded folders' entries, the open file,
+  // the git index, HEAD and refs), through the same gate as filer-pro.changed (at most one refresh per second, a
+  // later change caught up by the 250 ms tick). The open file is read again only when the batch names it.
   watch(root, cx) {
     if (this.on || this.watched === root) return;
     this.watched = root;
     const context = this.context;
     cx.spawn(async cx => {
       try {
+        // herdr watches the canonical root (/tmp/x arrives as /private/tmp/x, symlinks resolved): resolved once per
+        // watch, so its paths compare. Without it every batch falls back to a full refresh (watchPlan).
+        let real = null;
+        const resolved = this.realRoot(root).then((r) => { real = r; });
         while (this.context === context) {
           const paths = await watchFolder(root);
+          await resolved;
           if (!this.current(context)) continue;
-          // Text is read and compared on every batch (a local read, no exec: a symlinked root may name the file
-          // differently); an image or PDF is probed again only when the batch names it or a folder above it.
-          this.refresh(cx, { file: !this.file ? 0 : fileHit(paths, joinPath(this.root, this.file)) ? FILE_NAMED : FILE_TEXT });
+          const plan = watchPlan(paths, { roots: [root, real], folders: [...this.folders, ...this.pending], file: this.file, hide: this.conf });
+          if (!plan.refresh) continue;
+          const file = !this.file ? 0 : plan.file === "named" ? FILE_NAMED : plan.file === "text" ? FILE_TEXT : 0;
+          this.fileWanted = Math.max(this.fileWanted ?? 0, file);
+          this.reload.mark();
+          if (this.reload.take(this.loading)) this.refresh(cx);
         }
       }
       catch { if (this.context === context) this.watched = null; }
     });
+  }
+
+  // The root as the file system names it (cd -P), or null (local Windows, or the folder cannot be entered).
+  async realRoot(root) {
+    if (window()?.platform === "windows") return null;
+    try {
+      const r = await exec("sh", ["-c", 'cd -P -- "$1" && pwd -P', "sh", root]);
+      const out = r?.code === 0 ? String(r.stdout ?? "").replace(/\n$/, "") : "";
+      return out.startsWith("/") ? out : null;
+    } catch { return null; }
   }
 
   // An overlay copy has a fixed context: the focused terminal may change while it is open.
@@ -1092,7 +1115,13 @@ export default class FilerPro extends View {
         if (!still()) { retry(); return; }
         const same = text !== null && this.shownText !== null && lf(text) === lf(this.shownText);
         if (same && !force) return;
-        if (!e && this.previewer && doc) { if (!same) this.show(path, cx, { mode: this.mode }); else this.syncPreview(cx, force); return; }
+        if (!e && this.previewer && doc) {
+          if (!same) { this.show(path, cx, { mode: this.mode }); return; }
+          this.syncPreview(cx, force);
+          // Markdown or HTML shown as source: a forced reload (a chmod, issue #41) probes the edit check again too.
+          if (force && cfg && this.sourceShown()) this.checkEdit(path, cfg, cx);
+          return;
+        }
         // Gone, binary or too long for the source view: shown anew (a clean edit buffer loses nothing).
         if (!cfg || text === null || text.includes("\0") || text.length > cfg.source_max_chars) { this.show(path, cx, { mode: this.mode }); return; }
         if (!same) { code.set_value(text); this.shownText = text; }
@@ -1622,6 +1651,9 @@ export default class FilerPro extends View {
       if (open) this.folders.add(open);
       // Kept on the copy, not passed along: take() may only let the reload through later (gap, running load).
       if (changed?.at !== this.ownChanged) this.fileWanted = Math.max(this.fileWanted ?? 0, FILE_ALL);
+      // A chmod of the open file, its folder or (recursive) a folder above it: probe it again even when its text is
+      // unchanged, so the edit check and mode follow (issue #41). Kept like fileWanted until the next flight ends.
+      if (permsCover(changed?.perms, { on: this.on, root: this.root, file: this.file })) this.fileForce = true;
     }
     if (this.context && this.reload.take(this.loading)) this.refresh(cx);
   }
