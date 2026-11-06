@@ -10,6 +10,7 @@ import { explainError } from "./errors.js";
 
 export const GONE_MESSAGE = "This file is no longer available";
 export const NO_READ_MESSAGE = "No read permission · cannot show this file";
+export const NO_SEARCH_MESSAGE = "No search permission on its folder · cannot show this file";
 const NOT_FILE_MESSAGE = "Not a regular file";
 
 const fail = (message, binary = false) => ({ ok: false, message, binary });
@@ -25,6 +26,7 @@ export function readResult(res, { maxChars = Infinity, on = null, localPlatform,
   if (!res || res.code !== 0) return fail(why());
   const r = parseRead(res.stdout);
   if (r.kind === "missing") return fail(GONE_MESSAGE);
+  if (r.kind === "noaccess") return fail(NO_SEARCH_MESSAGE);
   if (r.kind === "dir" || r.kind === "special") return fail(NOT_FILE_MESSAGE);
   if (r.kind === "unreadable") return fail(NO_READ_MESSAGE);
   if (r.kind !== "file") return fail(UNREADABLE_MESSAGE);

@@ -17,7 +17,7 @@ import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick } from "./lib/clicks.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
-import { readFileGuarded, GONE_MESSAGE } from "./lib/readfile.js";
+import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
@@ -25,7 +25,7 @@ import { createFileOps, successToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
-import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
+import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
@@ -96,6 +96,7 @@ async function directory(path, on, perFolder, hide, real = false) {
     return Array.isArray(result) ? result : [result];
   }
   const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder), ...hideArgs(hide), ...(real ? ["1"] : [])], { on });
+  if (r.code === LIST_DENIED) throw Object.assign(new Error(NO_LIST_MESSAGE), { denied: true });
   if (r.code !== 0) throw Object.assign(new Error(r.stderr || "Cannot list this folder"), { missing: folderMissing(r) });
   const fields = r.stdout.split("\0"), out = [];
   const first = fields[0] === "P" && fields.length > 1 ? 2 : 0;
@@ -701,6 +702,8 @@ export default class FilerPro extends View {
     try {
       entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder, this.conf, Boolean(path) && !on);
     } catch (e) {
+      // A folder that cannot be read or searched shows a note instead of looking empty (issue #49); the root has the message below the tree.
+      if (e?.denied && this.current(context) && (!path || this.folders.has(path))) { this.entries.set(path, Object.assign([], { denied: true })); return; }
       // An open subfolder that was renamed or deleted just leaves the tree, with everything below it.
       if (path && e?.missing && this.current(context)) { pruneFolder(this.folders, this.entries, path); return; }
       throw e;
@@ -912,7 +915,8 @@ export default class FilerPro extends View {
         if (!r && !on) {
           try {
             const text = await readTextFile(joinPath(root, path), { on });
-            r = text === null ? { ok: false, message: GONE_MESSAGE, binary: false }
+            // null: gone, or its folder cannot be searched; the bounded read below tells which (issue #49).
+            r = text === null ? null
               : text.includes("\0") ? { ok: false, ...nulReason(text) } : { ok: true, text, edit: null };
           } catch {}
         }
@@ -1738,6 +1742,7 @@ export default class FilerPro extends View {
   // The tree rows; the last opened file is marked with t.selected (issue #5).
   rows(t, dark) {
     return this.visible().map(({ path, entry, depth }) => {
+      if (entry.note) return h_flex().id(`file-${path}-note`).h(ROW_H).flex_none().pl(8 + depth * 18 + 19).pr(8).items_center().text_size(12).text_color(t.dim).child(div().flex_1().min_w(0).truncate().child(entry.name));
       const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
       // A macOS package acts as a file until its contents are shown (lib/bundles.js); `dir` decides chevron, click and drop.
       const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
@@ -1808,7 +1813,7 @@ export default class FilerPro extends View {
           if (!this.root) return;
           openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
         })
-        .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
+        .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.entries.get("")?.denied ? NO_LIST_MESSAGE : this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total)))))
       .when(Boolean(bar), el => el.child(bar))
       .when(Boolean(this.file), el => el.child(this.viewer(t)));

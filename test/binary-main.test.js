@@ -430,3 +430,36 @@ test("#33 remote: Cmd+click downloads a normal file for the Finder, but never a 
   cmd("ok.txt");
   assert.equal(requests[0]?.reveal, true, "the Finder reveal of other files is unchanged");
 });
+
+// ---- #49: a folder or file the user may not reach is not "empty" or "gone"
+
+test("#49: a folder that cannot be listed shows a note row, not nothing; the root shows the message", async () => {
+  host(); const cx = fakeCx();
+  const inner = globalThis.__impl.exec;
+  globalThis.__impl.exec = async (cmd, args, opts) => (cmd === "sh" && args[1] === LIST_SCRIPT && args[3] === `${ROOT}/locked` ? { code: 3, stdout: "", stderr: "" } : inner(cmd, args, opts));
+  const self = await loaded(cx);
+  self.entries.set("", [{ name: "locked", dir: true }]);
+  self.toggle("locked", cx);
+  await settle();
+  assert.equal(self.error, null, "not an error toast");
+  assert.ok(self.folders.has("locked"), "the folder stays open");
+  assert.deepEqual(self.visible().map((r) => r.entry.name), ["locked", "No permission to list this folder"]);
+  assert.ok(texts(self.render(cx)).includes("No permission to list this folder"));
+  // The root itself.
+  globalThis.__impl.exec = async (cmd, args, opts) => (cmd === "sh" && args[1] === LIST_SCRIPT ? { code: 3, stdout: "", stderr: "" } : inner(cmd, args, opts));
+  const root = await loaded(cx);
+  assert.ok(texts(root.render(cx)).includes("No permission to list this folder"));
+});
+
+test("#49: a file below an unsearchable folder says so (local: readTextFile gave null), a deleted one stays 'no longer available'", async () => {
+  const f = host(); const cx = fakeCx(); const self = await loaded(cx);
+  f.readOuts[`${ROOT}/gone.txt`] = "noaccess\n";
+  self.show("gone.txt", cx);
+  await settle();
+  assert.equal(self.fileError, "No search permission on its folder · cannot show this file");
+  self.show("ok.txt", cx);
+  await settle();
+  self.show("blob.dat", cx);
+  await settle();
+  assert.equal(self.fileError, "This file is no longer available", "readOuts defaults to missing");
+});

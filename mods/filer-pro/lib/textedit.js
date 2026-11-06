@@ -68,7 +68,11 @@ const CACHE = String.raw`
 d=@{XDG_CACHE_HOME:-$HOME/.cache}/filer-pro/edit
 `;
 
-// Output line 1: link | dir | missing | special | file <w> <mode> <size> <open>, open = y when the folder is writable by
+// The file is not there: `missing`, unless a folder above it cannot be searched (the nearest one that shows as a folder
+// has no x permission), then `noaccess`: the file may well exist, and "no longer available" would be wrong (issue #49).
+const NOT_THERE = String.raw`if [ ! -e "$p" ]; then q=$p; while q=$(dirname -- "$q"); [ ! -d "$q" ]; do :; done; if [ -x "$q" ]; then echo missing; else echo noaccess; fi; exit 0; fi`;
+
+// Output line 1: link | dir | missing | noaccess | special | file <w> <mode> <size> <open>, open = y when the folder is writable by
 // everyone without the sticky bit. For a file of at most EDIT_MAX_BYTES line 2 is
 // its base64 without line breaks (empty for an empty file). `head -c` bounds the read if the file grows meanwhile.
 export const PROBE_SCRIPT = sh(String.raw`
@@ -76,7 +80,7 @@ p=$1
 case $p in -*) p=./$p ;; esac
 if [ -L "$p" ]; then echo link; exit 0; fi
 if [ -d "$p" ]; then echo dir; exit 0; fi
-if [ ! -e "$p" ]; then echo missing; exit 0; fi
+${NOT_THERE}
 if [ ! -f "$p" ]; then echo special; exit 0; fi
 ${STAT}
 m=$(st_mode "$p"); s=$(st_size "$p")
@@ -93,7 +97,7 @@ fi
 
 // read <path>: the bounded read of a file to show (issue #39), one exec locally or on a machine. Unlike PROBE_SCRIPT it
 // follows a symbolic link (as cat does) and says so in the last field, so a linked text file is shown but not edited.
-// Line 1: dir | missing (also a dangling link) | special | unreadable <w> <mode> <size> <open> <link> |
+// Line 1: dir | missing (also a dangling link) | noaccess (a folder above cannot be searched) | special | unreadable <w> <mode> <size> <open> <link> |
 // file <w> <mode> <size> <open> <link>; for a file of at most EDIT_MAX_BYTES line 2 is its base64 (as PROBE_SCRIPT).
 // Mode and size are the target's (stat -L). A read that fails although [ -r ] passed (macOS privacy, a root-squashed
 // share) ends stderr with the line readfail.
@@ -103,7 +107,7 @@ case $p in -*) p=./$p ;; esac
 l=n
 [ -L "$p" ] && l=y
 if [ -d "$p" ]; then echo dir; exit 0; fi
-if [ ! -e "$p" ]; then echo missing; exit 0; fi
+${NOT_THERE}
 if [ ! -f "$p" ]; then echo special; exit 0; fi
 if stat -c%i / >/dev/null 2>&1; then
   m=$(stat -L -c%a "$p"); s=$(stat -L -c%s "$p")
@@ -122,12 +126,12 @@ if [ "$s" -le ${EDIT_MAX_BYTES} ]; then
 fi
 `);
 
-// stdout of READ_SCRIPT -> { kind: file | unreadable | dir | missing | special | error, link, writable, mode, size, bytes, openDir }.
+// stdout of READ_SCRIPT -> { kind: file | unreadable | dir | missing | noaccess | special | error, link, writable, mode, size, bytes, openDir }.
 export function parseRead(stdout) {
   const none = (kind) => ({ kind, link: false, writable: false, mode: null, size: 0, bytes: null, openDir: false });
   const lines = String(stdout ?? "").split("\n");
   const head = lines[0].trim();
-  if (head === "dir" || head === "missing" || head === "special") return none(head);
+  if (head === "dir" || head === "missing" || head === "noaccess" || head === "special") return none(head);
   const m = /^(file|unreadable) (y|n) ([0-7]+) (\d+) (y|n) (y|n)$/.exec(head);
   if (!m) return none("error");
   const size = Number(m[4]);
@@ -144,13 +148,13 @@ export function parseRead(stdout) {
 
 // verify <path>: the file as it is now, without its content (for files above EDIT_MAX_BYTES, which the probe sends no
 // bytes of): "file <mode> <size> <sha256> <w> <open>" (w and open as in PROBE_SCRIPT), or link | dir | missing |
-// special, or nohash when no sha256 tool exists.
+// noaccess | special, or nohash when no sha256 tool exists.
 export const VERIFY_SCRIPT = sh(String.raw`
 p=$1
 case $p in -*) p=./$p ;; esac
 if [ -L "$p" ]; then echo link; exit 0; fi
 if [ -d "$p" ]; then echo dir; exit 0; fi
-if [ ! -e "$p" ]; then echo missing; exit 0; fi
+${NOT_THERE}
 if [ ! -f "$p" ]; then echo special; exit 0; fi
 ${STAT}
 ${HASHER}
@@ -163,10 +167,10 @@ echo "file $m $s $h $w $o"
 `);
 
 // stdout of VERIFY_SCRIPT -> { kind: "file", mode, size, hash, writable, openDir } | { kind: link | dir | missing |
-// special | nohash } | null. writable and openDir are null when the line carries no such fields.
+// noaccess | special | nohash } | null. writable and openDir are null when the line carries no such fields.
 export function parseVerify(stdout) {
   const head = String(stdout ?? "").split("\n")[0].trim();
-  if (["link", "dir", "missing", "special", "nohash"].includes(head)) return { kind: head };
+  if (["link", "dir", "missing", "noaccess", "special", "nohash"].includes(head)) return { kind: head };
   const m = /^file ([0-7]+) (\d+) ([0-9a-f]{64})(?: (y|n) (y|n))?$/.exec(head);
   if (!m) return null;
   return { kind: "file", mode: octalMode(m[1]), size: Number(m[2]), hash: m[3], writable: m[4] ? m[4] === "y" : null, openDir: m[5] ? m[5] === "y" : null };
@@ -272,12 +276,12 @@ exit 0
 
 // ---- probe parsing and the editability decision
 
-// stdout of PROBE_SCRIPT -> { kind, writable, mode, size, bytes }. kind: link | dir | missing | special | file | error.
+// stdout of PROBE_SCRIPT -> { kind, writable, mode, size, bytes }. kind: link | dir | missing | noaccess | special | file | error.
 export function parseProbe(stdout) {
   const bad = { kind: "error", writable: false, mode: null, size: 0, bytes: null };
   const lines = String(stdout ?? "").split("\n");
   const head = lines[0].trim();
-  if (head === "link" || head === "dir" || head === "missing" || head === "special") {
+  if (head === "link" || head === "dir" || head === "missing" || head === "noaccess" || head === "special") {
     return { kind: head, writable: false, mode: null, size: 0, bytes: null };
   }
   const m = /^file (y|n) ([0-7]+) (\d+)(?: (y|n))?$/.exec(head);
@@ -304,6 +308,7 @@ const REFUSED = {
   link: "Symbolic link",
   dir: "Folder",
   missing: "File no longer available",
+  noaccess: "No search permission on its folder",
 };
 
 // UTF-16 by BOM, or by the NUL pattern of mostly-ASCII text (every second byte 0 in the first 512 bytes).
