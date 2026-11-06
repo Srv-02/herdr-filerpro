@@ -717,6 +717,24 @@ test("upload of an unreadable local file does not say the target folder is unwri
   assert.equal(f.jobs().id1.error, "Cannot read the file: Permission denied");
 });
 
+test("local copy of an unreadable source does not blame the target folder (#47)", async () => {
+  const { f, jobs } = setup();
+  await jobs.start(LOCAL);
+  f.terminals["term-fs-id1"] = { state: "finished", exit_code: 1 };
+  f.files[STATUS] = "state=failed\ncode=1\ncp: /Users/m/Desktop/a.png: Permission denied\n";
+  await jobs.tick();
+  assert.equal(f.jobs().id1.error, "Cannot read the file: Permission denied");
+});
+
+test("local copy that cannot create its temp file still blames the target folder (#47)", async () => {
+  const { f, jobs } = setup();
+  await jobs.start(LOCAL);
+  f.terminals["term-fs-id1"] = { state: "finished", exit_code: 1 };
+  f.files[STATUS] = "state=failed\ncode=1\ncp: /Users/m/git/x/.a.png.fs-id1.part: Permission denied\n";
+  await jobs.tick();
+  assert.equal(f.jobs().id1.error, "Cannot write to the target folder: Permission denied");
+});
+
 test("inspect folder with a loop (and an outside link) is blocked; example is the loop link", async () => {
   const { f, jobs } = setup();
   f.existing.add("/srv/a");
