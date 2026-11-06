@@ -7,7 +7,7 @@ import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
 import {
   EDIT_MAX_BYTES, PROBE_SCRIPT, BEGIN_FILE_SCRIPT, PRIVATE_DIR_SCRIPT, COPY_SCRIPT, COMMIT_SCRIPT, CLEAN_SCRIPT,
-  READ_SCRIPT, parseRead, parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, probeFile, probeFileGuarded, CHECK_FAILED, CHECK_TIMEOUT_MS, saveFile, saveCopy, copyName, mirrorName, octalMode, scpSender,
+  READ_SCRIPT, VERIFY_SCRIPT, parseVerify, verifiedEditable, parseRead, parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, probeFile, probeFileGuarded, CHECK_FAILED, CHECK_TIMEOUT_MS, saveFile, saveCopy, copyName, mirrorName, octalMode, scpSender,
 } from "../mods/filer-pro/lib/textedit.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
 
@@ -165,6 +165,81 @@ describe("probeFile on real files, local and through the fake ssh", () => {
   test("an exec that rejects or fails gives a plain reason", async () => {
     assert.deepEqual(await probeFile({ exec: async () => { throw new Error("boom"); }, on: "box", path: "/x", maxChars: 1 }), { ok: false, reason: "Cannot read this file" });
     assert.deepEqual(await probeFile({ exec: async () => ({ code: 1, stdout: "", stderr: "" }), on: null, path: "/x", maxChars: 1 }), { ok: false, reason: "Cannot read this file" });
+  });
+});
+
+// PR #44: VERIFY_SCRIPT checks a file above 1 MiB by size and sha256 (it sends no content); its mode and write
+// permission decide Edit after a chmod (R2).
+describe("VERIFY_SCRIPT and parseVerify on real files, local and through the fake ssh", () => {
+  for (const on of [null, "box"]) {
+    const verify = async (exec, p) => { const r = await exec("sh", ["-c", VERIFY_SCRIPT, "verify", p], { on }); return { code: r.code, v: r.code === 0 ? parseVerify(r.stdout) : null, stdout: r.stdout }; };
+
+    test(`a file: mode, size, sha256, writable (${on ?? "local"})`, async () => {
+      const { root, files } = scratch();
+      const { exec } = makeExec(root);
+      const p = path.join(files, "big.txt"), bytes = Buffer.alloc(EDIT_MAX_BYTES + 10, 0x61);
+      put(p, bytes, 0o640);
+      const { v } = await verify(exec, p);
+      assert.deepEqual(v, { kind: "file", mode: "640", size: bytes.length, hash: sha(bytes), writable: true, openDir: false });
+      assert.deepEqual(verifiedEditable(v), { ok: true });
+      fs.chmodSync(p, 0o444);
+      const ro = (await verify(exec, p)).v;
+      assert.equal(ro.mode, "444");
+      if (!IS_ROOT) assert.equal(ro.writable, false);
+      assert.deepEqual(verifiedEditable(ro), { ok: false, reason: "No write permission" });
+    });
+
+    test(`a link, a missing file, a folder, an open folder (${on ?? "local"})`, async () => {
+      const { root, files } = scratch();
+      const { exec } = makeExec(root);
+      const f = path.join(files, "real.txt");
+      put(f, "x\n");
+      fs.symlinkSync(f, path.join(files, "link"));
+      fs.mkdirSync(path.join(files, "folder"));
+      assert.deepEqual((await verify(exec, path.join(files, "link"))).v, { kind: "link" });
+      assert.deepEqual((await verify(exec, path.join(files, "gone"))).v, { kind: "missing" });
+      assert.deepEqual((await verify(exec, path.join(files, "folder"))).v, { kind: "dir" });
+      const open = path.join(files, "open");
+      fs.mkdirSync(open);
+      fs.chmodSync(open, 0o777);
+      put(path.join(open, "a.txt"), "x\n");
+      const v = (await verify(exec, path.join(open, "a.txt"))).v;
+      assert.equal(v.openDir, true);
+      assert.deepEqual(verifiedEditable(v), { ok: false, reason: "Folder writable by everyone" });
+    });
+
+    test(`an unreadable file gives no hash, so it is never taken as unchanged (${on ?? "local"})`, async (t) => {
+      if (IS_ROOT) return t.skip("root reads everything");
+      const { root, files } = scratch();
+      const { exec } = makeExec(root);
+      const p = path.join(files, "secret.txt");
+      put(p, "x\n", 0o000);
+      const { v } = await verify(exec, p);
+      assert.equal(v, null);
+    });
+  }
+
+  test("no sha256 tool: nohash (exit 10)", () => {
+    const { root, files } = scratch();
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    for (const tool of ["stat", "find", "dirname"]) {
+      const where = spawnSync("sh", ["-c", `command -v ${tool}`], { encoding: "utf8" }).stdout.trim();
+      fs.symlinkSync(where, path.join(bin, tool));
+    }
+    const p = path.join(files, "a.txt");
+    put(p, "x\n");
+    const r = spawnSync("/bin/sh", ["-c", VERIFY_SCRIPT, "verify", p], { encoding: "utf8", env: { PATH: bin } });
+    assert.equal(r.status, 10);
+    assert.deepEqual(parseVerify(r.stdout), { kind: "nohash" });
+  });
+
+  test("parseVerify: the old line without w and open, and garbage", () => {
+    assert.deepEqual(parseVerify(`file 644 3 ${"a".repeat(64)}`), { kind: "file", mode: "644", size: 3, hash: "a".repeat(64), writable: null, openDir: null });
+    assert.equal(parseVerify("file 644 3 "), null);
+    assert.equal(parseVerify(""), null);
+    assert.deepEqual(verifiedEditable({ kind: "file", mode: "444", writable: null }), { ok: false, reason: "No write permission" });
+    assert.deepEqual(verifiedEditable(null), { ok: false, reason: "Not a regular file" });
   });
 });
 

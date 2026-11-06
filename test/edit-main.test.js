@@ -911,6 +911,63 @@ test("closing the fullscreen dialog after a save above 1 MiB hands the saved tex
   assert.equal(self.code.value(), BIG, "the panel shows the saved text");
 });
 
+// R1 (PR #44 regression): the panel took the saved text over but kept the save baseline from before the dialog, so Edit
+// opened the old text and its save reported a false conflict.
+test("R1: after a save above 1 MiB in the fullscreen dialog, Edit in the panel starts from the saved text and saves", async () => {
+  const w = dialogWorld();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  const d = await openDialogFromPanel(w);
+  self.pollFull(w.cx);
+  await inDialog(w, async () => { type(w, d.edit.state, BIG); click(render(d, w), "files-save", w.cx); await settle(200); });
+  await inDialog(w, () => d.close());
+  self.pollFull(w.cx);
+  await settle(200);
+  assert.equal(self.code.value(), BIG);
+  click(render(self, w), "files-edit", w.cx);
+  await settle();
+  assert.ok(self.edit, "edit mode");
+  assert.equal(self.edit.state.value(), BIG, "the saved text, not the one from before the dialog");
+  assert.equal(self.edit.info.text, BIG);
+  assert.equal(self.edit.dirty, false);
+  type(w, self.edit.state, BIG + "more\n");
+  click(render(self, w), "files-save", w.cx);
+  await settle(200);
+  assert.equal(w.read("a.txt").toString(), BIG + "more\n");
+  assert.ok(texts(render(self, w)).includes("Saved"), "no conflict");
+});
+
+test("R2/R5: after a save above 1 MiB in the dialog, a chmod 444 refuses Edit in the panel, 644 allows it again", async () => {
+  const w = dialogWorld();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  await editing(w, self);
+  click(render(self, w), "files-full", w.cx);
+  await settle();
+  const d = await openDialogFromPanel(w);
+  self.pollFull(w.cx);
+  await inDialog(w, async () => { type(w, d.edit.state, BIG); click(render(d, w), "files-save", w.cx); await settle(200); });
+  await inDialog(w, () => d.close());
+  self.pollFull(w.cx);
+  await settle(200);
+  fs.chmodSync(path.join(w.ROOT, "a.txt"), 0o444);
+  self.reloadOpen(w.cx, { force: true }); // what a covered chmod (filer-pro.changed perms) runs
+  await settle(200);
+  assert.deepEqual(self.editCheck, { state: "refused", reason: "No write permission" });
+  assert.equal(self.code.value(), BIG);
+  fs.chmodSync(path.join(w.ROOT, "a.txt"), 0o644);
+  self.reloadOpen(w.cx, { force: true });
+  await settle(200);
+  assert.equal(self.editCheck.state, "ok");
+  assert.equal(self.editCheck.info.mode, "644");
+  click(render(self, w), "files-edit", w.cx);
+  await settle();
+  assert.equal(self.edit?.state.value(), BIG);
+});
+
 // PR #44 follow-up: maximize from an edit session whose file is above 1 MiB now (saved there). The dialog takes the
 // buffer over without reading the file, which herdr's readTextFile refuses above 1 MiB.
 test("maximize after a save above 1 MiB: the dialog takes the buffer over without reading the file", async () => {

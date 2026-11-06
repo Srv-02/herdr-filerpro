@@ -28,9 +28,9 @@ import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
-import { createReloadGate, watchPlan, permsCover } from "./lib/reload.js";
+import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
-import { EDIT_MAX_BYTES, PROBE_SCRIPT, VERIFY_SCRIPT, parseProbe, parseVerify, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
+import { EDIT_MAX_BYTES, PROBE_SCRIPT, VERIFY_SCRIPT, parseProbe, parseVerify, verifiedEditable, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { equalBytes, bytesToBase64, base64ToBytes } from "./lib/textcodec.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
@@ -74,6 +74,12 @@ const MB = 1024 * 1024;
 // change signal names no path, so it never re-reads a file that could not be shown (one more read over SSH each time).
 const FILE_TEXT = 1, FILE_ALL = 2, FILE_NAMED = 3;
 const lf = (text) => String(text ?? "").replace(/\r\n?/g, "\n");
+// The save baseline of a file saved above 1 MiB (bigSaved: { path, size, hash, text, eol, mode }), as enterEdit and
+// saveFile use it: the bytes are the text in the file's line ends. null when the text cannot be encoded.
+function bigInfo(big) {
+  const eol = big.eol === "CRLF" ? "CRLF" : "LF", bytes = bufferBytes(big.text, { eol });
+  return bytes ? { bytes, hash: big.hash, text: big.text, eol, mode: big.mode ?? null, size: big.size } : null;
+}
 // A wait for a timer: herdr gives a job about 0.5 s; a timer starts a new job, an awaited resolved promise does not.
 const pauseOf = (cx) => () => new Promise((r) => cx.timer.after(0, () => r()));
 // Title of the error toast per failed request action.
@@ -81,18 +87,22 @@ const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Co
 
 // perFolder: the setting list_per_folder; the listing returns at most one entry more, so a cut folder is noticed.
 // hide: the settings hide_system_files and hide_dotfiles; the listing leaves those entries out before it counts.
-async function directory(path, on, perFolder, hide) {
+// real (local subfolders): the listing also gives the folder's real path (cd -P), set as entries.real ("" unknown).
+async function directory(path, on, perFolder, hide, real = false) {
   if (!on && window()?.platform === "windows") {
     const r = await exec("powershell", ["-NoProfile", "-Command", psListCommand(path, perFolder, hide)]);
     if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
     const result = JSON.parse(r.stdout || "[]");
     return Array.isArray(result) ? result : [result];
   }
-  const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder), ...hideArgs(hide)], { on });
+  const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder), ...hideArgs(hide), ...(real ? ["1"] : [])], { on });
   if (r.code !== 0) throw Object.assign(new Error(r.stderr || "Cannot list this folder"), { missing: folderMissing(r) });
   const fields = r.stdout.split("\0"), out = [];
-  for (let i = 0; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
-  return markBundles(out, { on, platform: window()?.platform }); // macOS packages (lib/bundles.js), local only
+  const first = fields[0] === "P" && fields.length > 1 ? 2 : 0;
+  for (let i = first; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
+  const entries = markBundles(out, { on, platform: window()?.platform }); // macOS packages (lib/bundles.js), local only
+  entries.real = first ? fields[1] : "";
+  return entries;
 }
 
 // False once this build of the mod was reloaded or closed. Herdr ends an old build's async loop only at its next cx use
@@ -630,14 +640,23 @@ export default class FilerPro extends View {
     cx.spawn(async cx => {
       try {
         // herdr watches the canonical root (/tmp/x arrives as /private/tmp/x, symlinks resolved): resolved once per
-        // watch, so its paths compare. Without it every batch falls back to a full refresh (watchPlan).
+        // watch, so its paths compare. Without it (null) the root as given is compared; a path under neither falls
+        // back to a full refresh (watchPlan).
         let real = null;
         const resolved = this.realRoot(root).then((r) => { real = r; });
         while (this.context === context) {
           const paths = await watchFolder(root);
           await resolved;
           if (!this.current(context)) continue;
-          const plan = watchPlan(paths, { roots: [root, real], folders: [...this.folders, ...this.pending], file: this.file, hide: this.conf });
+          let plan = watchPlan(paths, this.watchOpts(root, real));
+          // A path with the open file's name below another folder: the file's folder may be a symlink. Its real path is
+          // resolved once per open file (one exec), then the file is matched exactly (watchOpts).
+          const open = this.file;
+          if (plan.file === "text" && open?.includes("/") && this.fileReal?.file !== open) {
+            const dir = await this.realRoot(joinPath(root, parentOf(open)));
+            if (!this.current(context)) continue;
+            if (this.file === open) { this.fileReal = { file: open, dir }; plan = watchPlan(paths, this.watchOpts(root, real)); }
+          }
           if (!plan.refresh) continue;
           const file = !this.file ? 0 : plan.file === "named" ? FILE_NAMED : plan.file === "text" ? FILE_TEXT : 0;
           this.fileWanted = Math.max(this.fileWanted ?? 0, file);
@@ -647,6 +666,18 @@ export default class FilerPro extends View {
       }
       catch { if (this.context === context) this.watched = null; }
     });
+  }
+
+  // What watchPlan compares a batch with: the root (as given and as resolved), every expanded folder whose real path
+  // lies elsewhere (a symlinked folder, from its listing) and, once resolved, the open file's real folder. A link
+  // target outside the root is never reported (herdr watches the root only), so a change there shows at the next
+  // refresh.
+  watchOpts(root, real) {
+    const base = real ?? root, file = this.file, f = this.fileReal;
+    const links = [...(this.realFolders ?? [])].filter(([rel, p]) => this.folders.has(rel) && watchRel(p, [base]) !== rel);
+    const fileKnown = Boolean(file && f?.file === file && f.dir);
+    if (fileKnown) links.push([parentOf(file), f.dir]);
+    return { roots: [root, real], links, folders: [...this.folders, ...this.pending], file, fileKnown, hide: this.conf };
   }
 
   // The root as the file system names it (cd -P), or null (local Windows, or the folder cannot be entered).
@@ -668,13 +699,15 @@ export default class FilerPro extends View {
     const { on, cwd: root } = context;
     let entries;
     try {
-      entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder, this.conf);
+      entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder, this.conf, Boolean(path) && !on);
     } catch (e) {
       // An open subfolder that was renamed or deleted just leaves the tree, with everything below it.
       if (path && e?.missing && this.current(context)) { pruneFolder(this.folders, this.entries, path); return; }
       throw e;
     }
     if (!this.current(context) || (path && !this.folders.has(path))) return;
+    // The folder's real path (local): a folder reached through a symlink matches the folder watch's paths (watchOpts).
+    if (path) { this.realFolders ??= new Map(); if (entries.real?.startsWith("/")) this.realFolders.set(path, entries.real); else this.realFolders.delete(path); }
     const { list_per_folder: perFolder, list_total: total } = this.conf;
     const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
     this.entries.set(path, entries.slice(0, Math.max(0, Math.min(perFolder, total - used))).sort((a, b) => Number(sortsAsFolder(b)) - Number(sortsAsFolder(a)) || a.name.localeCompare(b.name)));
@@ -691,7 +724,7 @@ export default class FilerPro extends View {
       if (this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened });
       const saved = this.saved.get(next);
-      this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
+      this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.realFolders = new Map(); this.fileReal = null; this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.error = null; this.limited = false;
       this.loading = false; this.again = false; this.fileWanted = 0; this.fileForce = false; this.lastOpened = saved?.lastOpened ?? null;
       if (saved?.file) this.show(saved.file, cx); // read fresh: no file reload needed
@@ -971,7 +1004,7 @@ export default class FilerPro extends View {
     this.code = EditorState.new(this.editorOptions(path, text, true));
     if (this.takeHandover(path, cx)) {
       const size = Number(h.info.size);
-      if (size > EDIT_MAX_BYTES && h.info.hash) this.bigSaved = { path, size, hash: h.info.hash, text };
+      if (size > EDIT_MAX_BYTES && h.info.hash) this.bigSaved = { path, size, hash: h.info.hash, text, eol: h.info.eol, mode: h.info.mode };
       return true;
     }
     this.code.release(); this.code = null; this.shownText = null; this.editCheck = null;
@@ -1070,10 +1103,14 @@ export default class FilerPro extends View {
       if (shared("filer-pro.handover")?.id === f.id) setShared("filer-pro.handover", null);
       const saved = mine?.saved;
       if (!this.edit && this.file === f.path && saved?.path === f.path && typeof saved.text === "string") {
-        // Saved above 1 MiB in the dialog: the panel takes the saved text over; reloadOpen then only checks size and hash.
+        // Saved above 1 MiB in the dialog: the panel takes the saved text over, and with it the save baseline for Edit
+        // (else Edit would start from the text before the dialog and its save report a conflict); reloadOpen then
+        // only checks size and hash, and the mode from that check decides Edit.
         this.bigSaved = saved;
         this.shownText = saved.text;
         this.code?.set_value(saved.text);
+        const info = bigInfo(saved);
+        this.editCheck = info ? { state: "ok", info } : { state: "refused", reason: "Text contains characters that cannot be saved as UTF-8" };
         this.syncPreview(cx);
       }
       if (!this.edit && this.file === f.path) this.reloadOpen(cx, { force: true });
@@ -1104,6 +1141,21 @@ export default class FilerPro extends View {
     this.fullState = "taken";
     setShared("filer-pro.fullscreen", { id: props().full, state: "taken", at: Date.now() });
     return true;
+  }
+
+  // A file saved above 1 MiB that is still as saved (size and hash): the mode and write permission of that check decide
+  // Edit (a chmod, issue #41), without another exec. A clean edit buffer that may no longer write ends edit mode; the
+  // saved text stays on screen.
+  keepBig(big, v) {
+    big.mode = v.mode;
+    const d = verifiedEditable(v), e = this.edit;
+    if (e) e.info.mode = v.mode;
+    if (!d.ok) { if (e) this.leaveEdit(); this.editCheck = { state: "refused", reason: d.reason }; return; }
+    const c = this.editCheck?.info;
+    const info = e ? e.info : c && c.hash === big.hash && c.text === big.text ? c : bigInfo(big);
+    if (!info) { this.editCheck = { state: "refused", reason: "Text contains characters that cannot be saved as UTF-8" }; return; }
+    info.mode = v.mode;
+    this.editCheck = { state: "ok", info };
   }
 
   // The open file again as it is on disk (issue #31), without flicker and never over unsaved text. Runs at the end of a
@@ -1149,10 +1201,10 @@ export default class FilerPro extends View {
         if (big?.path === path) {
           // Saved above 1 MiB in this session: herdr cannot read such a file, so the file is compared by size and hash
           // and the saved text stays. Anything else on disk ends it: the normal reload (and its message) follows.
-          let kept = false;
-          try { const res = await exec("sh", ["-c", VERIFY_SCRIPT, "verify", joinPath(root, path)], { on }); const v = res?.code === 0 ? parseVerify(res.stdout) : null; kept = v?.kind === "file" && v.size === big.size && v.hash === big.hash; } catch {}
+          let v = null;
+          try { const res = await exec("sh", ["-c", VERIFY_SCRIPT, "verify", joinPath(root, path)], { on }); v = res?.code === 0 ? parseVerify(res.stdout) : null; } catch {}
           if (!still()) { retry(); return; }
-          if (kept) { this.syncPreview(cx); return; }
+          if (v?.kind === "file" && v.size === big.size && v.hash === big.hash) { this.keepBig(big, v); this.syncPreview(cx); return; }
           this.bigSaved = null;
           this.show(path, cx, { mode: this.mode });
           return;
@@ -1292,7 +1344,7 @@ export default class FilerPro extends View {
       // bytes above 1 MiB (herdr cannot read such a file back either): size and sha256 stand in for them, and this
       // session keeps the saved text (bigSaved) instead of reading the file again.
       const big = r.bytes.length > EDIT_MAX_BYTES;
-      this.bigSaved = big ? { path: file, size: r.bytes.length, hash: r.hash, text } : null;
+      this.bigSaved = big ? { path: file, size: r.bytes.length, hash: r.hash, text, eol: e.info.eol, mode: e.info.mode } : null;
       try {
         if (big) {
           const res = await exec("sh", ["-c", VERIFY_SCRIPT, "verify", full], { on });
@@ -1311,6 +1363,7 @@ export default class FilerPro extends View {
         }
       } catch {}
       if (e.message.error) this.bigSaved = null;
+      else if (this.bigSaved) this.bigSaved.mode = e.info.mode; // as verified just now
       e.modeBefore = modeBefore;
       this.signalOwn();
       if (this.edit === e) {

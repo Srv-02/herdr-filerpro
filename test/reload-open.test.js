@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
-import { PROBE_SCRIPT, READ_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
+import { PROBE_SCRIPT, READ_SCRIPT, VERIFY_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
 import { LIST_SCRIPT } from "../mods/filer-pro/lib/tree.js";
 import { numbers, validateField } from "../mods/filer-pro/lib/settings.js";
 
@@ -840,4 +840,227 @@ test("#39 local: a Latin-1 file is shown with U+FFFD; only a watch batch that na
   assert.equal(FILE_EXECS(w).length, execs + 1, "named: one local exec");
   assert.ok(FILE_EXECS(w).slice(execs).every((e) => e.on === null));
   assert.equal(self.code.value(), "caf\ufffd\n");
+});
+
+// ---- PR #44 x #45: a chmod of an open file that this session saved above 1 MiB (it is verified by size and hash,
+// herdr's readTextFile refuses it, so the reload never reads it)
+
+const BIG = "0123456789abcdef".repeat(70000) + "\n"; // about 1.07 MB
+const VERIFIES = (w) => w.log.execs.filter((e) => e.cmd === "sh" && e.args[1] === VERIFY_SCRIPT);
+// herdr's readTextFile refuses a file above 1 MiB.
+function refuseBig(w) {
+  const read = globalThis.__impl.readTextFile;
+  globalThis.__impl.readTextFile = async (p, o) => { if (!p.startsWith("/app/") && fs.existsSync(p) && fs.statSync(p).size > 1048576) { w.log.reads.push({ p, on: o?.on ?? null }); throw new Error("File too large"); } return read(p, o); };
+}
+async function savedBig(w, self) {
+  await editing(w, self);
+  type(w, self.edit.state, BIG);
+  click(self.render(w.rcx), "files-save", w.cx);
+  await settle(300);
+  assert.equal(w.read("a.txt"), BIG);
+  assert.ok(texts(self.render(w.rcx)).includes("Saved"), "no conflict message");
+}
+const A = (w) => ({ machine: null, path: path.join(w.ROOT, "a.txt"), recursive: false });
+
+test("R2: chmod 444 of a file saved above 1 MiB refuses Edit, 644 allows it again; one exec each, the saved text stays", async () => {
+  const w = world();
+  refuseBig(w);
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await savedBig(w, self);
+  self.leaveEdit();
+  assert.equal(self.editCheck.state, "ok");
+  let n = FILE_EXECS(w).length, v = VERIFIES(w).length;
+  await chmodded(w, A(w), 0o444);
+  assert.equal(VERIFIES(w).length, v + 1, "the size and hash check");
+  assert.equal(FILE_EXECS(w).length, n + 1, "and no other exec for the file");
+  assert.deepEqual(self.editCheck, { state: "refused", reason: "No write permission" });
+  assert.equal(self.code.value(), BIG, "the saved text stays");
+  assert.equal(self.fileError, null);
+  assert.equal(self.enterEdit(w.cx), false, "Edit refused");
+  n = FILE_EXECS(w).length;
+  await chmodded(w, A(w), 0o644);
+  assert.equal(FILE_EXECS(w).length, n + 1);
+  assert.equal(self.editCheck.state, "ok");
+  assert.equal(self.editCheck.info.mode, "644", "the mode follows");
+  assert.equal(self.editCheck.info.text, BIG);
+  assert.ok(self.enterEdit(w.cx), "Edit allowed");
+  type(w, self.edit.state, BIG + "more\n");
+  click(self.render(w.rcx), "files-save", w.cx);
+  await settle(300);
+  assert.equal(w.read("a.txt"), BIG + "more\n", "saved from the kept baseline, no conflict");
+});
+
+test("R2: a clean edit buffer above 1 MiB whose file became read only leaves edit mode, the text stays", async () => {
+  const w = world();
+  refuseBig(w);
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await savedBig(w, self);
+  assert.ok(self.edit && !self.edit.dirty);
+  await chmodded(w, A(w), 0o444);
+  assert.equal(self.edit, null, "edit mode ended");
+  assert.equal(self.editCheck.reason, "No write permission");
+  assert.equal(self.code.value(), BIG);
+});
+
+test("R2: a chmod of a clean edit buffer above 1 MiB that still may write keeps edit mode and shows the new mode", async () => {
+  const w = world();
+  refuseBig(w);
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await savedBig(w, self);
+  const e = self.edit;
+  await chmodded(w, A(w), 0o600);
+  assert.equal(self.edit, e, "still editing");
+  assert.equal(e.info.mode, "600");
+  assert.equal(self.editCheck.info, e.info);
+});
+
+test("R5: a chmod of a local file that is not UTF-8 reads it again (forced, lossy) and gives its edit check", async () => {
+  const w = world();
+  const p = w.put("l.txt", Buffer.from("caf\xe9\n", "latin1"));
+  const self = await boot(w);
+  const read = globalThis.__impl.readTextFile;
+  globalThis.__impl.readTextFile = async (q, o) => { if (q === p) { w.log.reads.push({ p: q, on: null }); throw new Error("stream did not contain valid UTF-8"); } return read(q, o); };
+  await opened(w, self, "l.txt");
+  await settle(50);
+  self.editCheck = null; // the next decision must come from the chmod
+  const n = FILE_EXECS(w).length;
+  fs.chmodSync(p, 0o444);
+  w.store["filer-pro.changed"] = { at: 9300, perms: { machine: null, path: p, recursive: false } };
+  await w.run(1000);
+  await settle(100);
+  assert.equal(FILE_EXECS(w).length, n + 1, "one bounded read, locally");
+  assert.equal(self.code.value(), "caf\ufffd\n");
+  assert.equal(self.editCheck?.reason, "Not UTF-8 (Latin-1 or other), use Edit in Terminal");
+});
+
+test("R5: a chmod of a remote file that is not UTF-8 gives its edit check with one exec", async () => {
+  const w = world({ machine: "box" });
+  w.put("l.txt", Buffer.from("caf\xe9\n", "latin1"));
+  const self = await boot(w);
+  await opened(w, self, "l.txt");
+  await settle(50);
+  assert.equal(self.code.value(), "caf\ufffd\n");
+  self.editCheck = null;
+  const n = FILE_EXECS(w).length;
+  w.store["filer-pro.changed"] = { at: 9400, perms: { machine: "box", path: path.join(w.ROOT, "l.txt"), recursive: false } };
+  await w.run(1000);
+  await settle(100);
+  assert.equal(FILE_EXECS(w).length, n + 1);
+  assert.ok(FILE_EXECS(w).slice(n).every((e) => e.on === "box"));
+  assert.equal(self.editCheck?.reason, "Not UTF-8 (Latin-1 or other), use Edit in Terminal");
+});
+
+test("R5: a remote chmod covered by perms costs one exec for the open file; the edit check follows", async () => {
+  const w = world({ machine: "box" });
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await opened(w, self);
+  await settle(50);
+  assert.equal(self.editCheck.state, "ok");
+  const n = FILE_EXECS(w).length;
+  fs.chmodSync(path.join(w.ROOT, "a.txt"), 0o440);
+  w.store["filer-pro.changed"] = { at: 9500, perms: { machine: "box", path: path.join(w.ROOT, "a.txt"), recursive: false } };
+  await w.run(1000);
+  await settle(100);
+  assert.equal(FILE_EXECS(w).length, n + 1, "one exec");
+  assert.equal(PROBES(w).length, 0, "no separate probe");
+  assert.equal(self.editCheck.state, "refused");
+});
+
+// ---- #42: a folder reached through a symlink (l -> a, both in the root, a collapsed)
+
+async function linked(w) {
+  fs.mkdirSync(path.join(w.ROOT, "a"));
+  w.put("a/x.txt", "x\n");
+  fs.symlinkSync("a", path.join(w.ROOT, "l"));
+  w.put("top.txt", "t\n");
+  const self = await boot(w);
+  self.toggle("l", w.cx);
+  await settle();
+  await w.run(1000);
+  return self;
+}
+
+test("R3: an expanded symlinked folder refreshes on a change reported under its real path; its real path came with the listing", async () => {
+  const w = world();
+  const self = await linked(w);
+  assert.ok(shownNames(self, "l").includes("x.txt"));
+  assert.equal(self.realFolders.get("l"), fs.realpathSync(path.join(w.ROOT, "a")));
+  const n = REFRESHES(w), execs = w.log.execs.length;
+  w.put("a/new.txt", "n\n");
+  w.fire(w.ROOT, [path.join(fs.realpathSync(w.ROOT), "a/new.txt")]);
+  await settle();
+  assert.equal(REFRESHES(w), n + 1, "refreshed");
+  assert.ok(shownNames(self, "l").includes("new.txt"), "the new file shows below the link");
+  assert.ok(!w.log.execs.slice(execs).some((e) => e.cmd === "sh" && e.args[1] !== LIST_SCRIPT && e.cmd !== "git"), "no extra exec to resolve");
+});
+
+test("R3: the open file below an expanded symlinked folder is named by its real path and read", async () => {
+  const w = world();
+  const self = await linked(w);
+  await opened(w, self, "l/x.txt");
+  await w.run(1000);
+  w.put("a/x.txt", "y\n");
+  w.fire(w.ROOT, [path.join(fs.realpathSync(w.ROOT), "a/x.txt")]);
+  await settle(100);
+  assert.equal(self.code.value(), "y\n");
+});
+
+test("R3: a file with the open file's name elsewhere (node_modules/**/index.js) neither refreshes nor reads after one resolve", async () => {
+  const w = world();
+  fs.mkdirSync(path.join(w.ROOT, "src"));
+  w.put("src/index.js", "a\n");
+  fs.mkdirSync(path.join(w.ROOT, "node_modules/pkg"), { recursive: true });
+  w.put("node_modules/pkg/index.js", "b\n");
+  const self = await boot(w);
+  await opened(w, self, "src/index.js");
+  await w.run(1000);
+  const n = REFRESHES(w), reads = READS(w, "src/index.js").length, execs = w.log.execs.length;
+  for (let i = 0; i < 20; i++) {
+    w.fire(w.ROOT, [path.join(w.ROOT, "node_modules/pkg/index.js")]);
+    await w.run(500);
+  }
+  assert.equal(REFRESHES(w), n, "no refresh");
+  assert.equal(READS(w, "src/index.js").length, reads, "no read of the open file");
+  assert.equal(w.log.execs.length - execs, 1, "one exec: the open file's folder resolved once");
+  w.put("src/index.js", "c\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "src/index.js")]);
+  await settle(100);
+  assert.equal(self.code.value(), "c\n", "the open file itself still follows");
+});
+
+test("R3: the open file behind a symlinked folder that is not expanded is matched once its folder is resolved", async () => {
+  const w = world();
+  fs.mkdirSync(path.join(w.ROOT, "a"));
+  w.put("a/x.txt", "x\n");
+  fs.symlinkSync("a", path.join(w.ROOT, "l"));
+  const self = await boot(w);
+  await opened(w, self, "l/x.txt");
+  await w.run(1000);
+  w.put("a/x.txt", "y\n");
+  w.fire(w.ROOT, [path.join(fs.realpathSync(w.ROOT), "a/x.txt")]);
+  await settle(100);
+  await w.run(1000);
+  assert.equal(self.code.value(), "y\n");
+  assert.equal(self.fileReal?.dir, fs.realpathSync(path.join(w.ROOT, "a")));
+});
+
+test("R5: realRoot failing (null): the watch compares the root as given", async () => {
+  const w = world();
+  const exec = globalThis.__impl.exec;
+  globalThis.__impl.exec = async (cmd, args, o) => (cmd === "sh" && /pwd -P/.test(args[1]) && args[1] !== LIST_SCRIPT ? { code: 1, stdout: "", stderr: "no" } : exec(cmd, args, o));
+  const self = await home(w);
+  assert.equal(await self.realRoot(w.ROOT), null);
+  await w.run(1000);
+  const n = REFRESHES(w);
+  w.fire(w.ROOT, [path.join(w.ROOT, "Library/Caches/x")]);
+  await w.run(1000);
+  assert.equal(REFRESHES(w), n, "a collapsed path under the root as given: nothing (no fallback refresh)");
+  w.put("new.txt", "n\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "new.txt")]);
+  await settle();
+  assert.equal(REFRESHES(w), n + 1);
 });
