@@ -3,7 +3,7 @@
 import { SAME_FN, MOUNT_FN, REMOVE_SCRIPT, normalizePath } from "./fileops.js";
 import { LIST_SCRIPT } from "./jobs.js";
 import { keepBothName, joinPath, baseName, nameKey } from "./names.js";
-import { explainError } from "./errors.js";
+import { explainError as explainRaw } from "./errors.js";
 
 // Shell functions of both scripts. The mount guard (MOUNT_FN) uses the variables s, E, e, t, f, l, m, k, tab, u, L, lk, c, j and ph,
 // so the scripts below keep clear of those names.
@@ -148,7 +148,7 @@ export function moveVerdict({ info, src, destDir, stderr }) {
   if (info.exists) {
     if (info.above !== "n" && info.above !== "y") return { error: NO_CHECK };
     if (info.above === "y") replaceError = "Cannot replace a folder that contains the source";
-    else if (info.mounted === "y") replaceError = explainError(stderr, null, "Refusing to replace, a file system is mounted in the target");
+    else if (info.mounted === "y") replaceError = explainRaw(stderr, null, "Refusing to replace, a file system is mounted in the target");
     else if (info.trashDev !== "" && info.trashDev !== info.destDev) replaceError = "Cannot replace here, the Trash lies on another volume";
   }
   return { exists: info.exists, destIsDir: info.type === "d", dest, replaceError };
@@ -163,7 +163,8 @@ export function moveToasts(out) {
 
 // exec-backed move. deps: { exec, check, trashDir, mountTables? }; check is the guard of createFileOps. Results:
 // { ok: true, ... } or { ok: false, error }. mountTables: [infoPath, mountPath] for MOVE_CHECK_SCRIPT (tests only).
-export function createMoveOps({ exec, check, trashDir, mountTables = [] }) {
+export function createMoveOps({ exec, check, trashDir, mountTables = [], localPlatform }) {
+  const explainError = (stderr, host, fallback) => explainRaw(stderr, host, fallback, { localPlatform: localPlatform?.() });
   const failure = (e, on) => ({ ok: false, error: explainError(String(e?.message ?? e), on) });
   const run = (script, args, on) => exec("sh", ["-c", script, "x", ...args], { on });
 
