@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
-import { PROBE_SCRIPT, COMMIT_SCRIPT } from "../mods/filer-pro/lib/textedit.js";
+import { PROBE_SCRIPT, COMMIT_SCRIPT, CHECK_TIMEOUT_MS } from "../mods/filer-pro/lib/textedit.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
 
 const FAKE_SSH = path.resolve(import.meta.dirname, "fake", "ssh");
@@ -65,12 +65,14 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
   const log = { execs: [], overlays: [], closed: [], notes: [], writes: [], mkdirs: [], unlinks: [], states: [], inputs: [] };
   const state = { focused: {}, fireOnSet };
   const timers = [];
+  // after(): zero-delay timers fire after the current job (as in the host); longer ones are only recorded (afters).
+  const afters = [];
   const cx = {
     notified: 0, stopped: 0,
     notify() { this.notified++; }, sleep: never, stop_propagation() { this.stopped++; }, phase: () => "ok",
     spawn: (fn) => { const p = Promise.resolve().then(() => fn(cx)); p.catch(() => {}); return p; },
     focus_handle: () => ({}),
-    timer: { after: () => {}, every: (ms, fn) => timers.push({ ms, fn }) },
+    timer: { after: (ms, fn) => { afters.push({ ms, fn }); if (ms === 0) setImmediate(() => fn(cx)); }, every: (ms, fn) => timers.push({ ms, fn }) },
   };
   // notify during render throws, as it does in the host
   const rcx = { ...cx, notify() { throw new Error("cx.notify() during render"); } };
@@ -86,6 +88,7 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
     writeTextFile: async () => {}, hc: async (a) => ({ code: 0, stdout: a[0] === "machine" ? JSON.stringify({ machines: [{ name: "box", target: "box", via: false }] }) : "{}", stderr: "" }),
     exec: async (cmd, args, opts = {}) => {
       log.execs.push({ cmd, args, opts });
+      if (state.hangProbe && args[2] === "probe") return never();
       if (!["sh", "rm", "env"].includes(cmd)) return { code: 1, stdout: "", stderr: "" };
       // The fake appHome "/app" lives in the scratch folder for the scripts (saves stage their text there); its
       // transfer.sh is the repo's.
@@ -121,7 +124,7 @@ function world({ platform = "linux", machine = null, config = null, fireOnSet = 
     },
   };
   const w = {
-    base, ROOT, log, store, state, cx, rcx, timers, props,
+    base, ROOT, log, store, state, cx, rcx, timers, afters, props,
     put(name, content, mode = 0o640) { const p = path.join(ROOT, name); fs.writeFileSync(p, content); fs.chmodSync(p, mode); return p; },
     read: (name) => fs.readFileSync(path.join(ROOT, name)),
   };
@@ -274,6 +277,23 @@ test("a dimmed Edit names itself and the reason: Checking… while the probe run
   const edit = byId(render(self, w), "files-edit");
   assert.equal(has("on_click", edit), false);
   assert.equal(tooltipOf(edit), "Edit: Checking…");
+});
+
+test("a probe without an answer does not stay on Checking…: Edit greys out with Could not check this file", async () => {
+  const w = world();
+  w.put("a.txt", "one\n");
+  const self = await panel(w);
+  w.state.hangProbe = true;
+  await opened(w, self);
+  assert.equal(tooltipOf(byId(render(self, w), "files-edit")), "Edit: Checking…");
+  const timeout = w.afters.find((t) => t.ms === CHECK_TIMEOUT_MS);
+  assert.ok(timeout, "a timeout is armed for the check");
+  timeout.fn(w.cx);
+  await settle();
+  assert.deepEqual(self.editCheck, { state: "refused", reason: "Could not check this file (no answer)" });
+  const edit = byId(render(self, w), "files-edit");
+  assert.equal(has("on_click", edit), false);
+  assert.equal(tooltipOf(edit), "Edit: Could not check this file (no answer)");
 });
 
 test("the panel title Filer Pro does not shrink beside the toolbar", () => {

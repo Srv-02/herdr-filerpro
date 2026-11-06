@@ -1,11 +1,38 @@
 // Pure codecs for the text editor: base64, strict UTF-8 and SHA-256 over Uint8Array.
-// No Buffer, TextDecoder, TextEncoder, crypto, atob or btoa: the QuickJS runtime has none of them.
+// No Buffer, TextDecoder, TextEncoder or crypto: the QuickJS runtime has none of them. It has Uint8Array.fromBase64 and
+// toBase64, atob, btoa, escape, unescape and the URI functions, which run natively: herdr interrupts a job after about
+// 0.5 s (an error JS cannot catch), and a per-byte JS loop over 1 MiB takes most of that there. So each codec takes the
+// native route when the runtime has it and keeps the plain JS loop only as a fallback.
+const hasB64 = () => typeof Uint8Array.fromBase64 === "function" && typeof Uint8Array.prototype.toBase64 === "function";
 
+const CHUNK = 8192;
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B64_INDEX = new Int8Array(128).fill(-1);
 for (let i = 0; i < 64; i++) B64_INDEX[B64.charCodeAt(i)] = i;
 
+// Uint8Array -> string with one char (0..255) per byte, in slices (apply has an argument limit).
+export function bytesToBinary(bytes) {
+  const parts = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
+  return parts.join("");
+}
+
+// The reverse of bytesToBinary (callers pass binary strings only: chars 0..255).
+export function binaryToBytes(bin) {
+  if (hasB64() && typeof btoa === "function") return Uint8Array.fromBase64(btoa(bin));
+  const n = bin.length;
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export function bytesToBase64(bytes) {
+  if (hasB64()) return bytes.toBase64();
+  if (typeof btoa === "function") return btoa(bytesToBinary(bytes));
+  return bytesToBase64Loop(bytes);
+}
+
+function bytesToBase64Loop(bytes) {
   const n = bytes.length;
   const parts = [];
   let chunk = "";
@@ -29,8 +56,31 @@ export function bytesToBase64(bytes) {
   return parts.join("");
 }
 
+const B64_STRICT = /^[A-Za-z0-9+/]*={0,2}$/;
+
 // Returns null on any invalid input. ASCII whitespace is ignored.
 export function base64ToBytes(text) {
+  if (typeof atob !== "function") return base64ToBytesLoop(text);
+  // The same rules as the loop below, checked natively: standard alphabet, padding only at the end, length % 4 == 0.
+  const raw = String(text);
+  const clean = /[ \t\n\r]/.test(raw) ? raw.replace(/[ \t\n\r]+/g, "") : raw; // the probe sends none: no copy
+  if (clean.length % 4 !== 0 || !B64_STRICT.test(clean)) return null;
+  try {
+    return hasB64() ? Uint8Array.fromBase64(clean) : binaryToBytes(atob(clean));
+  } catch {
+    return null;
+  }
+}
+
+// Byte arrays with the same content (natively compared as base64 when possible).
+export function equalBytes(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  if (hasB64()) return a.toBase64() === b.toBase64();
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function base64ToBytesLoop(text) {
   const s = String(text);
   const vals = [];
   let pad = 0;
@@ -69,11 +119,19 @@ export function base64ToBytes(text) {
   return out;
 }
 
-const CHUNK = 8192;
-
 // Strict decoder: null for overlongs, surrogates, > U+10FFFF, stray or missing continuation bytes.
-// A leading BOM is kept as U+FEFF.
+// A leading BOM is kept as U+FEFF. Natively: escape() turns every byte >= 0x80 into %XX and decodeURIComponent decodes
+// them as UTF-8, throwing a URIError on exactly the sequences above (ECMA-262 Decode).
 export function decodeUtf8(bytes) {
+  if (typeof escape !== "function") return decodeUtf8Loop(bytes);
+  try {
+    return decodeURIComponent(escape(bytesToBinary(bytes)));
+  } catch {
+    return null;
+  }
+}
+
+function decodeUtf8Loop(bytes) {
   const n = bytes.length;
   const parts = [];
   let units = [];
@@ -127,8 +185,19 @@ export function decodeUtf8(bytes) {
   return parts.join("");
 }
 
-// Null when the string holds an unpaired surrogate.
+// Null when the string holds an unpaired surrogate (encodeURIComponent throws a URIError for one).
 export function encodeUtf8(text) {
+  if (typeof unescape !== "function") return encodeUtf8Loop(text);
+  let bin;
+  try {
+    bin = unescape(encodeURIComponent(String(text)));
+  } catch {
+    return null;
+  }
+  return binaryToBytes(bin);
+}
+
+function encodeUtf8Loop(text) {
   const s = String(text);
   const n = s.length;
   // First pass sizes the output and validates surrogates.
@@ -180,7 +249,9 @@ const K = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
-export function sha256Hex(bytes) {
+// The hash over bytes in steps: step(from, to) hashes the full 64-byte blocks in [from, to) (multiples of 64, up to
+// full), finish() the padded tail and returns the hex.
+function sha256State(bytes) {
   const len = bytes.length;
   const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
   const w = new Uint32Array(64);
@@ -237,11 +308,36 @@ export function sha256Hex(bytes) {
     h[7] = (h[7] + hh) >>> 0;
   };
 
-  const full = len & ~63;
-  for (let off = 0; off < full; off += 64) block(bytes, off);
-  for (let off = 0; off < tail.length; off += 64) block(tail, off);
+  return {
+    full: len & ~63,
+    step(from, to) {
+      for (let off = from; off < to; off += 64) block(bytes, off);
+    },
+    finish() {
+      for (let off = 0; off < tail.length; off += 64) block(tail, off);
+      let hex = "";
+      for (let i = 0; i < 8; i++) hex += (h[i] + 0x100000000).toString(16).slice(1);
+      return hex;
+    },
+  };
+}
 
-  let hex = "";
-  for (let i = 0; i < 8; i++) hex += (h[i] + 0x100000000).toString(16).slice(1);
-  return hex;
+export function sha256Hex(bytes) {
+  const s = sha256State(bytes);
+  s.step(0, s.full);
+  return s.finish();
+}
+
+// 64 KiB: about 0.05 s of hashing in herdr's QuickJS (1 MiB in one go takes about 0.9 s, past the job limit).
+export const SHA_SLICE = 65536;
+
+// sha256Hex in slices of SHA_SLICE bytes with `await pause()` between them. herdr only resets its per-job time limit
+// for a new job: pause must wait for a timer (cx.timer.after), an awaited resolved promise is not enough.
+export async function sha256HexSliced(bytes, pause, slice = SHA_SLICE) {
+  const s = sha256State(bytes);
+  for (let off = 0; off < s.full; off += slice) {
+    if (off > 0) await pause();
+    s.step(off, Math.min(off + slice, s.full));
+  }
+  return s.finish();
 }

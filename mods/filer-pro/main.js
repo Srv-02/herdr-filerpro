@@ -28,7 +28,8 @@ import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
-import { PROBE_SCRIPT, parseProbe, probeFile, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
+import { PROBE_SCRIPT, parseProbe, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
+import { equalBytes } from "./lib/textcodec.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
 import { createPermsDialog, permsView, showProbe, PERMS_SIZE } from "./ui/permsdialog.js";
@@ -65,6 +66,8 @@ const key = () => JSON.stringify(location());
 // The settings before the config file was read (and in copies that never read it): today's defaults.
 const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true };
 const MB = 1024 * 1024;
+// A wait for a timer: herdr gives a job about 0.5 s; a timer starts a new job, an awaited resolved promise does not.
+const pauseOf = (cx) => () => new Promise((r) => cx.timer.after(0, () => r()));
 // Title of the error toast per failed request action.
 const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Copy failed", paste: "Paste failed", rename: "Rename failed", mkdir: "New folder failed", delete: "Delete failed", clip: "Copy failed" };
 
@@ -827,7 +830,9 @@ export default class FilerPro extends View {
     if (!on && window()?.platform === "windows") { this.editCheck = { state: "refused", reason: "Editing is not available on Windows" }; return; }
     const check = this.editCheck = { state: "checking" };
     cx.spawn(async (cx) => {
-      const r = await probeFile({ exec, on, path: joinPath(root, path), maxChars: cfg.source_max_chars });
+      // Guarded: an interrupted, failed or unanswered check still ends, as a refusal with its reason, never "Checking…".
+      const after = (ms, f) => cx.timer.after(ms, () => f());
+      const r = await new Promise((done) => probeFileGuarded({ exec, on, path: joinPath(root, path), maxChars: cfg.source_max_chars, after }, done));
       if (this.editCheck !== check || this.file !== path || !this.current(context)) return;
       this.editCheck = r.ok ? { state: "ok", info: r.info } : { state: "refused", reason: r.reason };
       cx.notify();
@@ -924,12 +929,12 @@ export default class FilerPro extends View {
     const file = this.file, full = joinPath(this.root, file), on = this.on;
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64), send: this.sender() }); }
+      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64), send: this.sender(), pause: pauseOf(cx) }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       e.busy = false;
       if (!r.ok) { e.message = { text: r.error, error: true }; cx.notify(); return; }
       const text = value.replace(/\r\n?/g, "\n"), modeBefore = e.info.mode;
-      Object.assign(e.info, { bytes: r.bytes, text, size: r.bytes.length });
+      Object.assign(e.info, { bytes: r.bytes, hash: r.hash, text, size: r.bytes.length });
       e.message = { text: "Saved", error: false };
       // The mode is read again; bytes that are not the ones just sent mean someone wrote in between.
       try {
@@ -937,7 +942,7 @@ export default class FilerPro extends View {
         const p = res?.code === 0 ? parseProbe(res.stdout) : null;
         if (p?.kind === "file") {
           e.info.mode = p.mode;
-          if (!p.bytes || p.bytes.length !== r.bytes.length || p.bytes.some((b, i) => b !== r.bytes[i])) e.message = { text: "Changed by someone else right after saving", error: true };
+          if (!equalBytes(p.bytes, r.bytes)) e.message = { text: "Changed by someone else right after saving", error: true };
         }
       } catch {}
       e.modeBefore = modeBefore;
@@ -1002,7 +1007,7 @@ export default class FilerPro extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode, stage: (b64) => this.stageLocal(b64), send: this.sender() }); }
+      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode, stage: (b64) => this.stageLocal(b64), send: this.sender(), pause: pauseOf(cx) }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       c.busy = false;
       if (!r.ok) { c.error = r.error; cx.notify(); return; }

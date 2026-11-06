@@ -7,7 +7,7 @@ import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
 import {
   EDIT_MAX_BYTES, PROBE_SCRIPT, BEGIN_FILE_SCRIPT, PRIVATE_DIR_SCRIPT, COPY_SCRIPT, COMMIT_SCRIPT, CLEAN_SCRIPT,
-  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, probeFile, saveFile, saveCopy, copyName, mirrorName, octalMode, scpSender,
+  parseProbe, checkEditable, bufferBytes, isDirty, statusText, createHistory, probeFile, probeFileGuarded, CHECK_FAILED, CHECK_TIMEOUT_MS, saveFile, saveCopy, copyName, mirrorName, octalMode, scpSender,
 } from "../mods/filer-pro/lib/textedit.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
 
@@ -373,6 +373,30 @@ describe("saveFile", () => {
       const next = { ...info, bytes: r.bytes, text: "a\nb\ntyped\nlines\n" };
       const r2 = await saveFile({ ...io(exec), on, path: p, info: next, bytes: bufferBytes("x\n", next) });
       assert.equal(r2.ok, true, r2.error);
+      assert.equal(fs.readFileSync(p, "utf8"), "x\r\n");
+    });
+
+    test(`1 MiB save hashes in slices with pause() between them; a known info.hash is the baseline (${tag})`, async () => {
+      const { root, files } = scratch();
+      const { exec } = makeExec(root);
+      const p = path.join(files, "f");
+      const text = mibText();
+      fs.writeFileSync(p, text);
+      const info = await open(exec, on, p, 2000000);
+      let pauses = 0;
+      const pause = async () => { pauses++; };
+      const bytes = bufferBytes(info.text.replace("Grüße", "Hallo"), info);
+      const r = await saveFile({ ...io(exec), on, path: p, info, bytes, pause });
+      assert.equal(r.ok, true, r.error);
+      assert.equal(r.hash, sha(fs.readFileSync(p)));
+      assert.ok(pauses >= 15, `${pauses} pauses`); // two hashes of 8 slices each, a pause between all of them
+      // the next save takes the old hash from info.hash: a wrong one reads as a change by someone else
+      const next = { ...info, bytes: r.bytes, hash: "0".repeat(64) };
+      const r2 = await saveFile({ ...io(exec), on, path: p, info: next, bytes: bufferBytes("x\n", next) });
+      assert.equal(r2.ok, false);
+      assert.match(r2.error, /changed since it was opened/);
+      const r3 = await saveFile({ ...io(exec), on, path: p, info: { ...next, hash: r.hash }, bytes: bufferBytes("x\n", next) });
+      assert.equal(r3.ok, true, r3.error);
       assert.equal(fs.readFileSync(p, "utf8"), "x\r\n");
     });
 
@@ -929,4 +953,93 @@ describe("mode with special bits, the same on GNU and BSD stat", () => {
     }
     assert.ok(calls.length > 0);
   });
+});
+
+// ---- the check always ends (herdr's QuickJS interrupts a job after about 0.5 s with an error JS cannot catch)
+
+// A fake timer: run(ms) fires the timers of that delay armed so far, as the host would once the current job ended.
+function fakeTimers() {
+  const armed = [];
+  return {
+    armed,
+    after: (ms, fn) => armed.push({ ms, fn }),
+    run: (ms) => armed.filter((t) => t.ms === ms && !t.fired).forEach((t) => { t.fired = true; t.fn(); }),
+  };
+}
+const probeOut = (text) => ({ code: 0, stdout: `file y 644 ${Buffer.byteLength(text)} n\n${Buffer.from(text).toString("base64")}\n`, stderr: "" });
+const settle = () => new Promise((r) => setImmediate(r));
+
+describe("probeFileGuarded", () => {
+  test("a check interrupted by the runtime still ends: Could not check this file", async () => {
+    const t = fakeTimers(), results = [];
+    // The interrupt cannot be caught, so nothing after it runs in that job; the host then fires the timers. Modelled by a
+    // check that lets the zero timer (armed before the check) fire while it is still running.
+    const check = () => { t.run(0); return { ok: true, info: {} }; };
+    probeFileGuarded({ exec: async () => probeOut("hi\n"), path: "/f", maxChars: 100, after: t.after, check }, (r) => results.push(r));
+    await settle();
+    assert.deepEqual(results, [{ ok: false, reason: CHECK_FAILED }]);
+    assert.equal(CHECK_FAILED, "Could not check this file");
+  });
+
+  test("a check that throws ends with Could not check this file", async () => {
+    const t = fakeTimers(), results = [];
+    probeFileGuarded({ exec: async () => probeOut("hi\n"), path: "/f", maxChars: 100, after: t.after, check: () => { throw new Error("boom"); } }, (r) => results.push(r));
+    await settle();
+    t.run(0);
+    assert.deepEqual(results, [{ ok: false, reason: CHECK_FAILED }]);
+  });
+
+  test("a probe without an answer ends after the timeout", async () => {
+    const t = fakeTimers(), results = [];
+    probeFileGuarded({ exec: () => new Promise(() => {}), path: "/f", maxChars: 100, after: t.after }, (r) => results.push(r));
+    await settle();
+    assert.deepEqual(results, []);
+    assert.equal(t.armed[0].ms, CHECK_TIMEOUT_MS);
+    t.run(CHECK_TIMEOUT_MS);
+    assert.deepEqual(results, [{ ok: false, reason: `${CHECK_FAILED} (no answer)` }]);
+  });
+
+  test("a rejected or failed probe: Cannot read this file, once", async () => {
+    for (const exec of [async () => { throw new Error("gone"); }, async () => ({ code: 1, stdout: "", stderr: "x" })]) {
+      const t = fakeTimers(), results = [];
+      probeFileGuarded({ exec, path: "/f", maxChars: 100, after: t.after }, (r) => results.push(r));
+      await settle();
+      t.run(0);
+      t.run(CHECK_TIMEOUT_MS);
+      assert.deepEqual(results, [{ ok: false, reason: "Cannot read this file" }]);
+    }
+  });
+
+  test("a good check ends once with its result; the timers that fire later change nothing", async () => {
+    const t = fakeTimers(), results = [];
+    probeFileGuarded({ exec: async () => probeOut("hä\r\n"), path: "/f", maxChars: 100, after: t.after }, (r) => results.push(r));
+    await settle();
+    t.run(0);
+    t.run(CHECK_TIMEOUT_MS);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].ok, true);
+    assert.equal(results[0].info.text, "hä\n");
+    assert.equal(results[0].info.eol, "CRLF");
+  });
+});
+
+// Exactly EDIT_MAX_BYTES of multibyte text with CRLF line ends.
+function mibText() {
+  const unit = "Grüße € 😀 the quick brown fox\r\n";
+  const n = Math.floor(EDIT_MAX_BYTES / Buffer.byteLength(unit));
+  const text = unit.repeat(n) + "x".repeat(EDIT_MAX_BYTES - n * Buffer.byteLength(unit));
+  assert.equal(Buffer.byteLength(text), EDIT_MAX_BYTES);
+  return text;
+}
+
+test("1 MiB (the edit limit) of multibyte CRLF text passes the check, one byte more is refused", () => {
+  const text = mibText();
+  const r = checkEditable(parseProbe(probeOut(text).stdout), { maxChars: 2000000 });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.info.eol, "CRLF");
+  assert.equal(r.info.text, text.replaceAll("\r\n", "\n"));
+  assert.deepEqual(Buffer.from(r.info.bytes), Buffer.from(text));
+  assert.deepEqual(Buffer.from(bufferBytes(r.info.text, r.info)), Buffer.from(text));
+  const over = text + "y";
+  assert.equal(checkEditable(parseProbe(probeOut(over).stdout), { maxChars: 2000000 }).reason, "File larger than 1 MiB");
 });

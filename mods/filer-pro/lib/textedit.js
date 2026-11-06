@@ -3,12 +3,15 @@
 // locally or on a machine (non-login sh, POSIX tools only, GNU and BSD/macOS). Paths and data travel only as
 // positional arguments, never inside the script text. No sudo, no prompts.
 // No Buffer, TextDecoder, crypto or Intl here (and no locale formatting): the QuickJS runtime has none of them.
+// herdr interrupts a job that runs longer than about 0.5 s with an error JS cannot catch: the check stays below that
+// for 1 MiB (native codecs, lib/textcodec.js), hashing yields through an injected pause(), and probeFileGuarded ends
+// a check in any case.
 //
 // The text never travels in argv (other users could read it there with ps): stage() writes it as base64 into a private
 // local file; locally BEGIN_FILE_SCRIPT decodes that file, for a machine send() first copies it there with scp
 // (bin/transfer.sh, as uploads do) and BEGIN_FILE_SCRIPT decodes it on the machine.
 
-import { base64ToBytes, bytesToBase64, decodeUtf8, encodeUtf8, sha256Hex } from "./textcodec.js";
+import { base64ToBytes, bytesToBase64, decodeUtf8, encodeUtf8, sha256HexSliced } from "./textcodec.js";
 import { validateName } from "./fileops.js";
 import { explainError } from "./errors.js";
 import { joinPath, tempName } from "./names.js";
@@ -337,15 +340,54 @@ export function createHistory({ maxEntries = 100, maxChars = 16 * 1024 * 1024, m
 
 // ---- exec: probe, upload, save
 
+const CANNOT_READ = { ok: false, reason: "Cannot read this file" };
+
+// The probe's exec result -> the result of checkEditable.
+const checkProbe = (res, maxChars) => (!res || res.code !== 0 ? CANNOT_READ : checkEditable(parseProbe(res.stdout), { maxChars }));
+
 export async function probeFile({ exec, on = null, path, maxChars }) {
   let res;
   try {
     res = await exec("sh", ["-c", PROBE_SCRIPT, "probe", path], { on });
   } catch {
-    return { ok: false, reason: "Cannot read this file" };
+    return CANNOT_READ;
   }
-  if (!res || res.code !== 0) return { ok: false, reason: "Cannot read this file" };
-  return checkEditable(parseProbe(res.stdout), { maxChars });
+  return checkProbe(res, maxChars);
+}
+
+export const CHECK_FAILED = "Could not check this file";
+export const CHECK_TIMEOUT_MS = 60000;
+
+// probeFile that always ends: done(result) runs exactly once. after(ms, fn) is a timer (cx.timer.after).
+// - The check part (parse and checkEditable) runs synchronously in the job that receives the probe output. A timer is
+//   armed right before it: it can only fire after that job, so it finds the check unfinished only when the runtime
+//   interrupted the job (uncatchable, nothing after it in that job runs) -> CHECK_FAILED.
+// - A check that throws -> CHECK_FAILED; no answer within timeoutMs -> CHECK_FAILED with "no answer".
+// check is the check part, replaceable for tests.
+export function probeFileGuarded({ exec, on = null, path, maxChars, after, timeoutMs = CHECK_TIMEOUT_MS, check = checkProbe }, done) {
+  let ended = false;
+  const end = (r) => {
+    if (ended) return;
+    ended = true;
+    done(r);
+  };
+  after(timeoutMs, () => end({ ok: false, reason: `${CHECK_FAILED} (no answer)` }));
+  (async () => {
+    let res;
+    try {
+      res = await exec("sh", ["-c", PROBE_SCRIPT, "probe", path], { on });
+    } catch {
+      return end(CANNOT_READ);
+    }
+    after(0, () => end({ ok: false, reason: CHECK_FAILED }));
+    let r;
+    try {
+      r = check(res, maxChars);
+    } catch {
+      r = { ok: false, reason: CHECK_FAILED };
+    }
+    end(r);
+  })();
 }
 
 const firstLine = (s) => String(s ?? "").split("\n")[0].trim();
@@ -444,13 +486,18 @@ async function clean(exec, on, tmp) {
   }
 }
 
+// No pause between hash slices (tests); the app passes a timer wait, see sha256HexSliced.
+const noPause = async () => {};
+
 // Writes bytes into the open file in place. info is the baseline the editor started from (info.bytes = what the file
-// held). -> { ok: true, bytes, hash } (the sent bytes are the new baseline) | { ok: false, error, kept? }.
+// held, info.hash its sha256 when known). -> { ok: true, bytes, hash } (the sent bytes are the new baseline) | { ok: false, error, kept? }.
+// pause() runs between hash slices so 1 MiB hashes without hitting herdr's per-job time limit.
 // kept: a path on the machine that still holds the text; backup: the backup of the original (only after "may be incomplete").
-export async function saveFile({ exec, on = null, path, info, bytes, stage, send }) {
+export async function saveFile({ exec, on = null, path, info, bytes, stage, send, pause = noPause }) {
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
-  const oldHash = sha256Hex(info.bytes);
-  const hash = sha256Hex(bytes);
+  const oldHash = info.hash ?? (await sha256HexSliced(info.bytes, pause));
+  await pause();
+  const hash = await sha256HexSliced(bytes, pause);
   const up = await upload(exec, on, bytes, stage, send);
   if (up.error) return { ok: false, error: up.error };
   const tmp = up.tmp;
@@ -484,13 +531,13 @@ export async function saveFile({ exec, on = null, path, info, bytes, stage, send
 
 // Creates a new file <dir>/<name> with the bytes and the given mode (octal string). Never replaces anything.
 // -> { ok: true, path, bytes, hash } | { ok: false, error }.
-export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage, send }) {
+export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage, send, pause = noPause }) {
   const bad = validateName(name ?? "");
   if (bad) return { ok: false, error: bad };
   if (typeof dir !== "string" || !dir.startsWith("/")) return { ok: false, error: "path must be absolute" };
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
   const dest = joinPath(dir, name);
-  const hash = sha256Hex(bytes);
+  const hash = await sha256HexSliced(bytes, pause);
   const up = await upload(exec, on, bytes, stage, send);
   if (up.error) return { ok: false, error: up.error };
   let res;

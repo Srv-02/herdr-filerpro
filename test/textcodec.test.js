@@ -7,6 +7,11 @@ import {
   decodeUtf8,
   encodeUtf8,
   sha256Hex,
+  sha256HexSliced,
+  SHA_SLICE,
+  bytesToBinary,
+  binaryToBytes,
+  equalBytes,
 } from "../mods/filer-pro/lib/textcodec.js";
 
 // Deterministic PRNG (mulberry32) so failures are reproducible.
@@ -260,4 +265,85 @@ test("1 MiB input: base64, utf8 and sha256 are correct and fast", () => {
   ascii[n - 2] = 0x61;
   assert.equal(decodeUtf8(ascii), "a".repeat(n));
   assert.ok(Date.now() - t0 < 5000);
+});
+
+// herdr's QuickJS interrupts a job after about 0.5 s; the codecs therefore run natively (atob, btoa, escape, unescape,
+// URI functions). Without those globals they fall back to the JS loops, which must give the same results.
+function withoutNatives(fn) {
+  const names = ["atob", "btoa", "escape", "unescape"];
+  const saved = names.map((n) => Object.getOwnPropertyDescriptor(globalThis, n));
+  const from = Object.getOwnPropertyDescriptor(Uint8Array, "fromBase64");
+  const to = Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toBase64");
+  for (const n of names) delete globalThis[n];
+  delete Uint8Array.fromBase64;
+  delete Uint8Array.prototype.toBase64;
+  try {
+    assert.equal(typeof escape + typeof atob + typeof Uint8Array.fromBase64, "undefinedundefinedundefined");
+    return fn();
+  } finally {
+    names.forEach((n, i) => Object.defineProperty(globalThis, n, saved[i]));
+    if (from) Object.defineProperty(Uint8Array, "fromBase64", from);
+    if (to) Object.defineProperty(Uint8Array.prototype, "toBase64", to);
+  }
+}
+
+test("equalBytes compares content, with and without the native route", () => {
+  const rnd = prng(12);
+  const a = randomBytes(rnd, 5000);
+  const b = a.slice();
+  for (const run of [(f) => f(), withoutNatives]) {
+    run(() => {
+      assert.equal(equalBytes(a, b), true);
+      assert.equal(equalBytes(u8(), u8()), true);
+      b[4999] ^= 1;
+      assert.equal(equalBytes(a, b), false);
+      b[4999] ^= 1;
+      assert.equal(equalBytes(a, b.subarray(1)), false);
+      assert.equal(equalBytes(a, null), false);
+    });
+  }
+});
+
+test("codecs give the same results with and without the native routes", () => {
+  const rnd = prng(77);
+  const samples = [u8(), u8(0x41), u8(0xc3, 0xa4), u8(0xc0, 0x80), u8(0xed, 0xa0, 0x80), u8(0xf4, 0x90, 0x80, 0x80), u8(0xe2, 0x82)];
+  for (let i = 0; i < 300; i++) samples.push(randomBytes(rnd, Math.floor(rnd() * 40)));
+  for (let i = 0; i < 100; i++) samples.push(new Uint8Array(Buffer.from(randomString(rnd, 30), "utf8")));
+  const run = () => samples.map((b) => {
+    const b64 = bytesToBase64(b);
+    const text = decodeUtf8(b);
+    return { b64, back: Array.from(base64ToBytes(b64)), text, enc: text === null ? null : Array.from(encodeUtf8(text)) };
+  });
+  const native = run();
+  const loops = withoutNatives(run);
+  assert.deepEqual(native, loops);
+  for (const s of ["\ud800", "a\udc00b", "ok ä € 😀"]) {
+    assert.deepEqual(encodeUtf8(s) && Array.from(encodeUtf8(s)), withoutNatives(() => encodeUtf8(s) && Array.from(encodeUtf8(s))), JSON.stringify(s));
+  }
+  for (const bad of ["Zm9v!", "Zm9", "Zg===", "=Zg=", "Zm9v\u00a0", "Zm9v\u000b"]) {
+    assert.equal(withoutNatives(() => base64ToBytes(bad)), null, JSON.stringify(bad));
+    assert.equal(base64ToBytes(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("bytesToBinary and binaryToBytes round-trip all 256 byte values and long input", () => {
+  const all = Uint8Array.from({ length: 256 }, (_, i) => i);
+  assert.equal(bytesToBinary(all).length, 256);
+  assert.deepEqual(binaryToBytes(bytesToBinary(all)), all);
+  const big = randomBytes(prng(9), 70000); // more than one slice of String.fromCharCode.apply
+  assert.deepEqual(binaryToBytes(bytesToBinary(big)), big);
+});
+
+test("sha256HexSliced: same hash as sha256Hex, pause between the slices only", async () => {
+  const rnd = prng(31);
+  for (const n of [0, 1, 63, 64, 65, 200, 1000]) {
+    const b = randomBytes(rnd, n);
+    let pauses = 0;
+    assert.equal(await sha256HexSliced(b, async () => { pauses++; }, 64), sha(b), `length ${n}`);
+    assert.equal(pauses, Math.max(0, Math.floor(n / 64) - 1), `pauses for ${n}`);
+  }
+  const mib = randomBytes(rnd, 1048576);
+  let pauses = 0;
+  assert.equal(await sha256HexSliced(mib, async () => { pauses++; }), sha(mib));
+  assert.equal(pauses, 1048576 / SHA_SLICE - 1);
 });
