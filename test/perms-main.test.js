@@ -347,3 +347,17 @@ test("rename and new folder dialogs: a failure still sends filer-pro.changed, th
     assert.ok(log.shared.some(([k, v]) => k === "filer-pro.changed" && !v.expand), view);
   }
 });
+
+test("Apply names the changed entry in filer-pro.changed: machine, absolute path, recursive (#41)", async () => {
+  const file = await dialog({ props: { machine: "box" }, answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 0, stdout: "0600\n", stderr: "" } : undefined) });
+  click(file.view(), "filer-pro-perms-group-r", file.cx);
+  click(file.view(), "filer-pro-perms-apply", file.cx);
+  await settle();
+  assert.deepEqual(file.log.shared.filter(([k]) => k === "filer-pro.changed").map(([, v]) => v.perms), [{ machine: "box", path: FILE, recursive: false }]);
+  const dir = await dialog({ probe: DIR_PROBE, props: { path: DIR, isDir: true }, answer: RECURSIVE_ANSWER(3) });
+  click(dir.view(), "filer-pro-perms-recursive", dir.cx);
+  await settle();
+  click(dir.view(), "filer-pro-perms-apply", dir.cx);
+  await settle();
+  assert.deepEqual(dir.log.shared.filter(([k]) => k === "filer-pro.changed").map(([, v]) => v.perms), [{ machine: null, path: DIR, recursive: true }]);
+});
