@@ -28,6 +28,8 @@ Then click `Filer Pro` in the tab bar. To install by hand, see [Manual install](
 
 The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, edit, download, copy, paste, rename, permissions and delete. Apps and other macOS packages show as files: a double click starts them, and Show Package Contents looks inside. System files like `.DS_Store` stay out of the way, and hidden files can go too.
 
+The tree and the open file stay current without polling. On this computer they follow file system events: when an agent or another editor changes the open file, the view updates in place. On an SSH machine Filer Pro sends no commands while you just look: the tree and the open file reload after your own actions in Filer Pro, when you switch to another terminal or folder, and on **Refresh** (the circular arrows in the header); a file you click is always read fresh. A change made on the machine by something else shows at the next of these. Unsaved edits are never replaced by a reload; saving then checks for the outside change as usual. If you want a timer anyway, set **Look for changes every** (`refresh_seconds`) in Settings; a value already saved in `filer-pro.json` (for example the old default 10) keeps polling until you set it to 0. Hand edits of `filer-pro.json` apply on **Refresh** or after saving Settings.
+
 ### Transfers you can trust
 
 ![A running transfer and the conflict dialog](screenshots/transfers.png)
@@ -148,7 +150,7 @@ A missing key means its default. In the file, a number of the wrong type (or wit
 | `list_per_folder` | Advanced, File list limits: Files shown per folder | `500` | 10–10,000 | Entries shown per folder |
 | `list_total` | Advanced, File list limits: Files shown in total | `5000` | 100–20,000 | Entries shown in the whole tree |
 | `tree_depth` | Advanced, File list limits: Deepest folder level | `40` | 1–200 | Deepest folder level shown |
-| `refresh_seconds` | Advanced, File list limits: Look for changes every | `10` | 2–3,600 s | Periodic reload of the tree (it also reloads on file changes and after actions) |
+| `refresh_seconds` | Advanced, File list limits: Look for changes every | `0` (off) | 0 or 2–3,600 s | Periodic reload of the tree and the open file. Off by default: no timer and, on an SSH machine, no commands while idle. The tree and the open file still reload on file system events (this computer), after your own actions, on a folder or terminal switch and on **Refresh**. A reload never overlaps another one; on a slow machine extra triggers wait and run once |
 | `preview_max_chars` | Advanced, Preview limits: Longest formatted preview | `200000` | 10,000–2,000,000 | Characters of a Markdown or HTML preview |
 | `source_max_chars` | Advanced, Preview limits: Longest plain text view | `400000` | 10,000–5,000,000 | Characters of the source view, the rest is cut |
 | `image_max_mb` | Advanced, Preview limits: Show images right away up to | `20` | 1–500 MB | Larger images show a Load button (SVGs: no preview) |
