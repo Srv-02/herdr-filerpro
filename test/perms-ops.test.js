@@ -285,8 +285,12 @@ test("CHMOD_SCRIPT recursive: BSD chmod gets -h (a swapped-in link is changed it
   const bsdLog = fs.readFileSync(`${d}/chmod.log`, "utf8");
   fs.rmSync(`${d}/chmod.log`);
   run("0");
+  // The flags are the words before "--": the temp folder's random name may itself contain "-h" (perms-hfzIZZ).
+  const flags = (log) => log.trim().split("\n").map((line) => line.slice(0, line.indexOf("--")).trim().split(/\s+/).filter(Boolean));
   assert.match(bsdLog, /^-h -- 00750 /m);
-  assert.doesNotMatch(fs.readFileSync(`${d}/chmod.log`, "utf8"), /-h/);
+  assert.ok(flags(bsdLog).every((f) => f.includes("-h")), bsdLog);
+  const gnuLog = fs.readFileSync(`${d}/chmod.log`, "utf8");
+  assert.ok(gnuLog.trim().length > 0 && flags(gnuLog).every((f) => !f.includes("-h")), gnuLog);
 });
 
 // ---- through the fake machine (test/fake/ssh): exec with { on } goes over the fake ssh like a real machine would, the command

@@ -416,3 +416,141 @@ test("triggers coalesce while the machine is slow: one exec in flight, one more 
   assert.equal(w.state.maxInFlight, 1);
   assert.ok(LISTS(w).length <= lists + 2, `at most one catch-up flight (${LISTS(w).length - lists})`);
 });
+
+// ---- the Markdown or HTML preview follows the text on screen (regression of #29 with #31)
+
+const previewText = (self) => self.doc?.parts?.map((p) => p.text ?? "").join("");
+// The preview is prepared in small steps between cx.sleep calls: here they resolve, so it ends.
+const quickSleep = (w) => { w.cx.sleep = () => new Promise((r) => setImmediate(r)); };
+
+test("preview: after an own save the preview shows the saved text, also after leaving edit mode and Refresh", async () => {
+  const w = world();
+  quickSleep(w);
+  w.put("a.md", "# one\n");
+  const self = await boot(w);
+  await opened(w, self, "a.md");
+  await settle(100);
+  assert.match(previewText(self), /# one/, "the preview of the file");
+  self.mode = "source";
+  click(self.render(w.rcx), "files-edit", w.cx);
+  await settle();
+  assert.ok(self.edit, "edit mode is on");
+  type(w, self.edit.state, "# two\n");
+  click(self.render(w.rcx), "files-save", w.cx);
+  await settle(200);
+  assert.equal(w.read("a.md"), "# two\n");
+  click(self.render(w.rcx), "files-edit", w.cx); // leave edit mode (clean)
+  await settle(100);
+  assert.equal(self.edit, null);
+  assert.match(previewText(self), /# two/, "the preview follows the save");
+  click(self.render(w.rcx), "files-refresh", w.cx); // drawn in the source view: the stubs have no Markdown view
+  await settle(200);
+  assert.match(previewText(self), /# two/, "and stays right after Refresh");
+});
+
+test("preview: a clean edit buffer that reloads a changed file updates the preview too", async () => {
+  const w = world();
+  quickSleep(w);
+  w.put("a.md", "# one\n");
+  const self = await boot(w);
+  await opened(w, self, "a.md");
+  await settle(100);
+  self.mode = "source";
+  click(self.render(w.rcx), "files-edit", w.cx);
+  await settle();
+  assert.ok(self.edit);
+  w.put("a.md", "# three\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "a.md")]);
+  await settle(200);
+  assert.equal(self.edit.state.value(), "# three\n");
+  assert.match(previewText(self), /# three/, "the preview of the reloaded text");
+});
+
+test("preview: Refresh re-renders a preview that does not match the text on screen", async () => {
+  const w = world();
+  quickSleep(w);
+  w.put("a.md", "# one\n");
+  const self = await boot(w);
+  await opened(w, self, "a.md");
+  await settle(100);
+  self.doc = { ...self.doc, parts: [{ kind: "markdown", text: "# stale\n" }] }; // a preview from older text
+  self.mode = "source"; // drawn in the source view: the stubs have no Markdown view
+  click(self.render(w.rcx), "files-refresh", w.cx);
+  await settle(200);
+  assert.match(previewText(self), /# one/);
+});
+
+// ---- a file in an error state is not read again on every change signal (regression of #31 with #32/#33)
+
+for (const [where, machine] of [["remote", "box"], ["local", null]]) {
+  test(`error state (${where}): filer-pro.changed does not read the file again; Refresh and a click do`, async () => {
+    const w = world({ machine });
+    w.put("bin.txt", "a\0b\n"); // a NUL: shown as an error, no editor
+    const self = await boot(w);
+    await opened(w, self, "bin.txt");
+    assert.ok(self.fileError, "the file is in an error state");
+    const reads = READS(w, "bin.txt").length, probes = PROBES(w).length;
+    const nonList = () => w.log.execs.filter((e) => !(e.cmd === "sh" && e.args[1] === LIST_SCRIPT) && e.cmd !== "git").length;
+    const execs = nonList();
+    for (let i = 0; i < 5; i++) {
+      w.store["filer-pro.changed"] = { at: 1000 + i };
+      await w.run(1_000);
+      await settle();
+    }
+    console.log(`# error state ${where}: ${READS(w, "bin.txt").length - reads} reads, ${nonList() - execs} execs besides the listing after 5 signals`);
+    assert.equal(READS(w, "bin.txt").length, reads, "no readTextFile per signal");
+    assert.equal(PROBES(w).length, probes, "no probe per signal");
+    assert.equal(nonList(), execs, "no exec besides the tree reload");
+    click(self.render(w.rcx), "files-refresh", w.cx);
+    await settle(200);
+    assert.equal(READS(w, "bin.txt").length, reads + 1, "Refresh reads it again");
+    await opened(w, self, "bin.txt");
+    assert.equal(READS(w, "bin.txt").length, reads + 2, "a click reads it again");
+  });
+}
+
+test("error state (local): a watch event that names the file reads it again", async () => {
+  const w = world();
+  w.put("bin.txt", "a\0b\n");
+  const self = await boot(w);
+  await opened(w, self, "bin.txt");
+  assert.ok(self.fileError);
+  const reads = READS(w, "bin.txt").length;
+  w.fire(w.ROOT, [path.join(w.ROOT, "other.txt")]);
+  await settle(100);
+  assert.equal(READS(w, "bin.txt").length, reads, "another file: not read");
+  w.put("bin.txt", "fine now\n");
+  w.fire(w.ROOT, [path.join(w.ROOT, "bin.txt")]);
+  await settle(100);
+  assert.equal(READS(w, "bin.txt").length, reads + 1);
+  assert.equal(self.fileError, null);
+  assert.equal(self.code.value(), "fine now\n");
+});
+
+test("loading a large file through a job: signals and Refresh read nothing and leave one wait loop", async () => {
+  const w = world({ machine: "box" });
+  w.put("a.txt", "one\n");
+  const self = await boot(w);
+  await opened(w, self);
+  quickSleep(w);
+  let outcomes = 0;
+  const previewer = { loadOutcome: () => { outcomes++; return { show: false, error: "Load failed" }; } };
+  w.store["filer-pro.jobs"] = { j1: { id: "j1", state: "running" } };
+  self.waitLoad(previewer, "j1", "a.txt", w.cx);
+  await settle();
+  assert.equal(self.fileError, "Loading… · progress in the transfers bar");
+  const reads = READS(w, "a.txt").length, execs = w.log.execs.length;
+  w.store["filer-pro.changed"] = { at: 4242 };
+  await w.run(1_000);
+  click(self.render(w.rcx), "files-refresh", w.cx);
+  await settle(200);
+  self.waitLoad(previewer, "j1", "a.txt", w.cx); // joined again, as showHint does when it finds the running job
+  await settle();
+  assert.equal(READS(w, "a.txt").length, reads, "no read of the file meanwhile");
+  assert.equal(self.fileError, "Loading… · progress in the transfers bar", "still waiting");
+  assert.ok(w.log.execs.slice(execs).every((e) => e.cmd === "git" || e.args[1] === LIST_SCRIPT), "only the tree reloads");
+  w.store["filer-pro.jobs"] = { j1: { id: "j1", state: "failed" } };
+  await settle(100);
+  assert.equal(outcomes, 1, "one wait loop ends, not two");
+  assert.equal(self.fileError, "Load failed");
+});

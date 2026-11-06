@@ -183,6 +183,7 @@ test("a refusal by the system stays in the dialog, which stays open", async () =
   assert.deepEqual(log.closed, []);
   assert.equal(log.notes.length, 0);
   assert.equal(self.perms.busy, false);
+  assert.ok(log.shared.some(([k]) => k === "filer-pro.changed"), "the tree reloads anyway: a recursive change may have run halfway (#31)");
 });
 
 const RECURSIVE_ANSWER = (count) => (cmd, args) => (args[1] === COUNT_SCRIPT ? { code: 0, stdout: `  ${count}\n`, stderr: "" } : args[1] === GUARD_SCRIPT ? { code: 0, stdout: nul("y", "d", ROOT, ROOT, "/Users/example", "n", "n", "n", "n"), stderr: "" } : undefined);
@@ -329,4 +330,20 @@ test("a probe that fails shows its message and offers only Close", async () => {
   assert.deepEqual(byId(view(), "filer-pro-perms-cancel").kids, ["Close"]);
   assert.equal(click(view(), "filer-pro-perms-apply", cx), false, "Apply is there (same layout) but inert");
   assert.match(notesText(view), /permissions/i);
+});
+
+// Regression of #31 (no timer), in the same main.js harness: the rename and new-folder dialogs signal the tree also
+// when the operation failed (on a machine it may still have happened), and keep the dialog open with the error.
+test("rename and new folder dialogs: a failure still sends filer-pro.changed, the dialog stays open", async () => {
+  for (const view of ["rename", "mkdir"]) {
+    const log = host({ props: { overlay: "ov1", view, machine: "box", path: "/srv/a", root: "/srv" } });
+    const cx = fakeCx();
+    const self = Object.create(FilerPro.prototype);
+    self.fileOps = { rename: async () => ({ ok: false, error: "Machine not reachable" }), mkdir: async () => ({ ok: false, error: "Machine not reachable" }) };
+    self.dialog = { busy: false, error: null };
+    await self.submitName("b", cx);
+    assert.equal(self.dialog.error, "Machine not reachable", view);
+    assert.deepEqual(log.closed, [], view);
+    assert.ok(log.shared.some(([k, v]) => k === "filer-pro.changed" && !v.expand), view);
+  }
 });

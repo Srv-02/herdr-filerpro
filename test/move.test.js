@@ -464,3 +464,14 @@ test("a mount reported without a message still refuses Replace (#31, #34)", asyn
   assert.equal(out.ok, false);
   assert.ok(out.error.length > 0);
 });
+
+// Regression of #30: the mount refusal's "Operation not permitted" follows the platform and the side it ran on.
+test("moveVerdict: a not permitted mount check names the macOS privacy settings only locally on macOS", () => {
+  const info = P(["/x/in", "y", "d", "n", "n", "n", "y", "1", "1", ""].join("\0"));
+  const v = (o) => moveVerdict({ info, src: "/x/a", destDir: "/x/in", stderr: "find: /x/in/m: Operation not permitted", ...o }).replaceError;
+  assert.equal(v({}), "Not permitted: macOS privacy settings, owner, or a locked item.");
+  assert.equal(v({ localPlatform: "macos" }), "Not permitted: macOS privacy settings, owner, or a locked item.");
+  assert.equal(v({ localPlatform: "linux" }), "Not permitted (owner, sticky folder or locked item)");
+  assert.equal(v({ localPlatform: "windows" }), "Not permitted (owner, sticky folder or locked item)");
+  assert.equal(v({ on: "box", localPlatform: "macos" }), "Not permitted (owner, sticky folder or locked item)");
+});

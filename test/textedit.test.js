@@ -1043,3 +1043,38 @@ test("1 MiB (the edit limit) of multibyte CRLF text passes the check, one byte m
   const over = text + "y";
   assert.equal(checkEditable(parseProbe(probeOut(over).stdout), { maxChars: 2000000 }).reason, "File larger than 1 MiB");
 });
+
+// Regression of #29 merged after #30: a local "Operation not permitted" names the macOS privacy settings only on macOS.
+describe("localPlatform in the save texts", () => {
+  const MAC = "Not permitted: macOS privacy settings, owner, or a locked item.";
+  const NEUTRAL = "Not permitted (owner, sticky folder or locked item)";
+  // Every command answers EPERM; the staged file is a real local path, so upload gets to its first exec.
+  const denied = (step) => {
+    const exec = async (cmd, args) => {
+      const script = args?.[1];
+      if (step === "begin" && script === BEGIN_FILE_SCRIPT) return { code: 1, stdout: "", stderr: "sh: /x: Operation not permitted" };
+      if (script === BEGIN_FILE_SCRIPT) return { code: 0, stdout: "/x/up.tmp\n", stderr: "" };
+      if (script === COMMIT_SCRIPT || script === COPY_SCRIPT) return { code: 1, stdout: "", stderr: "sh: /x/a.txt: Operation not permitted" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    return { exec, stage: async () => "/x/stage.b64" };
+  };
+  const info = { bytes: new Uint8Array([97]), hash: null, text: "a", eol: "LF", mode: "644", size: 1 };
+  const bytes = new Uint8Array([98]);
+  for (const [platform, want] of [[undefined, MAC], ["macos", MAC], ["linux", NEUTRAL], ["windows", NEUTRAL]]) {
+    test(`saveFile, saveCopy and the upload on ${platform ?? "an unknown platform"}`, async () => {
+      assert.equal((await saveFile({ ...denied("commit"), path: "/x/a.txt", info, bytes, localPlatform: platform })).error, want);
+      assert.equal((await saveCopy({ ...denied("commit"), dir: "/x", name: "b.txt", bytes, mode: "644", localPlatform: platform })).error, want);
+      assert.equal((await saveFile({ ...denied("begin"), path: "/x/a.txt", info, bytes, localPlatform: platform })).error, want);
+      const thrown = { exec: async () => { throw new Error("Operation not permitted"); }, stage: async () => "/x/stage.b64" };
+      assert.equal((await saveFile({ ...thrown, path: "/x/a.txt", info, bytes, localPlatform: platform })).error, `Cannot reach the machine: ${want}`);
+    });
+  }
+  test("scpSender: a local side that is not permitted (scp open local) follows localPlatform too", async () => {
+    const exec = async (cmd, args) => (cmd === "sh" && args[0] === "-c" ? { code: 0, stdout: 'open local "/x/stage.b64": Operation not permitted\n', stderr: "" } : { code: 1, stdout: "", stderr: "" });
+    const hc = async () => ({ code: 0, stdout: MACHINES, stderr: "" });
+    const send = (localPlatform) => scpSender({ exec, hc, script: "/t.sh", trashDir: "/t", limits: () => numbers(null), localPlatform })({ on: "box", src: "/x/stage.b64", dir: "/r", name: "n" });
+    assert.equal((await send("linux")).error, NEUTRAL);
+    assert.equal((await send("macos")).error, MAC);
+  });
+});

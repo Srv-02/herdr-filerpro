@@ -393,13 +393,15 @@ export function probeFileGuarded({ exec, on = null, path, maxChars, after, timeo
 const firstLine = (s) => String(s ?? "").split("\n")[0].trim();
 const lines = (s) => String(s ?? "").split("\n").map((l) => l.trim());
 
-const cannotReach = (e, on) => `Cannot reach the machine: ${explainError(String(e?.message ?? e), on)}`;
+// localPlatform (window().platform of this computer) decides the text of a local "Operation not permitted" (errors.js).
+const explain = (stderr, on, fallback, localPlatform) => explainError(stderr, on, fallback, { localPlatform });
+const cannotReach = (e, on, localPlatform) => `Cannot reach the machine: ${explain(String(e?.message ?? e), on, undefined, localPlatform)}`;
 
 // Uploads bytes into a fresh private file on the machine. -> { tmp } | { error }. Nothing is left behind on failure.
 // stage(b64) writes the base64 into a private local file and resolves with its path; for a machine, send({ on, src, dir,
 // name }) copies that file to <dir>/<name> there (scpSender) -> { ok } | { ok: false, error }. The local file is removed
 // in any case (locally by BEGIN_FILE_SCRIPT, for a machine here, after the copy).
-async function upload(exec, on, bytes, stage, send) {
+async function upload(exec, on, bytes, stage, send, localPlatform) {
   if (!stage || (on != null && !send)) return { error: "Could not prepare the text for saving" };
   let src = null;
   try { src = await stage(bytesToBase64(bytes)); } catch { src = null; }
@@ -433,14 +435,14 @@ async function upload(exec, on, bytes, stage, send) {
       const word = firstLine(res.stdout);
       if (word === "nocache") return { error: "Cannot create the private upload folder on the machine" };
       if (word === "nobase64") return { error: "The machine has no base64 tool" };
-      return { error: explainError(res.stderr, on, "Could not upload the text") };
+      return { error: explain(res.stderr, on, "Could not upload the text", localPlatform) };
     }
     tmp = firstLine(res.stdout);
     if (!tmp.startsWith("/")) return await fail("Could not upload the text");
     return { tmp };
   } catch (e) {
     if (on == null) await removeLocal(exec, src);
-    return await fail(cannotReach(e, on));
+    return await fail(cannotReach(e, on, localPlatform));
   }
 }
 
@@ -456,7 +458,7 @@ async function removeLocal(exec, src) {
 // replaced. It runs as one exec (30 s limit; a save is at most about 1.4 MB of base64), without a job row, progress
 // or cancel. The status file lands next to the staged file and is removed again.
 // deps: { exec, hc, script (path of transfer.sh), trashDir, limits() -> config numbers }.
-export function scpSender({ exec, hc, script, trashDir, limits }) {
+export function scpSender({ exec, hc, script, trashDir, limits, localPlatform }) {
   return async ({ on, src, dir, name }) => {
     let t;
     try {
@@ -474,7 +476,7 @@ export function scpSender({ exec, hc, script, trashDir, limits }) {
       detail = String(st.stdout ?? "").split("\n").filter((l) => l && !l.startsWith("state=") && !l.startsWith("code=")).join(" ").trim();
     } catch {}
     if (r.code === 0) return { ok: true };
-    return { ok: false, error: explainError(detail || r.stderr, t.target, "scp failed") };
+    return { ok: false, error: explain(detail || r.stderr, t.target, "scp failed", localPlatform) };
   };
 }
 
@@ -493,19 +495,19 @@ const noPause = async () => {};
 // held, info.hash its sha256 when known). -> { ok: true, bytes, hash } (the sent bytes are the new baseline) | { ok: false, error, kept? }.
 // pause() runs between hash slices so 1 MiB hashes without hitting herdr's per-job time limit.
 // kept: a path on the machine that still holds the text; backup: the backup of the original (only after "may be incomplete").
-export async function saveFile({ exec, on = null, path, info, bytes, stage, send, pause = noPause }) {
+export async function saveFile({ exec, on = null, path, info, bytes, stage, send, pause = noPause, localPlatform }) {
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
   const oldHash = info.hash ?? (await sha256HexSliced(info.bytes, pause));
   await pause();
   const hash = await sha256HexSliced(bytes, pause);
-  const up = await upload(exec, on, bytes, stage, send);
+  const up = await upload(exec, on, bytes, stage, send, localPlatform);
   if (up.error) return { ok: false, error: up.error };
   const tmp = up.tmp;
   let res;
   try {
     res = await exec("sh", ["-c", COMMIT_SCRIPT, "commit", tmp, path, oldHash, hash], { on });
   } catch (e) {
-    return { ok: false, error: cannotReach(e, on) };
+    return { ok: false, error: cannotReach(e, on, localPlatform) };
   }
   const [word, a, b] = lines(res.stdout);
   if (res.code === 0 && word === "ok") return { ok: true, bytes, hash };
@@ -526,25 +528,25 @@ export async function saveFile({ exec, on = null, path, info, bytes, stage, send
     nobackup: "Could not make a backup first; nothing was written",
     nohash: "The machine has no sha256 tool (sha256sum, shasum or openssl)",
   };
-  return { ok: false, error: known[word] ?? explainError(res.stderr, on, "Could not write the file") };
+  return { ok: false, error: known[word] ?? explain(res.stderr, on, "Could not write the file", localPlatform) };
 }
 
 // Creates a new file <dir>/<name> with the bytes and the given mode (octal string). Never replaces anything.
 // -> { ok: true, path, bytes, hash } | { ok: false, error }.
-export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage, send, pause = noPause }) {
+export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage, send, pause = noPause, localPlatform }) {
   const bad = validateName(name ?? "");
   if (bad) return { ok: false, error: bad };
   if (typeof dir !== "string" || !dir.startsWith("/")) return { ok: false, error: "path must be absolute" };
   if (!bytes) return { ok: false, error: "Text contains characters that cannot be saved as UTF-8" };
   const dest = joinPath(dir, name);
   const hash = await sha256HexSliced(bytes, pause);
-  const up = await upload(exec, on, bytes, stage, send);
+  const up = await upload(exec, on, bytes, stage, send, localPlatform);
   if (up.error) return { ok: false, error: up.error };
   let res;
   try {
     res = await exec("sh", ["-c", COPY_SCRIPT, "copy", up.tmp, dest, hash, String(mode ?? "600").slice(-3)], { on });
   } catch (e) {
-    return { ok: false, error: cannotReach(e, on) };
+    return { ok: false, error: cannotReach(e, on, localPlatform) };
   }
   const word = firstLine(res.stdout);
   if (res.code === 0 && word === "ok") return { ok: true, path: dest, bytes, hash };
@@ -556,5 +558,5 @@ export async function saveCopy({ exec, on = null, dir, name, bytes, mode, stage,
     failed: "Could not create the copy",
     nohash: "The machine has no sha256 tool (sha256sum, shasum or openssl)",
   };
-  return { ok: false, error: known[word] ?? explainError(res.stderr, on, "Could not create the copy") };
+  return { ok: false, error: known[word] ?? explain(res.stderr, on, "Could not create the copy", localPlatform) };
 }

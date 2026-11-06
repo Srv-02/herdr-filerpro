@@ -77,8 +77,9 @@ test("prepare runs in pieces with a pause between them, the source view appears 
   assert.doesNotMatch(src, /previewer\.prepare\(/, "no synchronous prepare on the UI thread");
   assert.ok(src.includes("previewer.prepareAsync("));
   assert.ok(src.includes("cx.sleep("));
-  assert.ok(src.indexOf("cx.notify(); // the source is on screen") < src.indexOf("previewer.prepareAsync("), "the source shows before preparing");
-  assert.ok(src.includes("alive: () => this.file === path && this.current(context)"));
+  const show = src.indexOf("  show(path, cx, opts = {}) {");
+  assert.ok(src.indexOf("cx.notify(); // the source is on screen", show) < src.indexOf("this.preparePreview(", show), "the source shows before preparing");
+  assert.ok(src.includes("const alive = () => this.file === path && this.current(context) && this.shownText === text;"), "a preview of older text is never swapped in");
 });
 
 test("mods/filer-pro/ uses no setTimeout (the Herdr runtime has none): cx.sleep or cx.timer", () => {

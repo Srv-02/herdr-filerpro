@@ -21,7 +21,7 @@ export const NUMBERS = Object.freeze([
   int("list_total", 5000, 100, 20000, "Files shown in total", "Across all open folders together.", "File list limits", "files"),
   int("tree_depth", 40, 1, 200, "Deepest folder level", "Folders nested deeper than this are not listed.", "File list limits", "levels"),
   // zero: 0 is allowed besides min–max and means off (no timer, no exec while idle: issue #31).
-  int("refresh_seconds", 0, 2, 3600, "Look for changes every", "0 turns it off: the list and the open file then update after your own actions, on Refresh, when you switch folders, and on this Mac when files change.", "File list limits", "seconds", true),
+  int("refresh_seconds", 0, 2, 3600, "Look for changes every", "0 turns it off: the list and the open file then update after your own actions, on Refresh, when you switch folders, and when files in a folder on this computer change.", "File list limits", "seconds", true),
   int("preview_max_chars", 200000, 10000, 2000000, "Longest formatted preview", "Longer Markdown and HTML files are cut off.", "Preview limits", "characters"),
   int("source_max_chars", 400000, 10000, 5000000, "Longest plain text view", "Longer text is cut off.", "Preview limits", "characters"),
   int("image_max_mb", 20, 1, 500, "Show images right away up to", "Bigger images show a Load button first.", "Preview limits", "MB"),

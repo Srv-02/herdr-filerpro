@@ -51,7 +51,7 @@ function deps(over = {}) {
       mkdir: async (a) => (fileOpsCalls.push(["mkdir", a]), over.fileOpsError ? { ok: false, error: over.fileOpsError } : { ok: true, path: `${a.path}/${a.name}` }),
       inspectMove: async (a) => (fileOpsCalls.push(["inspectMove", a]), over.inspect ?? { ok: true, src: a.src, name: "a", isDir: false, destDir: a.destDir, dest: `${a.destDir}/a`, exists: false, destIsDir: false, replaceError: null }),
       move: async (a) => (fileOpsCalls.push(["move", a]), over.moveOut ?? { ok: true, moved: true, path: "/srv/in/a", name: "a", isDir: false }),
-      remove: async (a) => (fileOpsCalls.push(["remove", a]), a.on ? { ok: true, trashed: false, name: "d", isDir: true } : { ok: true, trashed: true, trash_path: "/Users/m/.Trash/a.txt", name: "a.txt", isDir: false }),
+      remove: async (a) => (fileOpsCalls.push(["remove", a]), over.removeOut ? over.removeOut : a.on ? { ok: true, trashed: false, name: "d", isDir: true } : { ok: true, trashed: true, trash_path: "/Users/m/.Trash/a.txt", name: "a.txt", isDir: false }),
     },
     jobs: {
       inspect: async (a) => (calls.push(["inspect", a]), info),
@@ -488,7 +488,7 @@ test("rename passes through fileOps and signals the tree", async () => {
   assert.deepEqual(d.store["filer-pro.changed"], { at: 777 });
   const e = deps({ fileOpsError: '"b" already exists' });
   assert.deepEqual(await handleRequest({ action: "rename", path: "/Users/m/a", root: "/Users/m", name: "b" }, e), { ok: false, error: '"b" already exists' });
-  assert.equal(e.store["filer-pro.changed"], undefined);
+  assert.deepEqual(e.store["filer-pro.changed"], { at: 777 }, "a failure signals too: on a machine it may still have happened (#31)");
 });
 
 test("delete: check first, then the dialog unless confirm, then remove", async () => {
@@ -633,7 +633,7 @@ test("mkdir passes through fileOps, signals the tree and asks it to open the par
   assert.deepEqual(d.store["filer-pro.changed"], { at: 777, expand: { machine: "box", folder: "/srv/in" } });
   const e = deps({ fileOpsError: 'An item named "n" already exists' });
   assert.deepEqual(await handleRequest({ action: "mkdir", path: "/Users/m/a", name: "n" }, e), { ok: false, error: 'An item named "n" already exists' });
-  assert.equal(e.store["filer-pro.changed"], undefined);
+  assert.deepEqual(e.store["filer-pro.changed"], { at: 777 }, "a failure signals too, without opening the parent");
 });
 
 // ---- delete against the real file system (only inside a throw-away folder below tmp/ of the repo)
@@ -977,4 +977,22 @@ test("#54: runTransfers puts the kind of the existing target into the dialog ite
   await runTransfers({ direction: "local", machine: null, paths: ["/Users/m/a"], destDir: "/Users/m/in" }, d);
   assert.equal(d.asked[0].item.destIsDir, false);
   assert.deepEqual(d.asked[0].choices, ["replace", "keep_both", "cancel"]);
+});
+
+// Regression of #31 (no timer): an operation that failed may still have changed something (a folder deleted halfway, a
+// move that set the old entry aside), so the tree gets the signal anyway; a cancel before anything ran sends none.
+test("a failed delete or move still signals the tree; a cancelled one does not", async () => {
+  const del = deps({ removeOut: { ok: false, error: "rm: /srv/d/x: Permission denied" } });
+  assert.deepEqual(await handleRequest({ action: "delete", machine: "box", path: "/srv/d", root: "/srv", confirm: true }, del), { ok: false, error: "rm: /srv/d/x: Permission denied" });
+  assert.deepEqual(del.store["filer-pro.changed"], { at: 777 });
+  const cut = { "filer-pro.clipboard": { machine: "box", path: "/srv/a", isDir: false, at: 1, cut: true } };
+  const mv = deps({ store: cut, moveOut: { ok: false, error: "Could not move: /srv/a. The old entry is now in: /srv/in/.a.fs-move.1" } });
+  const out = await handleRequest({ action: "paste", machine: "box", folder: "/srv/in", root: "/srv" }, mv);
+  assert.equal(out.ok, false);
+  assert.deepEqual(mv.fileOpsCalls.map((c) => c[0]), ["inspectMove", "move"]);
+  assert.deepEqual(mv.store["filer-pro.changed"], { at: 777 });
+  assert.ok(mv.store["filer-pro.clipboard"], "the Cut stays after a failed move");
+  const cancelled = deps({ store: cut, inspect: { ok: true, src: "/srv/a", name: "a", isDir: false, destDir: "/srv/in", dest: "/srv/in/a", exists: true, destIsDir: false, replaceError: null }, answers: [{ choice: "cancel" }] });
+  assert.deepEqual(await handleRequest({ action: "paste", machine: "box", folder: "/srv/in", root: "/srv" }, cancelled), { ok: false, error: "Cancelled" });
+  assert.equal(cancelled.store["filer-pro.changed"], undefined);
 });

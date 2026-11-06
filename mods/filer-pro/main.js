@@ -68,8 +68,10 @@ const key = () => JSON.stringify(location());
 const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true };
 const MB = 1024 * 1024;
 // How much of the open file a refresh flight reloads at its end (refresh opts.file, this.fileWanted): TEXT only reads and
-// compares text (a watch batch that did not name the file: no exec), ALL also probes an image or PDF again.
-const FILE_TEXT = 1, FILE_ALL = 2;
+// compares text (a watch batch that did not name the file: no exec), ALL also probes an image or PDF again (a change
+// signal), NAMED also reads a file in an error state again (Refresh, a watch batch that names it, the opt-in timer): a
+// change signal names no path, so it never re-reads a file that could not be shown (one more read over SSH each time).
+const FILE_TEXT = 1, FILE_ALL = 2, FILE_NAMED = 3;
 const lf = (text) => String(text ?? "").replace(/\r\n?/g, "\n");
 // A wait for a timer: herdr gives a job about 0.5 s; a timer starts a new job, an awaited resolved promise does not.
 const pauseOf = (cx) => () => new Promise((r) => cx.timer.after(0, () => r()));
@@ -172,7 +174,7 @@ export default class FilerPro extends View {
       const every = this.conf.refresh_seconds;
       if (!every || this.loading || Date.now() - this.refreshedAt < every * 1000) return;
       this.refreshedAt = Date.now();
-      this.reloadConfig(cx, { file: FILE_ALL });
+      this.reloadConfig(cx, { file: FILE_NAMED });
     });
     cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
     this.drive(cx);
@@ -536,7 +538,8 @@ export default class FilerPro extends View {
     try { out = mkdir ? await this.fileOps.mkdir({ on: p.machine ?? null, path: p.path, name }) : await this.fileOps.rename({ on: p.machine ?? null, path: p.path, root: p.root, name }); }
     catch (e) { out = { ok: false, error: String(e?.message ?? e) }; }
     r.busy = false;
-    if (!out.ok) { r.error = out.error; cx?.notify(); return; }
+    // Also after a failure: on a machine it may still have happened (lib/requests.js changedAfter).
+    if (!out.ok) { setShared("filer-pro.changed", { at: Date.now() }); r.error = out.error; cx?.notify(); return; }
     // expand: the panel opens the parent folder, so the new folder is visible.
     setShared("filer-pro.changed", { at: Date.now(), ...(mkdir ? { expand: { machine: p.machine ?? null, folder: p.path } } : {}) });
     const toast = successToast({ action: mkdir ? "mkdir" : "rename", path: p.path }, out);
@@ -584,8 +587,8 @@ export default class FilerPro extends View {
     try { out = await this.fileOps.chmod({ on: p.machine ?? null, path: p.path, root: p.root, mode: s.mode, recursive: s.recursive }); }
     catch (e) { out = { ok: false, error: String(e?.message ?? e) }; }
     s.busy = false;
+    setShared("filer-pro.changed", { at: Date.now() }); // also after a failure: a recursive change may have run halfway
     if (!out.ok) { s.error = out.error; cx?.notify(); return; }
-    setShared("filer-pro.changed", { at: Date.now() });
     const name = baseName(p.path);
     if (out.mismatch) notify({ title: "Permissions differ from the request", body: mismatchText(name, out.requested, out.mode), level: "warning" });
     else notify({ title: "Permissions changed", body: `${name}: ${formatChange(s.original, s.mode)}${s.recursive ? " (with everything inside)" : ""}`, level: "success" });
@@ -624,7 +627,7 @@ export default class FilerPro extends View {
           if (!this.current(context)) continue;
           // Text is read and compared on every batch (a local read, no exec: a symlinked root may name the file
           // differently); an image or PDF is probed again only when the batch names it or a folder above it.
-          this.refresh(cx, { file: !this.file ? 0 : fileHit(paths, joinPath(this.root, this.file)) ? FILE_ALL : FILE_TEXT });
+          this.refresh(cx, { file: !this.file ? 0 : fileHit(paths, joinPath(this.root, this.file)) ? FILE_NAMED : FILE_TEXT });
         }
       }
       catch { if (this.context === context) this.watched = null; }
@@ -705,7 +708,7 @@ export default class FilerPro extends View {
         if (this.context === context && this.current(context)) {
           if (this.again) { this.again = false; this.refresh(cx); }
           else if (this.fileWanted) {
-            const opts = { force: Boolean(this.fileForce), textOnly: this.fileWanted === FILE_TEXT };
+            const opts = { force: Boolean(this.fileForce), textOnly: this.fileWanted === FILE_TEXT, named: this.fileWanted === FILE_NAMED };
             this.fileWanted = 0; this.fileForce = false;
             this.reloadOpen(cx, opts);
           }
@@ -793,7 +796,7 @@ export default class FilerPro extends View {
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
     this.leaveEdit(); this.editCheck = null;
-    this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false; this.shownText = null;
+    this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false; this.shownText = null; this.docText = null; this.waiting = null;
     if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
@@ -851,16 +854,8 @@ export default class FilerPro extends View {
         if (previewer) {
           // The source is on screen now; the preview follows in small steps, so typing and drawing never wait for it.
           cx.notify(); // the source is on screen
-          try {
-            const doc = await previewer.prepareAsync(text, { kind, mermaid: cfg.mermaid, maxChars: cfg.preview_max_chars, maxDiagrams: cfg.max_diagrams }, {
-              sleep: () => cx.sleep(1), alive: () => this.file === path && this.current(context),
-              now: Date.now, onStep: (ms) => this.perf?.sample("preview.prepare", ms, { file: path }),
-            });
-            if (doc && this.file === path && this.current(context)) {
-              this.previewer = previewer; this.doc = doc; this.mode = opts.mode === "source" ? "source" : "preview";
-              if (doc.diagrams) this.renderDiagrams(cx);
-            }
-          } catch { this.previewer = null; this.doc = null; }
+          try { await this.preparePreview(path, text, previewer, cx, opts.mode === "source" ? "source" : "preview"); }
+          catch { this.previewer = null; this.doc = null; }
         }
       } catch (e) { if (this.file === path && this.current(context)) this.fileError = `Cannot show this file: ${String(e?.message ?? e)}`; }
       finally {
@@ -868,6 +863,34 @@ export default class FilerPro extends View {
         const mine = this.file === path && this.current(context);
         opts.onDone?.(mine ? { error: this.fileError, mode: this.mode, preview: Boolean(this.doc) } : { error: "Another file was opened meanwhile", mode: "source" });
       }
+    });
+  }
+
+  // The Markdown or HTML preview of text, prepared in small steps, so typing and drawing never wait for it. It replaces
+  // the shown one only while the file and the text on screen are still the ones it was made from; this.docText is that
+  // text, so a preview never lags behind the source (own save, reload of a clean edit buffer). mode: set with it.
+  async preparePreview(path, text, previewer, cx, mode = null) {
+    const context = this.context, cfg = this.fileCfg ?? DEFAULTS;
+    const alive = () => this.file === path && this.current(context) && this.shownText === text;
+    const doc = await previewer.prepareAsync(text, { kind: previewKind(path), mermaid: cfg.mermaid, maxChars: cfg.preview_max_chars, maxDiagrams: cfg.max_diagrams }, {
+      sleep: () => cx.sleep(1), alive, now: Date.now, onStep: (ms) => this.perf?.sample("preview.prepare", ms, { file: path }),
+    });
+    if (!doc || !alive()) return false;
+    this.previewer = previewer; this.doc = doc; this.docText = text;
+    if (mode) this.mode = mode;
+    if (doc.diagrams) this.renderDiagrams(cx);
+    return true;
+  }
+
+  // The text on screen changed in place: the Markdown or HTML preview follows (in the background). force: prepare it
+  // again although it was made from this text (Refresh).
+  syncPreview(cx, force = false) {
+    const path = this.file, text = this.shownText, previewer = this.previewer, doc = this.doc;
+    if (!path || text === null || !previewer || !doc || doc.kind === "image" || doc.kind === "pdf") return;
+    if (!force && this.docText === text) return;
+    cx.spawn(async (cx) => {
+      try { await this.preparePreview(path, text, previewer, cx); } catch {}
+      cx.notify();
     });
   }
 
@@ -1009,25 +1032,28 @@ export default class FilerPro extends View {
   // compare with the text on screen, set in place, probe again; a clean edit buffer takes the new text and save baseline.
   // Markdown and HTML that changed are shown anew; an image or PDF is probed and swapped only when its cache key (size,
   // mtime) changed. opts.force: probe although the text is unchanged (Refresh, after the dialog); opts.textOnly: leave
-  // images and PDFs alone (their probe is an exec). One read at a time: a call meanwhile runs once afterwards.
-  reloadOpen(cx, { force = false, textOnly = false } = {}) {
+  // images and PDFs alone (their probe is an exec); opts.named: the trigger names this file (FILE_NAMED), so a file in
+  // an error state is read again; on a bare change signal it is not. While a Load job runs nothing is read: the job
+  // shows the file when it ends. One read at a time: a call meanwhile runs once afterwards. The Markdown or HTML preview
+  // always follows the text on screen (syncPreview).
+  reloadOpen(cx, { force = false, textOnly = false, named = false } = {}) {
     const path = this.file, context = this.context, cfg = this.fileCfg, e = this.edit, code = this.code, doc = this.doc;
     const busy = (e) => Boolean(e && (e.dirty || e.busy || e.prompt || e.copy));
-    if (!path || !context || this.full || busy(e)) return; // the save's hash check guards unsaved text
+    if (!path || !context || this.full || busy(e) || this.waiting) return; // the save's hash check guards unsaved text
     if (this.fileLoading) {
       const prev = this.fileAgain;
-      this.fileAgain = { force: force || Boolean(prev?.force), textOnly: textOnly && (prev ? prev.textOnly : true) };
+      this.fileAgain = { force: force || Boolean(prev?.force), textOnly: textOnly && (prev ? prev.textOnly : true), named: named || Boolean(prev?.named) };
       return;
     }
     if (this.loader) { if (force) this.show(path, cx, { page: this.page, pages: this.pages }); return; }
-    if (this.fileError) { if (!textOnly) this.show(path, cx, { mode: this.mode }); return; }
+    if (this.fileError) { if (force || named) this.show(path, cx, { mode: this.mode }); return; }
     if (!code && !doc) return; // the first read still runs
     const image = !e && (doc?.kind === "image" || doc?.kind === "pdf");
     if (image && textOnly) return;
     const root = this.root, on = this.on;
     // Anything that changed the view meanwhile (another file, edit mode, the dialog, a new show) ends this reload.
     const still = () => this.file === path && this.current(context) && !this.full && this.edit === e && !busy(e) && this.code === code && this.doc === doc && !this.loader;
-    const retry = () => { if (this.file === path && this.current(context)) this.fileAgain ??= { force, textOnly }; };
+    const retry = () => { if (this.file === path && this.current(context)) this.fileAgain ??= { force, textOnly, named }; };
     this.fileLoading = true;
     cx.spawn(async (cx) => {
       try {
@@ -1045,7 +1071,7 @@ export default class FilerPro extends View {
         if (!still()) { retry(); return; }
         const same = text !== null && this.shownText !== null && lf(text) === lf(this.shownText);
         if (same && !force) return;
-        if (!e && this.previewer && doc) { if (!same) this.show(path, cx, { mode: this.mode }); return; }
+        if (!e && this.previewer && doc) { if (!same) this.show(path, cx, { mode: this.mode }); else this.syncPreview(cx, force); return; }
         // Gone, binary or too long for the source view: shown anew (a clean edit buffer loses nothing).
         if (!cfg || text === null || text.includes("\0") || text.length > cfg.source_max_chars) { this.show(path, cx, { mode: this.mode }); return; }
         if (!same) { code.set_value(text); this.shownText = text; }
@@ -1065,6 +1091,7 @@ export default class FilerPro extends View {
           e.history.reset(info.text);
           e.dirty = false; e.message = null;
         }
+        this.syncPreview(cx);
       } finally {
         this.fileLoading = false;
         const again = this.fileAgain;
@@ -1141,7 +1168,7 @@ export default class FilerPro extends View {
     const file = this.file, full = joinPath(this.root, file), on = this.on;
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64), send: this.sender(), pause: pauseOf(cx) }); }
+      try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64), send: this.sender(), pause: pauseOf(cx), localPlatform: window()?.platform }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       e.busy = false;
       if (!r.ok) { e.message = { text: r.error, error: true }; cx.notify(); return; }
@@ -1165,6 +1192,7 @@ export default class FilerPro extends View {
         if (this.file === file) this.code?.set_value(text);
         if (!e.dirty) this.dropMirror(e);
       }
+      if (this.file === file) this.syncPreview(cx); // the Markdown or HTML preview shows the saved text
       cx.notify();
       if (this.edit === e && !e.dirty && !e.message.error) after?.(cx);
     });
@@ -1191,7 +1219,7 @@ export default class FilerPro extends View {
   // The scp copy of a staged save to a machine (lib/textedit.js scpSender): bin/transfer.sh with the SSH settings of the
   // config, as transfer jobs run it.
   sender() {
-    return scpSender({ exec, hc, script: `${appHome()}/mods/filer-pro/bin/transfer.sh`, trashDir: platform.trashDir(home()), limits: () => this.fileCfg ?? this.conf });
+    return scpSender({ exec, hc, script: `${appHome()}/mods/filer-pro/bin/transfer.sh`, trashDir: platform.trashDir(home()), limits: () => this.fileCfg ?? this.conf, localPlatform: window()?.platform });
   }
 
   // A local folder only this user can enter (0700): herdr's fs.mkdir and fs.writeFile take no mode.
@@ -1228,7 +1256,7 @@ export default class FilerPro extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       let r;
-      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode, stage: (b64) => this.stageLocal(b64), send: this.sender(), pause: pauseOf(cx) }); }
+      try { r = await saveCopy({ exec, on, dir, name, bytes, mode: e.info.mode, stage: (b64) => this.stageLocal(b64), send: this.sender(), pause: pauseOf(cx), localPlatform: window()?.platform }); }
       catch (err) { r = { ok: false, error: String(err?.message ?? err) }; }
       c.busy = false;
       if (!r.ok) { c.error = r.error; cx.notify(); return; }
@@ -1358,12 +1386,15 @@ export default class FilerPro extends View {
 
   // Polls the job until it ends or the file changes; then loadOutcome (images.js) decides: show with force, or the
   // error with the Load button again.
+  // One wait at a time (this.waiting): a newer one or show() ends the older loop, so a job's end shows the file once.
   waitLoad(previewer, id, path, cx) {
-    const context = this.context;
+    const context = this.context, wait = this.waiting = { id, path };
     this.fileError = "Loading… · progress in the transfers bar"; this.loader = null; cx.notify();
     cx.spawn(async (cx) => {
       let j = shared("filer-pro.jobs")?.[id];
-      while (j?.state === "running" && this.file === path && this.current(context)) { await cx.sleep(250); j = shared("filer-pro.jobs")?.[id]; }
+      while (j?.state === "running" && this.waiting === wait && this.file === path && this.current(context)) { await cx.sleep(250); j = shared("filer-pro.jobs")?.[id]; }
+      if (this.waiting !== wait) return;
+      this.waiting = null;
       if (this.file !== path || !this.current(context)) return;
       const out = previewer.loadOutcome(j);
       if (out.show) { this.show(path, cx, { force: true, page: this.page, pages: this.pages }); return; }
@@ -1443,7 +1474,7 @@ export default class FilerPro extends View {
   refreshButton(t) {
     return div().id("files-refresh").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover)).tooltip("Refresh").accessibility_label("Refresh")
-      .on_click((_e, cx) => this.reloadConfig(cx, { file: FILE_ALL, force: true }))
+      .on_click((_e, cx) => this.reloadConfig(cx, { file: FILE_NAMED, force: true }))
       .child(svg(`${BASE}/refresh-cw.svg`).size(14).text_color(t.muted));
   }
 
@@ -1555,7 +1586,7 @@ export default class FilerPro extends View {
       const open = expandPath(changed?.expand, this.root, this.on);
       if (open) this.folders.add(open);
       // Kept on the copy, not passed along: take() may only let the reload through later (gap, running load).
-      if (changed?.at !== this.ownChanged) this.fileWanted = FILE_ALL;
+      if (changed?.at !== this.ownChanged) this.fileWanted = Math.max(this.fileWanted ?? 0, FILE_ALL);
     }
     if (this.context && this.reload.take(this.loading)) this.refresh(cx);
   }
