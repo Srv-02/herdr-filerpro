@@ -16,6 +16,7 @@ import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick } from "./lib/clicks.js";
+import { isBinaryName, explainUnreadable, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
@@ -754,7 +755,7 @@ export default class FilerPro extends View {
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
     this.leaveEdit(); this.editCheck = null;
-    this.code?.release(); this.code = null; this.file = path; this.fileError = null;
+    this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false;
     if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
@@ -762,6 +763,14 @@ export default class FilerPro extends View {
     // A macOS package is a folder: the viewer never reads it as a file (a double click opens it, see rows()).
     if (this.entryAt(path)?.bundle) {
       this.fileError = "This is a package: use Open, or Show Package Contents";
+      cx.notify();
+      opts.onDone?.({ error: this.fileError, mode: "source" });
+      return;
+    }
+    // A known binary extension (lib/binary.js) is never read: no 1 MiB over SSH, no launch either. Locally the
+    // message has an Open button; whoever wants to start an app does it before show() (clickFile).
+    if (isBinaryName(path)) {
+      this.fileError = BINARY_MESSAGE; this.openable = !this.on;
       cx.notify();
       opts.onDone?.({ error: this.fileError, mode: "source" });
       return;
@@ -785,10 +794,18 @@ export default class FilerPro extends View {
           if (!doc.error) { this.previewer = previewer; this.doc = doc; this.mode = "preview"; if (doc.pages) { this.page = doc.page; this.pages = doc.pages; } return; }
           previewer = null; // an SVG without a size: its source in the editor
         }
-        const text = await readTextFile(joinPath(root, path), { on });
+        let text;
+        try {
+          text = await readTextFile(joinPath(root, path), { on });
+        } catch {
+          // Over 1 MiB, not UTF-8 or unreadable: one more exec, only now (lib/binary.js), says which.
+          const why = await explainUnreadable({ exec, on, path: joinPath(root, path) });
+          if (this.file === path && this.current(context)) { this.fileError = why.message; this.openable = why.binary && !on; }
+          return;
+        }
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
-        if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
+        if (text.includes("\0")) { const why = nulReason(text); this.fileError = why.message; this.openable = why.binary && !on; return; }
         this.code = EditorState.new(this.editorOptions(path, text.length > cfg.source_max_chars ? text.slice(0, cfg.source_max_chars) + "\n… (file truncated)" : text, true));
         if (text.length > cfg.source_max_chars) this.editCheck = { state: "refused", reason: "Display truncated" };
         else this.checkEdit(path, cfg, cx);
@@ -806,7 +823,7 @@ export default class FilerPro extends View {
             }
           } catch { this.previewer = null; this.doc = null; }
         }
-      } catch { if (this.file === path && this.current(context)) this.fileError = "Cannot preview this file (binary, too large, or unreadable)"; }
+      } catch (e) { if (this.file === path && this.current(context)) this.fileError = `Cannot show this file: ${String(e?.message ?? e)}`; }
       finally {
         cx.notify();
         const mine = this.file === path && this.current(context);
@@ -1298,6 +1315,7 @@ export default class FilerPro extends View {
     if (!this.fileError && this.previewer && this.doc && (this.mode === "preview" || this.doc.kind === "image" || this.doc.kind === "pdf"))
       return this.previewer.view(this.doc, { t, font: settings().font_family, file: this.file, width: this.previewWidth },
         { onWidth: (w, cx) => { if (w !== this.previewWidth) { this.previewWidth = w; cx.notify(); } } });
+    if (!this.code && this.openable && this.fileError) return this.binaryView(t);
     if (!this.code) return div().p(12).text_color(t.dim).child(this.fileError || ({ image: "Loading image…", pdf: "Loading PDF…" }[previewKind(this.file)] ?? "Loading file…"));
     if (this.edit) return this.editView(t);
     const editor = Editor.new(this.code).flex_1().min_h(0);
@@ -1346,11 +1364,36 @@ export default class FilerPro extends View {
   // double_click_apps, read at each click (lib/clicks.js fileClick). "select" marks the row as the tree marks the last
   // opened file; "open" shows a file in the viewer and starts a package like the Finder does (lib/open.js openBundle).
   clickFile(path, bundle, event, cx) {
+    // Local archives and Office documents (lib/binary.js) are apps for the click: double_click_apps decides. A single
+    // click shows the message with an Open button; the double click starts the default app (binaryView). On a machine
+    // nothing is ever downloaded or opened by a click: the regular file click shows the message (show() skips the read).
+    if (!bundle && !this.on && isBinaryName(path)) {
+      const a = fileClick(event, this.conf.double_click_apps);
+      if (a === "open") { this.lastOpened = path; cx.notify(); this.openBinary(path); }
+      else if (a) this.show(path, cx);
+      return;
+    }
     const action = fileClick(event, bundle ? this.conf.double_click_apps : this.conf.double_click_files);
     if (action === "open" && !bundle) { this.show(path, cx); return; }
     if (!action) return;
     this.lastOpened = path; cx.notify();
     if (action === "open") openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
+  }
+
+  // Opens a local file with the default app after the checks of lib/open.js (like Open in the menu). Never on a machine.
+  openBinary(path) {
+    if (this.on) return;
+    openChecked(joinPath(this.root, path), { app: "default" }, { exec, notify, platform }).catch(() => {});
+  }
+
+  // The message of a file that is not text. Locally (openable) with an Open button, and a double click on it (the first
+  // click showed this view in place of the tree) starts the default app when double_click_apps is on.
+  binaryView(t) {
+    const path = this.file;
+    return v_flex().id("files-binary").flex_1().min_h(0).p(12).gap(8).items_start().text_color(t.dim)
+      .on_click((e, cx) => { if (this.openable && this.file === path && this.conf.double_click_apps && e.click_count === 2) this.openBinary(path); })
+      .child(div().child(this.fileError))
+      .when(this.openable, el => el.child(this.tool("files-open-binary", "Open", t, (cx) => { cx.stop_propagation(); this.openBinary(path); })));
   }
 
   // Cmd+click: remote rows are downloaded and shown in the Finder, local rows are only shown there.
@@ -1380,7 +1423,7 @@ export default class FilerPro extends View {
       const menuState = { paste: { enabled: false }, isDir: entry.dir, bundle, contents };
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
-        .on_click((e, cx) => e.modifiers.platform ? this.reveal(path) : dir ? this.toggle(path, cx) : this.clickFile(path, bundle, e, cx))
+        .on_click((e, cx) => e.modifiers.platform && !(this.on && !dir && isBinaryName(path)) ? this.reveal(path) : dir ? this.toggle(path, cx) : this.clickFile(path, bundle, e, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });

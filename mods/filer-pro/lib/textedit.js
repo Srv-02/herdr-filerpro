@@ -217,7 +217,7 @@ const REFUSED = {
 };
 
 // UTF-16 by BOM, or by the NUL pattern of mostly-ASCII text (every second byte 0 in the first 512 bytes).
-function looksUtf16(b) {
+export function looksUtf16(b) {
   if (b.length >= 2 && ((b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff))) return true;
   const n = Math.min(b.length, 512) & ~1;
   if (n < 2) return false;
