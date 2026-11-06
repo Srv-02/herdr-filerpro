@@ -94,12 +94,12 @@ export default class FilerPro extends View {
     if (props()?.overlay) {
       this.batchId = shared("filer-pro.pending")?.batch ?? null;
       if (props().view === "rename" || props().view === "mkdir") {
-        this.fileOps = createFileOps({ exec });
+        this.fileOps = createFileOps({ exec, localPlatform: () => window()?.platform });
         const spec = props().view === "rename" ? renameSpec({ name: baseName(props().path), isDir: props().isDir === true }) : newFolderSpec();
         this.dialog = createNameDialog(spec, { onSubmit: (name, cx) => this.submitName(name, cx) }, cx);
       }
       if (props().view === "permissions") {
-        this.fileOps = createFileOps({ exec });
+        this.fileOps = createFileOps({ exec, localPlatform: () => window()?.platform });
         this.perms = createPermsDialog({ name: baseName(props().path), isDir: props().isDir === true }, cx);
         this.loadPermissions(cx);
       }
@@ -134,11 +134,11 @@ export default class FilerPro extends View {
     }
     this.cfg = DEFAULTS;
     this.jobs = createJobs({
-      exec, hc, readTextFile, getShared: shared, setShared, notify, now: Date.now, appHome, home, settings: () => this.cfg,
+      exec, hc, readTextFile, localPlatform: () => window()?.platform, getShared: shared, setShared, notify, now: Date.now, appHome, home, settings: () => this.cfg,
       newId: () => (Math.random().toString(36).slice(2) + "00000000").slice(0, 8),
     });
-    const base = createFileOps({ exec });
-    this.fileOps = { ...base, ...createMoveOps({ exec, check: base.check, trashDir: platform.trashDir(home()) }) };
+    const base = createFileOps({ exec, localPlatform: () => window()?.platform });
+    this.fileOps = { ...base, ...createMoveOps({ exec, localPlatform: () => window()?.platform, check: base.check, trashDir: platform.trashDir(home()) }) };
     this.reload = createReloadGate({ now: Date.now, at: shared("filer-pro.changed")?.at ?? null });
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null; this.perf = null; this.diagrams = null;
     this.configSeen = shared("filer-pro.config")?.at ?? null;

@@ -1,7 +1,7 @@
 // File operations beside the transfers: new folder, rename and delete. Pure helpers here, the exec-backed ops below.
 import { platform } from "./platform.js";
 import { baseName, parentOf, joinPath, nameKey } from "./names.js";
-import { explainError, cleanText } from "./errors.js";
+import { explainError as explainRaw, cleanText } from "./errors.js";
 import { PROBE_SCRIPT, CHMOD_SCRIPT, COUNT_SCRIPT, chmodArg, parseProbe, parseCount, parseModeOut } from "./perms.js";
 
 // Newline, tab and the other control characters (0x00-0x1F, 0x7F): never deleted or renamed through here.
@@ -322,7 +322,8 @@ const TRASH_BIN = "/usr/bin/trash";
 
 // exec-backed rename and delete. Every path goes in as an argument, never into a shell string.
 // deps: { exec, trashBin? }. Results: { ok: true, ... } or { ok: false, error }.
-export function createFileOps({ exec, trashBin = TRASH_BIN }) {
+export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
+  const explainError = (stderr, host, fallback) => explainRaw(stderr, host, fallback, { localPlatform: localPlatform?.() });
   const failure = (e, on) => ({ ok: false, error: explainError(String(e?.message ?? e), on) });
   const run = (cmd, args, on) => exec(cmd, args, { on });
 
@@ -477,8 +478,6 @@ export function createFileOps({ exec, trashBin = TRASH_BIN }) {
     if (res.code === 3) return { ok: false, error: `No such file or folder: ${target}` };
     if (res.code === 6) return { ok: false, error: "Symbolic links are not changed" };
     if (res.code === 7) return { ok: false, error: "Only a folder can be changed with its contents" };
-    // Not explainError's macOS privacy text: for chmod this means "not the owner" or a locked item.
-    if (/Operation not permitted/.test(res.stderr ?? "")) return { ok: false, error: "Not the owner, permissions cannot be changed (or the item is locked or protected)" };
     if (res.code !== 0) return { ok: false, error: explainError(res.stderr, on, "Could not change the permissions") };
     const actual = parseModeOut(res.stdout);
     return { ok: true, mode: actual, requested: mode, mismatch: actual !== mode };

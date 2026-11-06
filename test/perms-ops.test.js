@@ -223,7 +223,9 @@ test("chmod: the system's refusal is shown", async () => {
   const { root, home } = tree();
   const { ops: o } = ops(home, { answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 1, stdout: "", stderr: "chmod: changing permissions of 'x': Operation not permitted\n" } : undefined) });
   const r = await o.chmod({ on: null, path: `${root}/a.txt`, root, mode: 0o600, recursive: false });
-  assert.deepEqual(r, { ok: false, error: "Not the owner, permissions cannot be changed (or the item is locked or protected)" });
+  assert.deepEqual(r, { ok: false, error: "Not permitted: macOS privacy settings, owner, or a locked item." });
+  const remote = ops(home, { answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 1, stdout: "", stderr: "chmod: changing permissions of 'x': Operation not permitted\n" } : undefined) });
+  assert.deepEqual(await remote.ops.chmod({ on: "box", path: "/srv/a.txt", root: "/srv", mode: 0o600, recursive: false }), { ok: false, error: "Not permitted (owner, sticky folder or locked item)" });
   const denied = ops(home, { answer: (cmd, args) => (args[1] === CHMOD_SCRIPT ? { code: 1, stdout: "", stderr: "chmod: cannot access 'x': Permission denied\n" } : undefined) });
   assert.equal((await denied.ops.chmod({ on: null, path: `${root}/a.txt`, root, mode: 0o600, recursive: false })).error, "chmod: cannot access 'x': Permission denied");
 });
