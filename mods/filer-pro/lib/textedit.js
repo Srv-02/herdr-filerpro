@@ -91,6 +91,29 @@ if [ "$s" -le ${EDIT_MAX_BYTES} ]; then
 fi
 `);
 
+// verify <path>: the file as it is now, without its content (for files above EDIT_MAX_BYTES, which the probe sends no
+// bytes of): "file <mode> <size> <sha256>", or link | dir | missing | special, or nohash when no sha256 tool exists.
+export const VERIFY_SCRIPT = sh(String.raw`
+p=$1
+case $p in -*) p=./$p ;; esac
+if [ -L "$p" ]; then echo link; exit 0; fi
+if [ -d "$p" ]; then echo dir; exit 0; fi
+if [ ! -e "$p" ]; then echo missing; exit 0; fi
+if [ ! -f "$p" ]; then echo special; exit 0; fi
+${STAT}
+${HASHER}
+m=$(st_mode "$p"); s=$(st_size "$p"); h=$(sum < "$p")
+echo "file $m $s $h"
+`);
+
+// stdout of VERIFY_SCRIPT -> { kind: "file", mode, size, hash } | { kind: link | dir | missing | special | nohash } | null.
+export function parseVerify(stdout) {
+  const head = String(stdout ?? "").split("\n")[0].trim();
+  if (["link", "dir", "missing", "special", "nohash"].includes(head)) return { kind: head };
+  const m = /^file ([0-7]+) (\d+) ([0-9a-f]{64})$/.exec(head);
+  return m ? { kind: "file", mode: octalMode(m[1]), size: Number(m[2]), hash: m[3] } : null;
+}
+
 // private-dir: makes the private upload folder on the machine (0700) and prints its path: send() copies the staged
 // text there before BEGIN_FILE_SCRIPT runs on the machine.
 export const PRIVATE_DIR_SCRIPT = sh(String.raw`

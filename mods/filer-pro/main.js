@@ -29,7 +29,7 @@ import { numbers } from "./lib/settings.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, fileHit } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
-import { PROBE_SCRIPT, parseProbe, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
+import { EDIT_MAX_BYTES, PROBE_SCRIPT, VERIFY_SCRIPT, parseProbe, parseVerify, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { equalBytes, bytesToBase64, base64ToBytes } from "./lib/textcodec.js";
 import { writeClipboard } from "./lib/pasteboard.js";
 import { createNameDialog, nameView } from "./ui/namedialog.js";
@@ -606,7 +606,8 @@ export default class FilerPro extends View {
       this.releaseEdit(e);
     }
     if (props()?.view === "file") {
-      if (props().full) { this.fullState = "closed"; setShared("filer-pro.fullscreen", { id: props().full, state: "closed", at: Date.now() }); }
+      // saved: a file saved above 1 MiB here, which the panel cannot read back; it takes this text over (pollFull).
+      if (props().full) { this.fullState = "closed"; setShared("filer-pro.fullscreen", { id: props().full, state: "closed", at: Date.now(), saved: this.bigSaved?.path === this.file ? this.bigSaved : null }); }
       this.code?.release(); this.code = null; this.file = null; this.doc = null; this.loader = null; return;
     }
     if (props()?.view !== "conflict") return;
@@ -795,7 +796,7 @@ export default class FilerPro extends View {
   // opts (request action open): mode "source" keeps the source although a preview exists; onDone(state)
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
-    this.leaveEdit(); this.editCheck = null;
+    this.leaveEdit(); this.editCheck = null; this.bigSaved = null;
     this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false; this.shownText = null; this.docText = null; this.waiting = null;
     if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
@@ -997,6 +998,14 @@ export default class FilerPro extends View {
       this.full = null;
       if (this.context) this.context.fixed = f.wasFixed || Boolean(this.edit);
       if (shared("filer-pro.handover")?.id === f.id) setShared("filer-pro.handover", null);
+      const saved = mine?.saved;
+      if (!this.edit && this.file === f.path && saved?.path === f.path && typeof saved.text === "string") {
+        // Saved above 1 MiB in the dialog: the panel takes the saved text over; reloadOpen then only checks size and hash.
+        this.bigSaved = saved;
+        this.shownText = saved.text;
+        this.code?.set_value(saved.text);
+        this.syncPreview(cx);
+      }
       if (!this.edit && this.file === f.path) this.reloadOpen(cx, { force: true });
       cx.notify();
     }
@@ -1064,6 +1073,18 @@ export default class FilerPro extends View {
           if (!still()) { retry(); return; }
           if (fresh.error || fresh.load) { this.show(path, cx, { page: this.page, pages: this.pages, force: this.force }); return; }
           if (fresh.path !== doc.path) { this.doc = fresh; if (fresh.pages) { this.page = fresh.page; this.pages = fresh.pages; } }
+          return;
+        }
+        const big = this.bigSaved;
+        if (big?.path === path) {
+          // Saved above 1 MiB in this session: herdr cannot read such a file, so the file is compared by size and hash
+          // and the saved text stays. Anything else on disk ends it: the normal reload (and its message) follows.
+          let kept = false;
+          try { const res = await exec("sh", ["-c", VERIFY_SCRIPT, "verify", joinPath(root, path)], { on }); const v = res?.code === 0 ? parseVerify(res.stdout) : null; kept = v?.kind === "file" && v.size === big.size && v.hash === big.hash; } catch {}
+          if (!still()) { retry(); return; }
+          if (kept) { this.syncPreview(cx); return; }
+          this.bigSaved = null;
+          this.show(path, cx, { mode: this.mode });
           return;
         }
         let text = null;
@@ -1176,15 +1197,29 @@ export default class FilerPro extends View {
       if (this.file === file) this.shownText = text; // the own write: a reload (watch event, signal) finds it unchanged
       Object.assign(e.info, { bytes: r.bytes, hash: r.hash, text, size: r.bytes.length });
       e.message = { text: "Saved", error: false };
-      // The mode is read again; bytes that are not the ones just sent mean someone wrote in between.
+      // The mode is read again; bytes that are not the ones just sent mean someone wrote in between. The probe sends no
+      // bytes above 1 MiB (herdr cannot read such a file back either): size and sha256 stand in for them, and this
+      // session keeps the saved text (bigSaved) instead of reading the file again.
+      const big = r.bytes.length > EDIT_MAX_BYTES;
+      this.bigSaved = big ? { path: file, size: r.bytes.length, hash: r.hash, text } : null;
       try {
-        const res = await exec("sh", ["-c", PROBE_SCRIPT, "probe", full], { on });
-        const p = res?.code === 0 ? parseProbe(res.stdout) : null;
-        if (p?.kind === "file") {
-          e.info.mode = p.mode;
-          if (!equalBytes(p.bytes, r.bytes)) e.message = { text: "Changed by someone else right after saving", error: true };
+        if (big) {
+          const res = await exec("sh", ["-c", VERIFY_SCRIPT, "verify", full], { on });
+          const v = res?.code === 0 ? parseVerify(res.stdout) : null;
+          if (v?.kind === "file") {
+            e.info.mode = v.mode;
+            if (v.size !== r.bytes.length || v.hash !== r.hash) e.message = { text: "Changed by someone else right after saving", error: true };
+          }
+        } else {
+          const res = await exec("sh", ["-c", PROBE_SCRIPT, "probe", full], { on });
+          const p = res?.code === 0 ? parseProbe(res.stdout) : null;
+          if (p?.kind === "file") {
+            e.info.mode = p.mode;
+            if (!equalBytes(p.bytes, r.bytes)) e.message = { text: "Changed by someone else right after saving", error: true };
+          }
         }
       } catch {}
+      if (e.message.error) this.bigSaved = null;
       e.modeBefore = modeBefore;
       this.signalOwn();
       if (this.edit === e) {
