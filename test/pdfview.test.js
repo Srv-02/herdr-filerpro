@@ -85,30 +85,33 @@ test("dialog adds the layout control and the zoom controls after the page button
   assert.equal(textOf(byId(out, "files-zoom-level")), "125 %");
   const glyph = (id) => all(byId(out, id)).find((e) => e.tag === "svg").args[0];
   assert.equal(glyph("files-layout-single"), "mods/filer-pro/rectangle-vertical.svg");
-  assert.equal(glyph("files-layout-spread"), "mods/filer-pro/book-open.svg");
-  assert.equal(glyph("files-zoom-out"), "mods/filer-pro/zoom-out.svg");
-  assert.equal(glyph("files-zoom-in"), "mods/filer-pro/zoom-in.svg");
+  assert.equal(glyph("files-layout-spread"), "mods/filer-pro/two-pages.svg");
+  assert.equal(glyph("files-zoom-out"), "mods/filer-pro/minus.svg");
+  assert.equal(glyph("files-zoom-in"), "mods/filer-pro/plus.svg");
   assert.equal(out.flatMap(all).some((e) => e.args[0] === "mods/filer-pro/move-horizontal.svg"), false, "move-horizontal is gone");
   assert.deepEqual(["files-layout-single", "files-layout-spread", "files-zoom-out", "files-zoom-in"].map((id) => arg(byId(out, id), "tooltip")), ["Single page", "Two pages", "Zoom out", "Zoom in"]);
   assert.deepEqual(["files-layout-single", "files-layout-spread", "files-zoom-out", "files-zoom-in"].map((id) => arg(byId(out, id), "accessibility_label")), ["Single page", "Two pages", "Zoom out", "Zoom in"]);
   assert.deepEqual(["files-zoom-page", "files-zoom-width", "files-zoom-actual"].map((id) => textOf(byId(out, id))), ["Page", "Width", "100 %"]);
-  for (const id of ["files-zoom-page", "files-zoom-width", "files-zoom-actual"]) assert.ok(arg(byId(out, id), "tooltip"), `${id} has a tooltip`);
+  assert.deepEqual(["files-zoom-page", "files-zoom-width", "files-zoom-actual"].map((id) => arg(byId(out, id), "tooltip")), ["Fit page", "Fit width", "Actual size"]);
+  assert.equal(out.filter((e) => e.calls.some(([k, a]) => k === "w" && a[0] === 1)).length, 2, "two 1px dividers between the groups");
+  assert.equal(calls(byId(out, "files-page-count"), "min_w")[0][1][0], 52, "the counter keeps its width in the dialog");
   for (const id of ["files-zoom-out", "files-zoom-in"]) assert.equal(has(byId(out, id), "bg"), false, `${id} not selected`);
   for (const id of ["files-layout-single", "files-layout-spread", "files-zoom-page", "files-zoom-width", "files-zoom-actual", "files-zoom-out", "files-zoom-in"]) calls(byId(out, id), "on_click")[0][1][0]({}, {});
   assert.deepEqual(h.log, [["layout", false], ["layout", true], ["zoom", "page"], ["zoom", "width"], ["zoom", "actual"], ["zoom", "out"], ["zoom", "in"]]);
 });
 
-test("segmented groups: bordered, rounded, gapless; the active segment is selected and foreground", () => {
+test("segmented groups (approved design): bordered, padded, rounded; the active segment has the hover background and foreground", () => {
   const out = tools(doc, model({ full: true }), t, hs());
   for (const id of ["files-layout", "files-zoom-presets"]) {
     const g = byId(out, id);
     assert.equal(has(g, "border_1"), true, `${id} border`);
     assert.equal(arg(g, "border_color"), "border");
-    assert.equal(arg(g, "rounded"), 6);
-    assert.equal(has(g, "gap"), false, "segments touch");
+    assert.equal(arg(g, "rounded"), 7);
+    assert.deepEqual([arg(g, "p"), arg(g, "gap")], [2, 2], "2px padding and gap");
   }
   // single page + Page preset: those two are on, the others are not
-  const on = (id) => arg(seg(out, id), "bg") === "selected";
+  const on = (id) => arg(seg(out, id), "bg") === "hover";
+  assert.deepEqual([arg(seg(out, "files-layout-single"), "w"), arg(seg(out, "files-layout-single"), "h"), arg(seg(out, "files-zoom-page"), "h")], [26, 20, 20], "item sizes");
   assert.deepEqual(["files-layout-single", "files-layout-spread", "files-zoom-page", "files-zoom-width", "files-zoom-actual"].map(on), [true, false, true, false, false]);
   const color = (id) => (has(seg(out, id), "text_color") ? arg(seg(out, id), "text_color") : all(seg(out, id)).find((e) => e.tag === "svg").calls.find(([k]) => k === "text_color")[1][0]);
   assert.equal(color("files-zoom-page"), "fg");
@@ -121,7 +124,7 @@ test("segmented groups: bordered, rounded, gapless; the active segment is select
 test("preset highlighting: Width, 100 %, and none while stepped away from a preset", () => {
   const sel = (over) => {
     const out = tools(doc, model({ full: true, ...over }), t, hs());
-    return ["files-zoom-page", "files-zoom-width", "files-zoom-actual"].filter((id) => arg(seg(out, id), "bg") === "selected");
+    return ["files-zoom-page", "files-zoom-width", "files-zoom-actual"].filter((id) => arg(seg(out, id), "bg") === "hover");
   };
   assert.deepEqual(sel({ preset: "width" }), ["files-zoom-width"]);
   assert.deepEqual(sel({ preset: "actual", percent: 100 }), ["files-zoom-actual"]);
@@ -146,7 +149,7 @@ test("zoom-in is dimmed at 300, zoom-out at 50", () => {
 test("two pages: the counter shows both, the spread segment is selected, turning moves by spreads", () => {
   const out = tools(doc, model({ full: true, spread: true }), t, hs());
   assert.equal(textOf(out[1]), "2–3 / 12");
-  assert.equal(arg(byId(out, "files-layout-spread"), "bg"), "selected");
+  assert.equal(arg(byId(out, "files-layout-spread"), "bg"), "hover");
   assert.equal(has(byId(out, "files-layout-single"), "bg"), false);
   const h = hs(), again = tools(doc, model({ full: true, spread: true }), t, h);
   calls(again[0], "on_click")[0][1][0]({}, {});

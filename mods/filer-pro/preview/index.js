@@ -25,11 +25,16 @@ export const WIDTH_STEP = 32;
 // labels), the icon button (as ui/edit.js: 14px glyph in a 24px hit area) and the segmented controls (a bordered, rounded
 // group of touching segments; the active one is t.selected with t.foreground text, the others t.muted with a hover).
 const PDF_UI = {
-  glyph: { prev: "chevron-left", next: "chevron-right", out: "zoom-out", in: "zoom-in", single: "rectangle-vertical", spread: "book-open" },
+  glyph: { prev: "chevron-left", next: "chevron-right", out: "minus", in: "plus", single: "rectangle-vertical", spread: "two-pages" },
   tip: { prev: "Previous page", next: "Next page", out: "Zoom out", in: "Zoom in", single: "Single page", spread: "Two pages",
-    page: "Fit the whole page", width: "Fit the page width", actual: "Actual size" },
+    page: "Fit page", width: "Fit width", actual: "Actual size" },
   label: { page: "Page", width: "Width", actual: "100 %" },
-  box: 24, glyphSize: 14, radius: 6, gap: 2, textSize: 11, segPad: 8,
+  box: 24, glyphSize: 14, radius: 6, gap: 2, textSize: 11,
+  // Segmented controls (approved design): a bordered group with 2px padding and gap, items 20px high (icon items 26px
+  // wide with a 13px glyph, text items px 7), radius 7 outside and 5 inside; the selected item has the hover background.
+  seg: { pad: 2, gap: 2, radius: 7, itemRadius: 5, h: 20, iconW: 26, glyph: 13, textPad: 7 },
+  divider: { w: 1, h: 16 },
+  counter: { panel: 34, full: 52 }, // min widths, so the buttons around the counter do not move while turning
 };
 
 // Document links are untrusted: only web links open, and only on a click.
@@ -121,17 +126,21 @@ function iconButton(t, id, key, tip, { enabled = true, active = false } = {}, on
 
 // A segmented control: one bordered, rounded group of touching segments. segs: [{ id, tip, glyph | label, on, click }].
 function segmented(t, id, segs) {
-  const u = PDF_UI;
-  return h_flex().id(id).flex_none().items_center().border_1().border_color(t.border).rounded(u.radius).overflow_hidden()
+  const g = PDF_UI.seg;
+  return h_flex().id(id).flex_none().items_center().p(g.pad).gap(g.gap).bg(t.background).border_1().border_color(t.border).rounded(g.radius)
     .children(segs.map((s) => {
       const color = s.on ? t.foreground : t.muted;
-      return div().id(s.id).h(u.box).flex_none().flex().items_center().justify_center().when(Boolean(s.glyph), (el) => el.w(u.box)).when(!s.glyph, (el) => el.px(u.segPad))
-        .text_size(u.textSize).text_color(color).cursor_pointer()
-        .when(s.on, (el) => el.bg(t.selected)).when(!s.on, (el) => el.hover((st) => st.bg(t.hover)))
+      return div().id(s.id).h(g.h).flex_none().flex().items_center().justify_center().rounded(g.itemRadius)
+        .when(Boolean(s.glyph), (el) => el.w(g.iconW)).when(!s.glyph, (el) => el.px(g.textPad))
+        .text_size(PDF_UI.textSize).text_color(color).cursor_pointer()
+        .when(s.on, (el) => el.bg(t.hover)).when(!s.on, (el) => el.hover((st) => st.bg(t.hover)))
         .on_click((_e, cx) => s.click(cx)).tooltip(s.tip).accessibility_label(s.tip)
-        .child(s.glyph ? svg(`${BASE}/${u.glyph[s.glyph]}.svg`).size(u.glyphSize).flex_none().text_color(color) : s.label);
+        .child(s.glyph ? svg(`${BASE}/${PDF_UI.glyph[s.glyph]}.svg`).size(g.glyph).flex_none().text_color(color) : s.label);
     }));
 }
+
+// A thin vertical line between the header groups of the dialog.
+const divider = (t) => div().w(PDF_UI.divider.w).h(PDF_UI.divider.h).flex_none().bg(t.border);
 
 /**
  * The header buttons of a document. PDF model: { page, pages, full (the dialog), spread, percent (effective), preset
@@ -145,20 +154,22 @@ export function tools(doc, { mode, canOpen, page, pages, full, spread, percent, 
     const two = Boolean(full && spread), to = turnTargets(page, pages, two), u = PDF_UI;
     const out = [
       iconButton(t, "files-page-prev", "prev", u.tip.prev, { enabled: to.prev > 0 }, (cx) => onPage(to.prev, cx)),
-      div().text_size(u.textSize).text_color(t.muted).child(pageLabel(page, pages, two)),
+      div().id("files-page-count").flex_none().min_w(full ? u.counter.full : u.counter.panel).text_center().text_size(u.textSize).text_color(t.muted).child(pageLabel(page, pages, two)),
       iconButton(t, "files-page-next", "next", u.tip.next, { enabled: to.next > 0 }, (cx) => onPage(to.next, cx)),
     ];
     if (full) {
       const can = canZoom(percent), pre = (key) => ({ id: `files-zoom-${key}`, tip: u.tip[key], label: u.label[key], on: preset === key, click: (cx) => onZoom(key, cx) });
       out.push(
+        divider(t),
         segmented(t, "files-layout", [
           { id: "files-layout-single", tip: u.tip.single, glyph: "single", on: !spread, click: (cx) => onLayout(false, cx) },
           { id: "files-layout-spread", tip: u.tip.spread, glyph: "spread", on: Boolean(spread), click: (cx) => onLayout(true, cx) },
         ]),
+        divider(t),
         segmented(t, "files-zoom-presets", [pre("page"), pre("width"), pre("actual")]),
         h_flex().id("files-zoom-tools").flex_none().gap(u.gap).items_center().children([
           iconButton(t, "files-zoom-out", "out", u.tip.out, { enabled: can.out }, (cx) => onZoom("out", cx)),
-          div().id("files-zoom-level").text_size(u.textSize).text_color(t.muted).child(`${percent} %`),
+          div().id("files-zoom-level").flex_none().min_w(u.counter.panel).text_center().text_size(u.textSize).text_color(t.muted).child(`${percent} %`),
           iconButton(t, "files-zoom-in", "in", u.tip.in, { enabled: can.in }, (cx) => onZoom("in", cx)),
         ]),
       );

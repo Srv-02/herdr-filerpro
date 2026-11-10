@@ -1839,7 +1839,9 @@ export default class FilerPro extends View {
         .child(this.fileTitle(t, dark, false))
         .children(this.previewTools(t))
         .children(this.editTools(t))
-        .child(this.tool("files-full-close", "✕", t, (cx) => this.requestLeave(close, cx))))
+        .child(div().id("files-full-close").h(22).px(7).flex_none().flex().items_center().rounded(6).border_1().border_color(t.border)
+          .text_size(11).text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).tooltip("Close").accessibility_label("Close")
+          .on_click((_e, cx) => this.requestLeave(close, cx)).child("Esc")))
       .child(this.viewer(t));
   }
 

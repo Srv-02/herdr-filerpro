@@ -31,3 +31,11 @@ test("main.js: the file overlay lives in the passive overlay branch (source guar
   // The dialog as designed: mod name as a literal (a clone rewrites it), 86 % by 90 %.
   assert.match(main, /openOverlay\(\{\s*mod: "filer-pro",\s*props: \{\s*view: "file",[^}]*\},\s*kind: "dialog",\s*width: 0\.86,\s*height: 0\.9\s*\}\)/, "fullscreen openOverlay call");
 });
+
+test("main.js: the dialog closes with an Esc outline button (approved design, source guard)", () => {
+  const main = read("mods/filer-pro/main.js"), i = main.indexOf('div().id("files-full-close")');
+  assert.ok(i > 0, "the close button");
+  const button = main.slice(i, main.indexOf('.child("Esc")', i) + 13);
+  for (const s of [".border_1()", ".border_color(t.border)", ".h(22)", ".px(7)", ".rounded(6)", ".text_size(11)", '.tooltip("Close")', '.accessibility_label("Close")', "this.requestLeave(close, cx)", '.child("Esc")'])
+    assert.ok(button.includes(s), s);
+});
