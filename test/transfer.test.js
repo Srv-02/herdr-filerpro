@@ -417,7 +417,7 @@ test("unknown direction: usage, exit 2, no status file", () => {
   fs.writeFileSync(a.src, "x");
   const r = run(a);
   assert.equal(r.status, 2);
-  assert.match(r.stderr, /usage: transfer\.sh <down\|up\|local\|remote\|cross>/);
+  assert.match(r.stderr, /usage: transfer\.sh <down\|up\|local\|remote\|cross\|place\|rplace>/);
   assert.equal(fs.existsSync(a.status), false);
   assert.deepEqual(names(path.join(d, "dst")), []);
 });
@@ -740,6 +740,81 @@ for (const dir of ["up", "remote", "cross"]) {
     });
   }
 }
+
+// place / rplace: finalize-only (#57). <temp> already holds the finished copy (extract.sh leaves it there), nothing is copied.
+function placeArgs(d, dir, mode, name = "item") {
+  const a = args(d, dir === "place" ? "local" : "remote", mode, name);
+  a.list[0] = dir;
+  fs.writeFileSync(a.temp, "fresh"); // the extracted entry
+  return a;
+}
+
+for (const dir of ["place", "rplace"]) {
+  test(`${dir} new: the temp entry moves to dest, the source argument is only a label`, () => {
+    const d = setup();
+    const a = placeArgs(d, dir, "new");
+    const r = run(a);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(fs.readFileSync(a.dest, "utf8"), "fresh");
+    assert.equal(fs.existsSync(a.temp), false);
+    assert.equal(fs.existsSync(a.src), false, "nothing is copied from src");
+    assert.match(status(a), /^state=done\ncode=0\n/);
+  });
+
+  test(`${dir} new: an existing dest fails, stays as it is, the temp entry is removed`, () => {
+    const d = setup();
+    const a = placeArgs(d, dir, "new");
+    fs.writeFileSync(a.dest, "old");
+    const r = run(a);
+    assert.notEqual(r.status, 0);
+    assert.equal(fs.readFileSync(a.dest, "utf8"), "old");
+    assert.equal(fs.existsSync(a.temp), false);
+    assert.match(status(a), /^state=failed\ncode=[1-9]\n[\s\S]*Destination already exists: /);
+  });
+
+  test(`${dir} replace: the old entry is replaced; ${dir === "place" ? "it goes to the trash dir" : "it is deleted on the machine"}`, () => {
+    const d = setup();
+    const a = placeArgs(d, dir, "replace");
+    fs.writeFileSync(a.dest, "old");
+    const r = run(a);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(fs.readFileSync(a.dest, "utf8"), "fresh");
+    const t = names(path.join(d, "trash"));
+    if (dir === "place") {
+      assert.equal(t.length, 1);
+      assert.match(t[0], /^item \d{8}-\d{6}/);
+      assert.equal(fs.readFileSync(path.join(d, "trash", t[0]), "utf8"), "old");
+    } else {
+      assert.deepEqual(t, []);
+    }
+    assert.deepEqual(names(path.join(d, "dst")), ["item"]);
+  });
+
+  test(`${dir} merge: a folder is merged into the existing one, old files stay`, () => {
+    const d = setup();
+    const a = args(d, dir === "place" ? "local" : "remote", "merge", "item");
+    a.list[0] = dir;
+    fs.mkdirSync(a.temp);
+    fs.writeFileSync(path.join(a.temp, "new.txt"), "n");
+    fs.writeFileSync(path.join(a.temp, "both.txt"), "from archive");
+    fs.mkdirSync(a.dest);
+    fs.writeFileSync(path.join(a.dest, "old.txt"), "o");
+    fs.writeFileSync(path.join(a.dest, "both.txt"), "from disk");
+    const r = run(a);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(names(a.dest), ["both.txt", "new.txt", "old.txt"]);
+    assert.equal(fs.readFileSync(path.join(a.dest, "both.txt"), "utf8"), "from archive");
+    assert.equal(fs.existsSync(a.temp), false);
+  });
+}
+
+test("place / rplace take exactly 8 arguments", () => {
+  for (const dir of ["place", "rplace"]) {
+    const r = spawnSync("sh", [SCRIPT, dir, "new", "box", "a", "b", "c", "d", "e", "f"], { env: ENV, encoding: "utf8" });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /usage:.*place\|rplace/);
+  }
+});
 
 // transfer.sh is standalone sh and cannot import MOUNT_FN: its copy must stay the same text and the same behaviour.
 test("transfer.sh carries MOUNT_FN unchanged and both judge the same cases alike", () => {
