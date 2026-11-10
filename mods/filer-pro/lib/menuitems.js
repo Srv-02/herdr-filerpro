@@ -1,12 +1,14 @@
 // Entries of the two right-click menus (row and free area). Pure: mods/filer-pro/ui/menu.js only draws them.
+import { archiveOf, extractToLabel } from "./archives.js";
 export const MENU_WIDTH = 200;
 const ITEM_H = 28, SEPARATOR_H = 7, PADDING = 8, RESERVE = 4;
 
 const SEPARATOR = { separator: true };
 const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action.replace(/_/g, "-")}`, label, action, enabled });
 
-// state: { paste: { enabled, reason }, isDir?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
-// Open in Editor and Edit in Terminal are dimmed; remote: the row is on a machine, Show in Finder is dimmed because it would download first;
+// state: { paste: { enabled, reason }, isDir?, name?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
+// Open in Editor and Edit in Terminal are dimmed; name: the file name, an archive (lib/archives.js) gets Extract Here and Extract to "<name>/"
+// below Download, not on a local Windows side; remote: the row is on a machine, Show in Finder is dimmed because it would download first;
 // bundle: a local macOS package (lib/bundles.js), a folder that Open starts like the Finder does, with the entry
 // Show Package Contents, or Hide Package Contents while contents is true; windows: this computer is Windows, where Permissions… is
 // dimmed because there is no chmod; on a machine it works; size: the text at the right of Calculate Size on a folder
@@ -15,6 +17,7 @@ export function rowMenuItems(state) {
   const file = state.isDir !== true;
   const local = state.remote !== true;
   const bundle = state.bundle === true && local;
+  const archive = file && !(state.windows === true && local) ? archiveOf(state.name) : null;
   return [
     entry("open", "Open", file || bundle),
     entry("open_preview", "Open in Preview", file),
@@ -27,6 +30,7 @@ export function rowMenuItems(state) {
     entry("download", "Download"),
     entry("download_to", "Download to…"),
     SEPARATOR,
+    ...(archive ? [entry("extract_here", "Extract Here"), entry("extract_to", extractToLabel(archive.stem)), SEPARATOR] : []),
     entry("copy", "Copy"),
     entry("cut", "Cut"),
     entry("paste", "Paste", state.paste.enabled),

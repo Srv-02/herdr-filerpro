@@ -442,7 +442,7 @@ export default class FilerPro extends View {
       };
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
-      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine), windows: window()?.platform === "windows", bundle: p.bundle === true, contents: p.contents === true,
+      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, name: typeof p.path === "string" ? baseName(p.path) : "", remote: Boolean(p.machine), windows: window()?.platform === "windows", bundle: p.bundle === true, contents: p.contents === true,
         size: sizeDetail(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -2019,7 +2019,7 @@ export default class FilerPro extends View {
       const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
       // A macOS package acts as a file until its contents are shown (lib/bundles.js); `dir` decides chevron, click and drop.
       const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
-      const menuState = { paste: { enabled: false }, isDir: entry.dir, bundle, contents };
+      const menuState = { paste: { enabled: false }, isDir: entry.dir, name: entry.name, bundle, contents };
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .on_click((e, cx) => e.modifiers.platform && !(this.on && !dir && isBinaryName(path)) ? this.reveal(path) : dir ? this.toggle(path, cx) : this.clickFile(path, bundle, e, cx))

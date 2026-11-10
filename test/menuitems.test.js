@@ -96,4 +96,38 @@ test("Calculate Size is in the first group for folders and packages only, with i
   assert.deepEqual([running.enabled, running.detail], [false, "…"], "dimmed while it runs");
   assert.equal(rowMenuItems({ ...on, isDir: true, windows: true }).find((i) => i.action === "calculate_size").enabled, false, "no sh on local Windows");
   assert.equal(rowMenuItems({ ...on, isDir: true, windows: true, remote: true }).find((i) => i.action === "calculate_size").enabled, true);
+// #57: Extract Here and Extract to "<name>/" for an archive file, their own group right after Download / Download to…
+const seq = (items) => items.map((i) => (i.separator ? "|" : i.action));
+const AFTER_DOWNLOAD = ["download", "download_to", "|", "extract_here", "extract_to", "|", "copy"];
+test("extract entries: an archive gets its own group between Download and Copy, locally and on a machine", () => {
+  for (const remote of [false, true]) {
+    const items = rowMenuItems({ ...on, isDir: false, name: "photos.tar.gz", remote });
+    const s = seq(items), i = s.indexOf("download");
+    assert.deepEqual(s.slice(i, i + AFTER_DOWNLOAD.length), AFTER_DOWNLOAD);
+    assert.equal(items.find((e) => e.action === "extract_here").label, "Extract Here");
+    assert.equal(items.find((e) => e.action === "extract_to").label, 'Extract to "photos/"');
+    assert.equal(items.find((e) => e.action === "extract_here").id, "filer-pro-menu-extract-here");
+    assert.equal(items.find((e) => e.action === "extract_to").id, "filer-pro-menu-extract-to");
+    assert.ok(items.filter((e) => e.action?.startsWith("extract")).every((e) => e.enabled === true));
+  }
+});
+test("extract entries: not for a folder, a non-archive, no name or the local Windows side; a machine on Windows still gets them", () => {
+  const has = (state) => seq(rowMenuItems({ ...on, ...state })).includes("extract_here");
+  assert.equal(has({ isDir: true, name: "photos.zip" }), false);
+  assert.equal(has({ isDir: false, name: "photos.txt" }), false);
+  assert.equal(has({ isDir: false, name: "photos.gz.txt" }), false);
+  assert.equal(has({ isDir: false }), false);
+  assert.equal(has({ isDir: false, name: "a.zip", windows: true }), false);
+  assert.equal(has({ isDir: false, name: "a.zip", windows: true, remote: true }), true);
+  assert.equal(has({ isDir: false, name: "a.zip", windows: false }), true);
+});
+test("extract entries: the label cuts a long stem so it fits", () => {
+  const label = (name) => rowMenuItems({ ...on, isDir: false, name }).find((e) => e.action === "extract_to").label;
+  assert.equal(label("0123456789.zip"), 'Extract to "0123456789/"');
+  assert.equal(label("photos-2024-07-camera.tar.xz"), 'Extract to "photos-20…/"');
+});
+test("extract entries: menuHeight counts two entries and one separator more", () => {
+  const plain = menuHeight(rowMenuItems({ ...on, isDir: false, name: "a.txt" }));
+  const arch = menuHeight(rowMenuItems({ ...on, isDir: false, name: "a.zip" }));
+  assert.equal(arch - plain, 2 * 28 + 7);
 });

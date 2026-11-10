@@ -275,7 +275,8 @@ function body(t, state, handlers, stored) {
     switchRow(t, state, "show_sizes"),
     // Two switches on their own (issue #21): files, and local macOS packages (lib/clicks.js).
     switchRow(t, state, "double_click_files"),
-    switchRow(t, state, "double_click_apps", { last: true }),
+    switchRow(t, state, "double_click_apps"),
+    switchRow(t, state, "extract_space_check", { last: true }),
 
     heading(t, "Preview"),
     switchRow(t, state, "preview"),
