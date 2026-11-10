@@ -2,14 +2,14 @@
 <html lang="en"><head><meta charset="utf-8"><title>Settings card</title>
 <link rel="stylesheet" href="card.css">
 <style>
-/* layout: the settings dialog in two parts, top (Updates, Downloads, Editors) left, the rest (File list, Preview, Security,
-   the closed Advanced row and the footer) right */
-html, body { width: 880px; height: 646px; }
-.shot.cut.dlg { border-color: #42454b; }
-.top { left: 22px; top: 30px; width: 406px; height: 480px; }
-.bottom { left: 452px; top: 30px; width: 406px; }
+/* layout: the settings dialog in two shots side by side: Updates, Downloads and Editors left, the File list and the start of
+   Preview and Security right (the dialog scrolls; the second shot is scrolled to File list) */
+html, body { width: 880px; height: 522px; }
+.shot { width: 406px; height: 462px; top: 30px; }
+.top { left: 22px; }
+.bottom { left: 452px; }
 </style></head>
 <body><div class="frame">
-  <div class="shot cut dlg top"><img src="settings-top.png" alt=""></div>
-  <div class="shot cut dlg bottom"><img src="settings-bottom.png" alt=""></div>
+  <div class="shot top"><img src="settings-top.png" alt=""></div>
+  <div class="shot bottom"><img src="settings-bottom.png" alt=""></div>
 </div></body></html>

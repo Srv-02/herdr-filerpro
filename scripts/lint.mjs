@@ -22,6 +22,12 @@ for (const f of fs.existsSync(binDir) ? fs.readdirSync(binDir).sort() : []) {
   if (f.endsWith(".sh")) checks.push(["sh", ["-n", path.join(binDir, f)], path.join(binDir, f)]);
 }
 
+// the screenshot scripts
+const shotDir = path.join(root, "scripts/screenshots");
+for (const f of fs.existsSync(shotDir) ? fs.readdirSync(shotDir).sort() : []) {
+  if (f.endsWith(".sh")) checks.push([f === "shoot.sh" ? "bash" : "sh", ["-n", path.join(shotDir, f)], path.join(shotDir, f)]);
+}
+
 let failed = 0;
 for (const [cmd, args, file] of checks) {
   const r = spawnSync(cmd, args, { encoding: "utf8" });
