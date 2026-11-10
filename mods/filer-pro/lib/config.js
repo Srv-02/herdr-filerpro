@@ -3,7 +3,7 @@ import { numbers, terminalProblem, guiProblem, remoteProblem, validateField } fr
 
 // Config: appHome()/filer-pro.json. Keys: download_folder, preview, mermaid, perf, update_check, terminal_editor,
 // terminal_editors, gui_editor, gui_editors, node_path, svg_check, hide_system_files, hide_dotfiles,
-// double_click_files, double_click_apps, warn_cross_copy and the numbers of lib/settings.js (NUMBERS).
+// double_click_files, double_click_apps, warn_cross_copy, show_sizes and the numbers of lib/settings.js (NUMBERS).
 // A missing or broken file, or a value of the wrong type, means the default; a number out of range is clamped.
 
 const trimmed = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
@@ -60,7 +60,8 @@ export async function loadConfig(readTextFile, appHome, home) {
   const flags = { preview: flag("preview", true), mermaid: flag("mermaid", true), perf: flag("perf", false), update_check: flag("update_check", true), ...editors(cfg),
     node_path: validateField("node_path", typeof cfg?.node_path === "string" ? cfg.node_path : "").value ?? "", svg_check: flag("svg_check", true),
     hide_system_files: flag("hide_system_files", true), hide_dotfiles: flag("hide_dotfiles", false),
-    double_click_files: flag("double_click_files", false), double_click_apps: flag("double_click_apps", true), warn_cross_copy: flag("warn_cross_copy", true), ...numbers(cfg) };
+    double_click_files: flag("double_click_files", false), double_click_apps: flag("double_click_apps", true), warn_cross_copy: flag("warn_cross_copy", true),
+    show_sizes: flag("show_sizes", false), ...numbers(cfg) };
   if (folder == null) return { download_folder: fallback, ...flags };
   if (folder === "~" || folder.startsWith("~/")) folder = home() + folder.slice(1);
   return { download_folder: folder, ...flags };

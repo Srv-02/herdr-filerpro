@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { mkTmpSync } from "./tmp-helper.js";
 import path from "node:path";
-import { SIZE_SCRIPT, parseSize, formatBytes, formatRate } from "../mods/filer-pro/lib/sizes.js";
+import { SIZE_SCRIPT, parseSize, formatBytes, formatRate, FOLDER_SIZE_MS, TOO_LARGE, sizeKey, parseSizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "../mods/filer-pro/lib/sizes.js";
 
 function size(p, cwd) {
   const r = spawnSync("sh", ["-c", SIZE_SCRIPT, "size", p], { encoding: "utf8", cwd });
@@ -80,7 +80,9 @@ test("formatBytes", () => {
   assert.equal(formatBytes(999_600), "1.0 MB");
   assert.equal(formatBytes(-5), "0 B");
   assert.equal(formatBytes(NaN), "0 B");
-  assert.equal(formatBytes(5e15), "5000 TB");
+  assert.equal(formatBytes(5e15), "5.0 PB");
+  assert.equal(formatBytes(999_960_000_000_000), "1.0 PB", "rounding carries from TB into PB");
+  assert.equal(formatBytes(2.4e18), "2400 PB", "PB is the last unit");
 });
 
 test("formatRate", () => {
@@ -98,3 +100,76 @@ test("SIZE_SCRIPT follows a symlinked source path itself", () =>
     assert.equal(size(path.join(dir, "dirlink")), "4");
     assert.equal(size(path.join(dir, "filelink")), "6");
   }));
+
+// Issue #58: Calculate Size through the shared value filer-pro.sizes.
+test("sizeKey round-trips machine and path", () => {
+  assert.deepEqual(parseSizeKey(sizeKey("box", "/a b")), { machine: "box", path: "/a b" });
+  assert.deepEqual(parseSizeKey(sizeKey(undefined, "/x")), { machine: null, path: "/x" });
+  assert.equal(parseSizeKey("{nope"), null);
+  assert.equal(parseSizeKey('["box"]'), null);
+});
+
+test("requestSize asks once; a second ask while it runs changes nothing", () => {
+  const m1 = requestSize(undefined, null, "/r/a", "id1");
+  assert.deepEqual(m1, { [sizeKey(null, "/r/a")]: { state: "requested", id: "id1" } });
+  assert.equal(requestSize(m1, null, "/r/a", "id2"), m1);
+  const done = { [sizeKey(null, "/r/a")]: { state: "done", bytes: 5, id: "id1" } };
+  assert.deepEqual(requestSize(done, null, "/r/a", "id2")[sizeKey(null, "/r/a")], { state: "requested", id: "id2" }, "a known size can be calculated again");
+});
+
+test("claimSizes takes only the requests the copy shows and marks them running", () => {
+  const map = { ...requestSize({}, null, "/r/a", "i1"), ...requestSize({}, "box", "/r/b", "i2"), [sizeKey(null, "/r/c")]: { state: "done", bytes: 1, id: "i0" } };
+  const got = claimSizes(map, (machine, path) => machine === null && path.startsWith("/r/"));
+  assert.deepEqual(got.claimed, [{ key: sizeKey(null, "/r/a"), machine: null, path: "/r/a", id: "i1" }]);
+  assert.deepEqual(got.map[sizeKey(null, "/r/a")], { state: "running", id: "i1" });
+  assert.deepEqual(got.map[sizeKey("box", "/r/b")], { state: "requested", id: "i2" }, "another machine's request stays for its panel");
+  assert.equal(claimSizes(got.map, (machine) => machine === null), null, "a running one is not claimed twice");
+  assert.equal(claimSizes(undefined, () => true), null);
+});
+
+test("sizeResult: bytes, gone, failure, and too large when the time is used up", () => {
+  assert.deepEqual(sizeResult({ result: { code: 0, stdout: "2400000\n", stderr: "" }, ms: 50 }), { state: "done", bytes: 2400000 });
+  assert.deepEqual(sizeResult({ result: { code: 0, stdout: "-1\n" }, ms: 5 }), { state: "failed", error: "Folder not found" });
+  assert.deepEqual(sizeResult({ result: { code: 255, stdout: "", stderr: "ssh: no route\n" }, ms: 5 }), { state: "failed", error: "ssh: no route" });
+  assert.deepEqual(sizeResult({ error: new Error("boom"), ms: 5 }), { state: "failed", error: "boom" });
+  assert.deepEqual(sizeResult({ result: { code: 137, stdout: "" }, ms: FOLDER_SIZE_MS }), { state: "toolarge" });
+  assert.deepEqual(sizeResult({ error: new Error("timed out"), ms: FOLDER_SIZE_MS + 3 }), { state: "toolarge" });
+  assert.equal(FOLDER_SIZE_MS, 120000);
+  assert.equal(TOO_LARGE, "Too large to calculate");
+});
+
+test("storeSize keeps the result unless a newer request replaced it; a failure removes the entry", () => {
+  const key = sizeKey(null, "/r/a"), run = { [key]: { state: "running", id: "i1" } };
+  assert.deepEqual(storeSize(run, key, "i1", { state: "done", bytes: 9 }), { [key]: { state: "done", bytes: 9, id: "i1" } });
+  assert.deepEqual(storeSize(run, key, "i1", { state: "failed", error: "x" }), {});
+  assert.equal(storeSize(run, key, "old", { state: "done", bytes: 1 }), run);
+});
+
+test("dropSizes forgets finished results at and below the root of that machine only (Refresh)", () => {
+  const map = {
+    [sizeKey(null, "/r/a")]: { state: "done", bytes: 1 }, [sizeKey(null, "/r/b")]: { state: "toolarge" }, [sizeKey(null, "/r/c")]: { state: "running" },
+    [sizeKey(null, "/rx")]: { state: "done", bytes: 2 }, [sizeKey("box", "/r/a")]: { state: "done", bytes: 3 },
+  };
+  assert.deepEqual(Object.keys(dropSizes(map, null, "/r/")).sort(), [sizeKey("box", "/r/a"), sizeKey(null, "/r/c"), sizeKey(null, "/rx")].sort());
+  const none = { [sizeKey("box", "/r/a")]: { state: "done", bytes: 3 } };
+  assert.equal(dropSizes(none, null, "/r"), none, "unchanged object when nothing goes");
+});
+
+test("sizeCell: files their size, folders a dash until calculated, packages nothing", () => {
+  assert.deepEqual(sizeCell({ dir: false, size: 3200 }), { text: "3.2 kB", spin: false });
+  assert.deepEqual(sizeCell({ dir: false, size: 812 }), { text: "812 B", spin: false });
+  assert.deepEqual(sizeCell({ dir: false }), { text: "", spin: false }, "unknown size");
+  assert.deepEqual(sizeCell({ dir: true }), { text: "\u2014", spin: false });
+  assert.deepEqual(sizeCell({ dir: true, bundle: true }), { text: "", spin: false });
+  assert.deepEqual(sizeCell({ dir: true }, { state: "running" }), { text: "", spin: true });
+  assert.deepEqual(sizeCell({ dir: true }, { state: "requested" }), { text: "", spin: true });
+  assert.deepEqual(sizeCell({ dir: true, bundle: true }, { state: "done", bytes: 2_400_000 }), { text: "2.4 MB", spin: false });
+  assert.deepEqual(sizeCell({ dir: true }, { state: "toolarge" }), { text: "Too large", spin: false, title: TOO_LARGE });
+});
+
+test("sizeDetail: the text at the right of Calculate Size", () => {
+  assert.equal(sizeDetail(undefined), null);
+  assert.equal(sizeDetail({ state: "running" }), "\u2026");
+  assert.equal(sizeDetail({ state: "done", bytes: 2_400_000 }), "2.4 MB");
+  assert.equal(sizeDetail({ state: "toolarge" }), "Too large");
+});

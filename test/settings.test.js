@@ -197,3 +197,10 @@ test("saveSettings: nothing changed means no write", async () => {
   assert.deepEqual(await saveSettings({}, io(f)), { ok: true });
   assert.equal(f.reads, 0);
 });
+
+test("settings: Show file sizes of issue #58 is a File list switch, off by default", () => {
+  const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+  assert.deepEqual([by.show_sizes.kind, by.show_sizes.default, by.show_sizes.section], ["bool", false, "File list"]);
+  assert.equal(by.show_sizes.label, "Show file sizes");
+  assert.equal(by.show_sizes.help, "Sizes next to files. Folders show a size after Calculate Size.");
+});
