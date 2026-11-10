@@ -3,7 +3,7 @@
 import { createBatch } from "./batch.js";
 import { clipEntry, pastePlan } from "./clipboard.js";
 import { badSpelling, normalizePath } from "./fileops.js";
-import { baseName, nameKey } from "./names.js";
+import { baseName, joinPath, keepBothName, nameKey } from "./names.js";
 
 const CONFLICTS = ["replace", "merge", "keep_both", "cancel"];
 const REVEALS = [true, "open", "preview"];
@@ -94,6 +94,16 @@ export function parseRequest(text) {
       const { links: _links, ...c } = common(); // a local copy never checks links
       if (c.error) return c;
       return { action: "copy", paths: o.paths, ...(o.folder !== undefined ? { folder: o.folder } : {}), ...c };
+    }
+    case "extract": {
+      const m = machineOf();
+      if (m.error) return m;
+      const pe = pathError("path", o.path, false, '"/" cannot be extracted');
+      if (pe) return { error: pe };
+      if (o.how !== "here" && o.how !== "to") return { error: "how must be here or to" };
+      const { conflict, error } = common(); // links and reveal mean nothing here
+      if (error) return { error };
+      return { action: "extract", ...m, path: o.path, how: o.how, ...(conflict !== undefined ? { conflict } : {}) };
     }
     case "clip": {
       const m = machineOf();
@@ -270,6 +280,70 @@ export async function runTransfers({ direction, machine, from, paths, destDir, c
   return { ok: false, error: "Cancelled" };
 }
 
+// Extract Here / Extract to "<name>/" (#57): inspect the archive (jobs.inspectArchive), ask once per top-level entry that
+// already exists in the archive's folder (the same batch dialog as a copy), then start one extract job with the plan
+// [{ entry, mode: skip|new|replace|merge, name }] for the entries that are not plain "new under their own name".
+// An entry named like the archive itself is never asked and never replaced: it is kept both. Keep Both avoids the
+// folder's names, every top name of the archive, earlier choices and the names that running jobs are about to create (R9).
+export async function runExtract({ machine, path, how, conflict }, deps) {
+  const { jobs } = deps;
+  const cfg = await deps.loadConfig();
+  const info = await jobs.inspectArchive({ machine, src: path, how, spaceCheck: cfg?.extract_space_check !== false });
+  if (info.error) return { ok: false, error: info.error };
+  const direction = machine ? "remote" : "local";
+  const side = machine ?? null;
+  const own = nameKey(info.name);
+  const items = [];
+  for (const e of info.entries) {
+    if (!e.exists || nameKey(e.name) === own) continue;
+    items.push({
+      key: String(items.length), path: joinPath(info.destDir, e.name), name: e.name, isDir: e.isDir, direction, machine, exists: true,
+      ...(e.destIsDir !== undefined ? { destIsDir: e.destIsDir } : {}), ...(e.replaceError ? { replaceError: e.replaceError } : {}), linkWarning: null,
+    });
+  }
+  const batch = createBatch(items);
+  batch.preset({ conflict });
+  const id = deps.newBatchId();
+  let n = 0;
+  for (let item = batch.next(); item; item = batch.next()) {
+    const a = await deps.ask({ batch: `${id}#${++n}`, item, choices: batch.choices(item), remaining: batch.remaining(item) });
+    batch.answer(a?.choice ?? "cancel", a?.apply_to_all === true);
+  }
+  // Names that running jobs are about to create in this folder on this side.
+  const reserved = new Set();
+  for (const j of Object.values(deps.getShared("filer-pro.jobs") || {})) {
+    if (j.state !== "running" || typeof j.destDir !== "string" || normalizePath(j.destDir) !== normalizePath(info.destDir)) continue;
+    if (j.kind === "extract") {
+      if ((j.machine ?? null) === side) for (const nm of j.names ?? []) reserved.add(nameKey(nm));
+    } else if ((j.direction === "up" || j.direction === "remote" || j.direction === "cross" ? j.machine ?? null : null) === side && typeof j.dest === "string") {
+      reserved.add(nameKey(baseName(j.dest)));
+    }
+  }
+  const taken = new Set([...info.taken.map(nameKey), ...info.entries.map((e) => nameKey(e.name)), ...reserved]);
+  const plan = [], errors = [];
+  for (const e of info.entries) {
+    const item = items.find((i) => i.name === e.name);
+    let choice = item ? batch.decision(item.key) : e.exists && nameKey(e.name) === own ? "keep_both" : reserved.has(nameKey(e.name)) ? "keep_both" : "new";
+    if (!choice || choice === "cancel") {
+      plan.push({ entry: e.name, mode: "skip", name: e.name });
+    } else if (choice === "keep_both") {
+      const name = keepBothName(e.name, taken, nameKey);
+      taken.add(nameKey(name));
+      plan.push({ entry: e.name, mode: "new", name });
+    } else if (choice === "replace" && e.replaceError) {
+      errors.push({ path: joinPath(info.destDir, e.name), error: e.replaceError });
+      plan.push({ entry: e.name, mode: "skip", name: e.name });
+    } else if (choice !== "new") {
+      plan.push({ entry: e.name, mode: choice, name: e.name }); // replace | merge
+    }
+  }
+  if (plan.length === info.entries.length && plan.every((p) => p.mode === "skip")) {
+    return errors.length > 0 ? { ok: false, error: errors[0].error, errors } : { ok: false, error: "Cancelled" };
+  }
+  const job = await jobs.startExtract({ machine, src: path, how, info, plan });
+  return { ok: true, job, ...(errors.length > 0 ? { errors } : {}) };
+}
+
 // Paste after Cut: inspect, ask (replace / keep both / cancel; or copy instead on another volume), move.
 // Replace is the confirmation, there is no second dialog. conflict answers the dialog up front;
 // merge counts as replace. Another volume is never answered up front: it is Copy instead or Cancelled.
@@ -371,6 +445,8 @@ export async function handleRequest(req, deps) {
       const destDir = req.folder || (await deps.loadConfig()).download_folder;
       return runTransfers({ direction: "local", machine: null, paths: req.paths, destDir, conflict: req.conflict, reveal: req.reveal }, deps);
     }
+    case "extract":
+      return runExtract(req, deps);
     case "clip":
       setShared("filer-pro.clipboard", clipEntry({ on: req.machine, path: req.path, isDir: req.is_dir, at: now(), cut: req.cut }));
       return { ok: true };

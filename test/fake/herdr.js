@@ -2,6 +2,7 @@
 import { SIZE_SCRIPT } from "../../mods/filer-pro/lib/sizes.js";
 import { LINKS_SCRIPT } from "../../mods/filer-pro/lib/links.js";
 import { PROBE_SCRIPT, READ_SCRIPT } from "../../mods/filer-pro/lib/textedit.js";
+import { ARCHIVE_PROBE_SCRIPT, ARCHIVE_SIZE_SCRIPT, EXTRACT_STOP_SCRIPT } from "../../mods/filer-pro/lib/archives.js";
 import { EXISTS_SCRIPT, LIST_SCRIPT, RESOLVE_SCRIPT, REPLACE_CHECK_SCRIPT } from "../../mods/filer-pro/lib/jobs.js";
 
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
@@ -27,6 +28,8 @@ export function createFake(over = {}) {
     resolved: {}, // dir -> physical path (RESOLVE_SCRIPT); absent means the path itself
     mounted: {}, // path -> message of REPLACE_CHECK_SCRIPT (a file system is mounted in the old target)
     resolveFail: false, // RESOLVE_SCRIPT prints nothing and exits 1
+    archives: {}, // archive path -> { code, stdout, stderr } of ARCHIVE_PROBE_SCRIPT (absent: code 4)
+    archiveSizes: {}, // archive path -> stdout of ARCHIVE_SIZE_SCRIPT, or { code, stdout, stderr } (absent: empty stdout)
     links: "total=0 outside=0 loop=0\n", // stdout of LINKS_SCRIPT
     linksCode: 0,
     linksReject: false,
@@ -74,6 +77,9 @@ export function createFake(over = {}) {
         f.onSize?.();
         return ok(`${f.sizes[path] ?? -1}\n`);
       }
+      if (script === ARCHIVE_PROBE_SCRIPT) return { stdout: "", stderr: "", ...(f.archives[args[5]] ?? { code: 4, stderr: "not an archive" }) };
+      if (script === ARCHIVE_SIZE_SCRIPT) { const r = f.archiveSizes[args[4]] ?? ""; return typeof r === "string" ? ok(r) : { stdout: "", stderr: "", ...r }; }
+      if (script === EXTRACT_STOP_SCRIPT) return ok();
       if (script === PROBE_SCRIPT) return ok(f.probes[path] ?? "");
       if (script === READ_SCRIPT) { const r = f.readOuts[path] ?? "missing\n"; return typeof r === "string" ? ok(r) : { stdout: "", stderr: "", ...r }; }
       if (script === EXISTS_SCRIPT && f.execCode?.(path)) return { stdout: "", ...f.execCode(path) };

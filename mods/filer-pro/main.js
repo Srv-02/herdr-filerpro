@@ -86,7 +86,7 @@ function bigInfo(big) {
 // A wait for a timer: herdr gives a job about 0.5 s; a timer starts a new job, an awaited resolved promise does not.
 const pauseOf = (cx) => () => new Promise((r) => cx.timer.after(0, () => r()));
 // Title of the error toast per failed request action.
-const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Copy failed", paste: "Paste failed", rename: "Rename failed", mkdir: "New folder failed", delete: "Delete failed", clip: "Copy failed" };
+const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Copy failed", paste: "Paste failed", rename: "Rename failed", mkdir: "New folder failed", delete: "Delete failed", clip: "Copy failed", extract: "Extract failed" };
 
 // perFolder: the setting list_per_folder; the listing returns at most one entry more, so a cut folder is noticed.
 // hide: the settings hide_system_files and hide_dotfiles; the listing leaves those entries out before it counts.
@@ -478,6 +478,8 @@ export default class FilerPro extends View {
         package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
+        extract_here: () => act({ action: "extract", path: p.path, how: "here" }),
+        extract_to: () => act({ action: "extract", path: p.path, how: "to" }),
         copy: () => act({ action: "clip", path: p.path, is_dir: p.isDir === true }),
         cut: () => act({ action: "clip", path: p.path, is_dir: p.isDir === true, cut: true }),
         paste: () => act({ action: "paste", folder: p.folder, root: p.root }),

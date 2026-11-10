@@ -5,6 +5,7 @@ import { createFake } from "./fake/herdr.js";
 import { OPEN_CHECK_SCRIPT } from "../mods/filer-pro/lib/open.js";
 import { SIZE_SCRIPT } from "../mods/filer-pro/lib/sizes.js";
 import { LINKS_SCRIPT } from "../mods/filer-pro/lib/links.js";
+import { ARCHIVE_PROBE_SCRIPT, ARCHIVE_SIZE_SCRIPT, EXTRACT_STOP_SCRIPT } from "../mods/filer-pro/lib/archives.js";
 import { RESOLVE_SCRIPT, STOP_REMOVE_SCRIPT, REPLACE_CHECK_SCRIPT, LIST_SCRIPT } from "../mods/filer-pro/lib/jobs.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -1395,4 +1396,244 @@ test("an older job snapshot without from still recovers, settles, removes its te
   await jobs.recover();
   assert.equal(f.jobs().old1.error, "Interrupted");
   assert.equal(f.execsOf("rm").find((c) => c.args.includes(old.temp)).on, "box");
+});
+
+// ---- extract archives (#57)
+const ARC = "/Users/m/Downloads/photos.tar.gz";
+const probeOut = (names, types, tool = "tar") => `tool=${tool}\ntypes=${types}\n--\n${names.join("\n")}\n`;
+const archiveFake = (over = {}) => {
+  const s = setup(over);
+  s.f.existing.add(ARC);
+  s.f.archives[ARC] = { code: 0, stdout: probeOut(["a.txt", "d/", "d/x"], "-d-") };
+  return s;
+};
+const SIZE_OUT = (size, availKiB) => `size=${size}\ndf=Filesystem 1024-blocks Used Available Capacity Mounted on\ndf=/dev/disk1 9999 1 ${availKiB} 1% /\n`;
+
+test("inspectArchive here: top-level entries, probe on the archive's side with the long timeout", async () => {
+  const { f, jobs } = archiveFake();
+  f.existing.add("/Users/m/Downloads/a.txt");
+  f.listings[DIR] = ["a.txt"];
+  const r = await jobs.inspectArchive({ machine: null, src: ARC, how: "here", spaceCheck: false });
+  assert.deepEqual(r, {
+    name: "photos.tar.gz", stem: "photos", family: "tar", tool: "tar", need: "gzip", total: null, destDir: DIR,
+    entries: [{ name: "a.txt", isDir: false, exists: true, destIsDir: false }, { name: "d", isDir: true, exists: false }], taken: ["a.txt"],
+  });
+  const p = f.execCalls.find((c) => c.args[1] === ARCHIVE_PROBE_SCRIPT);
+  assert.deepEqual([p.args.slice(2), p.on, p.timeout], [["x", "tar", "gzip", ARC], null, 600000]);
+  assert.equal(f.execsOf("sh").some((c) => c.args[1] === ARCHIVE_SIZE_SCRIPT), false);
+});
+
+test("inspectArchive to: the only entry is the folder named like the archive", async () => {
+  const { f, jobs } = archiveFake();
+  f.existing.add("/Users/m/Downloads/photos");
+  f.dirs.add("/Users/m/Downloads/photos");
+  f.listings[DIR] = ["photos"];
+  const r = await jobs.inspectArchive({ machine: null, src: ARC, how: "to", spaceCheck: false });
+  assert.deepEqual(r.entries, [{ name: "photos", isDir: true, exists: true, destIsDir: true }]);
+});
+
+test("inspectArchive single file: the entry is the stem, no member list", async () => {
+  const { f, jobs } = setup();
+  const src = "/Users/m/Downloads/log.txt.gz";
+  f.existing.add(src);
+  f.archives[src] = { code: 0, stdout: "tool=gzip\n--\n" };
+  const here = await jobs.inspectArchive({ src, how: "here", spaceCheck: false });
+  assert.deepEqual([here.family, here.tool, here.entries], ["single", "gzip", [{ name: "log.txt", isDir: false, exists: false }]]);
+  const to = await jobs.inspectArchive({ src, how: "to", spaceCheck: false });
+  assert.deepEqual(to.entries, [{ name: "log.txt", isDir: true, exists: false }]);
+});
+
+test("inspectArchive errors: not an archive, missing, a folder, missing tool, unreadable, refused members", async () => {
+  const { f, jobs } = archiveFake();
+  assert.equal((await jobs.inspectArchive({ src: "/Users/m/a.txt", how: "here" })).error, "Not an archive: a.txt");
+  assert.equal((await jobs.inspectArchive({ src: "/Users/m/none.zip", how: "here" })).error, "No such file or folder: /Users/m/none.zip");
+  f.existing.add("/Users/m/d.zip"); f.dirs.add("/Users/m/d.zip");
+  assert.match((await jobs.inspectArchive({ src: "/Users/m/d.zip", how: "here" })).error, /Not an archive/);
+  f.archives[ARC] = { code: 3, stdout: "missing=zstd\n" };
+  assert.equal((await jobs.inspectArchive({ machine: "box", src: ARC, how: "here" })).error, "zstd is not installed on box");
+  assert.equal((await jobs.inspectArchive({ src: ARC, how: "here" })).error, "zstd is not installed on this computer");
+  f.archives[ARC] = { code: 4, stderr: "tar: Error opening archive: Unrecognized archive format\n" };
+  assert.match((await jobs.inspectArchive({ src: ARC, how: "here" })).error, /Unrecognized archive format/);
+  f.archives[ARC] = { code: 4, stderr: "" };
+  assert.equal((await jobs.inspectArchive({ src: ARC, how: "here" })).error, "Could not read the archive");
+  f.archives[ARC] = { code: 0, stdout: probeOut(["../evil"], "-") };
+  assert.match((await jobs.inspectArchive({ src: ARC, how: "here" })).error, /"\.\."/);
+  f.archives[ARC] = { code: 0, stdout: probeOut(["l", "l/x"], "l-") };
+  assert.match((await jobs.inspectArchive({ src: ARC, how: "to" })).error, /through a link/);
+});
+
+test("inspectArchive: ssh failure is explained", async () => {
+  const { f, jobs } = archiveFake();
+  f.execCode = (p) => (p === ARC ? { code: 255, stderr: "Host key verification failed." } : null);
+  assert.equal((await jobs.inspectArchive({ machine: "box", src: ARC, how: "here" })).error, "Unknown host key. Connect once in a terminal: ssh box");
+});
+
+test("inspectArchive space check: refuses when it would not fit, on the same side, 120 s; failures and off do not refuse", async () => {
+  const { f, jobs } = archiveFake();
+  f.archiveSizes[ARC] = SIZE_OUT(5_000_000_000, 1000);
+  const r = await jobs.inspectArchive({ machine: "box", src: ARC, how: "here", spaceCheck: true });
+  assert.match(r.error, /^Not enough space: .* needed, .* free$/);
+  const s = f.execCalls.find((c) => c.args[1] === ARCHIVE_SIZE_SCRIPT);
+  assert.deepEqual([s.args.slice(2), s.on, s.timeout], [["x", "tar", ARC, DIR], "box", 120000]);
+  f.archiveSizes[ARC] = SIZE_OUT(500, 1000);
+  assert.equal((await jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: true })).total, 500);
+  f.archiveSizes[ARC] = { code: 1, stderr: "timeout" };
+  const bad = await jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: true });
+  assert.equal(bad.error, undefined);
+  assert.equal(bad.total, null);
+  f.archiveSizes[ARC] = SIZE_OUT(5_000_000_000, 1000);
+  assert.equal((await jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: false })).error, undefined);
+});
+
+test("inspectArchive on a machine: an existing folder gets destIsDir and the mount check, a link counts as no folder", async () => {
+  const { f, jobs } = archiveFake();
+  const d = "/Users/m/Downloads/d";
+  f.existing.add(d); f.dirs.add(d);
+  f.mounted[d] = "Refusing to replace, a file system is mounted at: /Users/m/Downloads/d/mnt";
+  f.listings[DIR] = ["d"];
+  const r = await jobs.inspectArchive({ machine: "box", src: ARC, how: "here", spaceCheck: false });
+  assert.deepEqual(r.entries[1], { name: "d", isDir: true, exists: true, destIsDir: true, replaceError: "Refusing to replace, a file system is mounted at: /Users/m/Downloads/d/mnt" });
+  assert.equal(f.execCalls.find((c) => c.args[1] === REPLACE_CHECK_SCRIPT).on, "box");
+  f.symlinks.add(d);
+  assert.equal((await jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: false })).entries[1].destIsDir, false);
+  assert.equal(f.execCalls.filter((c) => c.args[1] === REPLACE_CHECK_SCRIPT).length, 1, "locally Replace goes to the Trash: no check");
+});
+
+const INFO = { name: "photos.tar.gz", stem: "photos", family: "tar", tool: "tar", need: "gzip", total: 500, destDir: DIR, entries: [{ name: "a.txt", isDir: false }, { name: "d", isDir: true }], taken: [] };
+const XSTATUS = "/Users/m/.config/herdr-app/filer-pro/jobs/id1.status";
+const XSH = "/Users/m/.config/herdr-app/mods/filer-pro/bin/extract.sh";
+const HEAD = ["run", "--bg", "--json", "--no-parent", "--no-notify", "--name", "fs-id1", "--"];
+
+test("startExtract here, local: argv, job fields", async () => {
+  const { f, jobs } = setup();
+  const job = await jobs.startExtract({ src: ARC, how: "here", info: INFO, plan: [{ entry: "a.txt", mode: "new", name: "a-1.txt" }, { entry: "d", mode: "skip", name: "d" }] });
+  assert.deepEqual(f.hcRuns()[0], [...HEAD, "sh", XSH, "-", "tar", "gzip", ARC, "-", "-", `${DIR}/.photos.tar.gz.fs-id1.part`, DIR, XSTATUS, "/Users/m/.Trash", "a.txt", "new", "a-1.txt", "d", "skip", "d"]);
+  assert.equal(f.hcCalls.some((a) => a[0] === "machine"), false);
+  assert.deepEqual(f.execsOf("mkdir")[0].args, ["-p", "/Users/m/.config/herdr-app/filer-pro/jobs"]);
+  assert.deepEqual(
+    [job.kind, job.direction, job.machine, job.src, job.destDir, job.name, job.dest, job.names, job.total, job.state, job.terminal, job.statusFile],
+    ["extract", "local", null, ARC, DIR, "photos.tar.gz", DIR, ["a-1.txt"], 500, "running", "term-fs-id1", XSTATUS]);
+  assert.equal(job.temp, `${DIR}/.photos.tar.gz.fs-id1.part`);
+  assert.deepEqual([job.bytes, job.stalled, job.finishedAt, job.error], [0, false, null, null]);
+});
+
+test("startExtract to on a machine: ssh target, FILER_PRO_MACHINE, sub folder; single file passes its name", async () => {
+  const { f, jobs } = setup();
+  const job = await jobs.startExtract({ machine: "box", src: ARC, how: "to", info: { ...INFO, entries: [{ name: "photos", isDir: true }] }, plan: [{ entry: "photos", mode: "replace", name: "photos" }] });
+  assert.deepEqual(f.hcRuns()[0], [...HEAD, "env", "FILER_PRO_MACHINE=box", "sh", XSH, "user@box", "tar", "gzip", ARC, "photos", "-", `${DIR}/.photos.tar.gz.fs-id1.part`, DIR, XSTATUS, "/Users/m/.Trash", "photos", "replace", "photos"]);
+  assert.deepEqual([job.direction, job.machine, job.name, job.dest, job.names, job.target], ["remote", "box", "photos", `${DIR}/photos`, ["photos"], "user@box"]);
+  const g = setup();
+  const src = `${DIR}/log.txt.gz`;
+  await g.jobs.startExtract({ src, how: "here", info: { ...INFO, name: "log.txt.gz", stem: "log.txt", family: "single", tool: "gzip", need: "gzip", entries: [{ name: "log.txt", isDir: false }] }, plan: [] });
+  const run = g.f.hcRuns()[0];
+  assert.deepEqual(run.slice(8, 15), ["sh", XSH, "-", "gzip", "-", src, "-"]);
+  assert.equal(run[15], "log.txt");
+  assert.deepEqual(run.slice(-3), [DIR, XSTATUS, "/Users/m/.Trash"].slice(-3));
+});
+
+test("startExtract to with keep-both name: the folder and the job carry the final name", async () => {
+  const { f, jobs } = setup();
+  const job = await jobs.startExtract({ src: ARC, how: "to", info: { ...INFO, entries: [{ name: "photos", isDir: true }] }, plan: [{ entry: "photos", mode: "new", name: "photos-1" }] });
+  assert.deepEqual([job.name, job.dest, job.names], ["photos-1", `${DIR}/photos-1`, ["photos-1"]]);
+  assert.deepEqual(f.hcRuns()[0].slice(-3), ["photos", "new", "photos-1"]);
+});
+
+test("startExtract: SSH options and the machine share one env prefix; failures fail the job", async () => {
+  const f = createFake();
+  const jobs = createJobs({ ...f.deps(), settings: () => ({ ssh_connect_timeout: 30 }) });
+  await jobs.startExtract({ machine: "box", src: ARC, how: "here", info: INFO, plan: [] });
+  assert.deepEqual(f.hcRuns()[0].slice(8, 14), ["env", "FILER_PRO_SSH_CONNECT_TIMEOUT=30", "FILER_PRO_SSH_ALIVE_INTERVAL=15", "FILER_PRO_SSH_ALIVE_COUNT=4", "FILER_PRO_MACHINE=box", "sh"]);
+  const a = setup({ runError: "no space left" });
+  const bad = await a.jobs.startExtract({ src: ARC, how: "here", info: INFO, plan: [] });
+  assert.deepEqual([bad.state, bad.error], ["failed", "no space left"]);
+  assert.deepEqual(a.f.notifications, [{ title: "Extract failed", body: "no space left", level: "error" }]);
+  const b = setup({ machines: { machines: [{ name: "box", via: true, target: "x" }] } });
+  assert.equal((await b.jobs.startExtract({ machine: "box", src: ARC, how: "here", info: INFO, plan: [] })).state, "failed");
+});
+
+async function runningExtract(over = {}, args = {}) {
+  const s = setup(over);
+  await s.jobs.startExtract({ src: ARC, how: "here", info: INFO, plan: [], ...args });
+  return s;
+}
+
+test("extract settle: done is a success toast without reveal, last_download or clipboard", async () => {
+  const { f, jobs } = await runningExtract();
+  f.files[XSTATUS] = "state=done\ncode=0\n";
+  f.terminals["term-fs-id1"] = { state: "finished" };
+  await jobs.tick();
+  assert.deepEqual(f.notifications, [{ title: "Extracted", body: "photos.tar.gz", level: "success" }]);
+  assert.equal(f.store["filer-pro.last_download"], undefined);
+  assert.equal(f.store["filer-pro.clipboard"], undefined);
+  assert.equal(f.jobs().id1.state, "done");
+  assert.ok(f.store["filer-pro.changed"]);
+});
+
+test("extract settle: the link warning and the old-copy text become job.warning and a warning toast", async () => {
+  const { f, jobs } = await runningExtract();
+  f.files[XSTATUS] = "state=done\ncode=0\nWarning: 2 links point outside the extracted files\nWarning: could not fully remove old copy: /srv/x\n";
+  f.terminals["term-fs-id1"] = { state: "finished" };
+  await jobs.tick();
+  const w = "2 links point outside the extracted files Could not fully remove the old copy: /srv/x";
+  assert.equal(f.jobs().id1.warning, w);
+  assert.deepEqual(f.notifications, [{ title: "Extracted", body: w, level: "warning" }]);
+  const g = await runningExtract();
+  g.f.files[XSTATUS] = "state=done\ncode=0\nWarning: 1 link points outside the extracted files\n";
+  g.f.terminals["term-fs-id1"] = { state: "finished" };
+  await g.jobs.tick();
+  assert.equal(g.f.jobs().id1.warning, "1 link points outside the extracted files");
+});
+
+test("extract settle: failed gives Extract failed with the message", async () => {
+  const { f, jobs } = await runningExtract();
+  f.files[XSTATUS] = "state=failed\ncode=1\nEncrypted archives are not supported\n";
+  f.terminals["term-fs-id1"] = { state: "finished" };
+  await jobs.tick();
+  assert.deepEqual(f.notifications, [{ title: "Extract failed", body: "Encrypted archives are not supported", level: "error" }]);
+});
+
+test("extract removeTemp: EXTRACT_STOP_SCRIPT on the archive's side (local and machine)", async () => {
+  for (const machine of [null, "box"]) {
+    const { f, jobs } = await runningExtract({}, { machine });
+    f.terminals["term-fs-id1"] = { state: "finished", reason: "killed" };
+    await jobs.tick();
+    const c = f.execCalls.find((x) => x.args[1] === EXTRACT_STOP_SCRIPT);
+    assert.deepEqual([c.args.slice(2), c.on], [["x", `${DIR}/.photos.tar.gz.fs-id1.part`, "id1"], machine]);
+    assert.equal(f.execsOf("rm").some((x) => x.args.includes(`${DIR}/.photos.tar.gz.fs-id1.part`)), false);
+  }
+});
+
+test("extract tick: a shrinking temp counts as progress (R8); a transfer's does not", async () => {
+  const { f, jobs } = await runningExtract({}, {});
+  f.sizes[`${DIR}/.photos.tar.gz.fs-id1.part`] = 1000;
+  await jobs.tick();
+  f.t += 100_000; f.sizes[`${DIR}/.photos.tar.gz.fs-id1.part`] = 400;
+  await jobs.tick();
+  f.t += 100_000;
+  f.sizes[`${DIR}/.photos.tar.gz.fs-id1.part`] = 100;
+  await jobs.tick();
+  assert.equal(f.jobs().id1.stalled, false);
+  assert.equal(f.jobs().id1.lastGrowthAt, f.t);
+  const t = setup();
+  await t.jobs.start(down());
+  const temp = `${DIR}/.a.txt.fs-id1.part`;
+  t.f.sizes[temp] = 1000;
+  await t.jobs.tick();
+  t.f.t += 100_000; t.f.sizes[temp] = 400;
+  await t.jobs.tick();
+  t.f.t += 100_000; t.f.sizes[temp] = 100;
+  await t.jobs.tick();
+  assert.equal(t.f.jobs().id1.stalled, true);
+});
+
+test("recover: a snapshot without kind (old job) settles like a transfer", async () => {
+  const { f, jobs } = setup();
+  await jobs.start(down());
+  const { kind: _k, ...old } = f.jobs().id1;
+  f.store["filer-pro.jobs"] = { id1: old };
+  f.getFail = true;
+  await jobs.recover();
+  assert.equal(f.execsOf("rm").some((c) => c.args.includes("/Users/m/Downloads/.a.txt.fs-id1.part")), true);
+  assert.equal(f.execCalls.some((c) => c.args[1] === EXTRACT_STOP_SCRIPT), false);
+  assert.deepEqual(f.notifications, [{ title: "Download failed", body: "Interrupted", level: "error" }]);
 });
