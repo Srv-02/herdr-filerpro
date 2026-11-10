@@ -187,6 +187,17 @@ export function createJobs(deps) {
     return into === from || into.startsWith(from === "/" ? "/" : `${from}/`);
   }
 
+  // True when both machine names resolve to the identical SSH target string. A failed lookup counts as false: the paste is not blocked on that basis.
+  async function sameSshTarget(a, b) {
+    try {
+      const ls = okOut(await hc(["machine", "ls", "--json"])) ?? "";
+      const ta = sshTarget(ls, a), tb = sshTarget(ls, b);
+      return !ta.error && !tb.error && ta.target === tb.target;
+    } catch {
+      return false;
+    }
+  }
+
   async function inspect({ direction, machine, from, src, destDir }) {
     const name = baseName(src);
     const dest = joinPath(destDir, name);
@@ -204,6 +215,10 @@ export function createJobs(deps) {
       }
       if ((direction === "local" || direction === "remote") && isDir && (await intoItself(src, destDir, destOn(direction, machine)))) {
         return { name, isDir, exists: false, linkWarning: null, linkTitle: null, error: "Cannot copy a folder into itself" };
+      }
+      // Two herdr machine names can point to one SSH target: the paste is "cross", but both sides are the same tree (#72).
+      if (direction === "cross" && isDir && (await sameSshTarget(machine, from)) && (await intoItself(src, destDir, machine))) {
+        return { name, isDir, exists: false, linkWarning: null, linkTitle: null, error: "Loophole: A folder can't go inside itself!" };
       }
       const destOut = await probe(EXISTS_SCRIPT, dest, destOn(direction, machine));
       const exists = destOut.includes("y");
