@@ -16,8 +16,11 @@ function jsFiles(dir) {
 const checks = [
   ...[...jsFiles(path.join(root, "mods/filer-pro")), ...jsFiles(path.join(root, "test")), ...jsFiles(path.join(root, "scripts"))].map((f) => ["node", ["--check", f], f]),
 ];
-const script = path.join(root, "mods/filer-pro/bin/transfer.sh");
-if (fs.existsSync(script)) checks.push(["sh", ["-n", script], script]);
+// every shell script in bin (transfer.sh, extract.sh)
+const binDir = path.join(root, "mods/filer-pro/bin");
+for (const f of fs.existsSync(binDir) ? fs.readdirSync(binDir).sort() : []) {
+  if (f.endsWith(".sh")) checks.push(["sh", ["-n", path.join(binDir, f)], path.join(binDir, f)]);
+}
 
 let failed = 0;
 for (const [cmd, args, file] of checks) {

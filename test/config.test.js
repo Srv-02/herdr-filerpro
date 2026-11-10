@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, ...numbers(null), warn_cross_copy: true, show_sizes: false,
+    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: false,
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
