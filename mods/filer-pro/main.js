@@ -26,7 +26,7 @@ import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, parseListing, psEntries, limitText } from "./lib/tree.js";
-import { SIZE_SCRIPT, FOLDER_SIZE_MS, TOO_LARGE, sizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "./lib/sizes.js";
+import { SIZE_SCRIPT, FOLDER_SIZE_MS, TOO_LARGE, busy, sizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "./lib/sizes.js";
 import { numbers, saveSettings } from "./lib/settings.js";
 import { GIT_PLACE_ARGS, gitPlace, gitPrefix, gitWatchDirs, gitWatchHit, rootRelative } from "./lib/gitmarks.js";
 import { bindZoomKeys } from "./lib/pdfkeys.js";
@@ -443,7 +443,7 @@ export default class FilerPro extends View {
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
       const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine), windows: window()?.platform === "windows", bundle: p.bundle === true, contents: p.contents === true,
-        size: sizeDetail(sized), sizing: sized?.state === "requested" || sized?.state === "running" };
+        size: sizeDetail(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
       // remote the file is downloaded first (download_folder, conflict dialog) and opened by afterDownload.
@@ -474,7 +474,7 @@ export default class FilerPro extends View {
         },
         // The panel that shows the package expands or collapses it (pollPackage).
         // The panel that shows the folder runs it (pollSizes); the result shows in the size column and here.
-        calculate_size: () => { setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), p.machine, p.path, this.newId())); close(); },
+        calculate_size: () => { setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), p.machine, p.path, this.newId(), Date.now())); close(); },
         package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
@@ -897,10 +897,12 @@ export default class FilerPro extends View {
   // Calculate Size (issue #58): the menu copy asks through shared filer-pro.sizes (lib/sizes.js requestSize). The panel
   // copy that shows the folder claims the request and runs SIZE_SCRIPT there (one find, never following links), with
   // FOLDER_SIZE_MS as the limit: a bigger tree is "Too large to calculate", a failure a toast. Called every 250 ms.
+  // Another copy's claim or result redraws this one too (the value changed since the last tick).
   pollSizes(cx) {
     const map = shared("filer-pro.sizes");
+    if (map !== this.sizesSeen) { this.sizesSeen = map; if (this.conf.show_sizes) cx.notify(); }
     if (!map || !this.root) return;
-    const got = claimSizes(map, (machine, path) => (machine ?? null) === (this.on ?? null) && expandPath({ machine, folder: path }, this.root, this.on) !== null);
+    const got = claimSizes(map, (machine, path) => (machine ?? null) === (this.on ?? null) && expandPath({ machine, folder: path }, this.root, this.on) !== null, Date.now());
     if (!got) return;
     setShared("filer-pro.sizes", got.map);
     for (const { key, machine, path, id } of got.claimed) cx.spawn(async (cx) => {
@@ -1921,7 +1923,7 @@ export default class FilerPro extends View {
       .hover((s) => s.bg(t.hover)).tooltip("Refresh").accessibility_label("Refresh")
       .on_click((_e, cx) => {
         // Calculated folder sizes are a snapshot (lib/sizes.js): Refresh drops those of the shown folder and below.
-        const sizes = shared("filer-pro.sizes"), next = dropSizes(sizes, this.on, this.root);
+        const sizes = shared("filer-pro.sizes"), next = dropSizes(sizes, this.on, this.root, Date.now());
         if (next !== sizes) setShared("filer-pro.sizes", next);
         this.reloadConfig(cx, { file: FILE_NAMED, force: true });
       })
@@ -2037,7 +2039,8 @@ export default class FilerPro extends View {
   // The size of a row (lib/sizes.js sizeCell): text 11, dim, in the terminal font so the digits line up; a spinner
   // while Calculate Size runs on the folder.
   sizeCell(path, entry, sizes, font, t) {
-    const cell = sizeCell(entry, entry.dir ? sizes[sizeKey(this.on, joinPath(this.root, path))] : undefined);
+    const calc = Boolean(this.on) || window()?.platform !== "windows"; // Calculate Size is dimmed on local Windows
+    const cell = sizeCell(entry, entry.dir ? sizes[sizeKey(this.on, joinPath(this.root, path))] : undefined, Date.now(), calc);
     const el = div().id(`file-${path}-size`).flex_none().flex().justify_end().text_size(11).text_color(t.dim).when(Boolean(font), e => e.font_family(font));
     if (cell.spin) return el.child(svg(`${BASE}/loader-circle.svg`).size(11).text_color(t.dim).spin(900));
     return el.when(Boolean(cell.title), e => e.tooltip(cell.title)).child(cell.text);
