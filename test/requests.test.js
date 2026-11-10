@@ -449,7 +449,7 @@ test("clip stores the clipboard", async () => {
 test("paste: nothing copied, cross machine, and the four directions through runTransfers", async () => {
   assert.deepEqual(await handleRequest({ action: "paste", folder: "/in" }, deps()), { ok: false, error: "Nothing to paste" });
   const clip = (machine, path) => ({ "filer-pro.clipboard": { machine, path, isDir: false, at: 1 } });
-  assert.deepEqual(await handleRequest({ action: "paste", machine: "other", folder: "/in" }, deps({ store: clip("box", "/srv/a") })), { ok: false, error: "Paste between two machines is not supported" });
+  assert.deepEqual(await handleRequest({ action: "paste", machine: "other", folder: "/in", conflict: "keep_both" }, deps({ store: clip("box", "/srv/a"), answers: [{ choice: "copy" }] })), { ok: true, jobs: [{ id: "j1" }] });
   const cases = [
     [clip(null, "/Users/m/a"), {}, { direction: "local", machine: null }],
     [clip("box", "/srv/a"), { machine: "box" }, { direction: "remote", machine: "box" }],
@@ -995,4 +995,78 @@ test("a failed delete or move still signals the tree; a cancelled one does not",
   const cancelled = deps({ store: cut, inspect: { ok: true, src: "/srv/a", name: "a", isDir: false, destDir: "/srv/in", dest: "/srv/in/a", exists: true, destIsDir: false, replaceError: null }, answers: [{ choice: "cancel" }] });
   assert.deepEqual(await handleRequest({ action: "paste", machine: "box", folder: "/srv/in", root: "/srv" }, cancelled), { ok: false, error: "Cancelled" });
   assert.equal(cancelled.store["filer-pro.changed"], undefined);
+});
+
+// Copy between two machines (#60): one warning per paste, after inspect and before the conflict dialog.
+const crossClip = (extra = {}) => ({ "filer-pro.clipboard": { machine: "box", path: "/srv/a", isDir: false, at: 1, ...extra } });
+const crossPaste = (x = {}) => ({ action: "paste", machine: "other", folder: "/in", ...x });
+const WARN_ITEM = { name: "a", isDir: false, path: "/srv/a", from: "box", machine: "other", direction: "cross" };
+
+test("paste cross: asks the warning once (copy / cancel), then inspects and starts with from", async () => {
+  const d = deps({ store: crossClip(), answers: [{ choice: "copy" }] });
+  assert.deepEqual(await handleRequest(crossPaste(), d), { ok: true, jobs: [{ id: "j1" }] });
+  assert.equal(d.asked.length, 1);
+  assert.deepEqual(d.asked[0].choices, ["copy", "cancel"]);
+  assert.deepEqual(d.asked[0].item, WARN_ITEM);
+  assert.equal(d.asked[0].remaining, 1);
+  assert.deepEqual(d.calls, [
+    ["inspect", { direction: "cross", machine: "other", from: "box", src: "/srv/a", destDir: "/in" }],
+    ["start", { direction: "cross", machine: "other", from: "box", src: "/srv/a", destDir: "/in", choice: "new", isDir: false }],
+  ]);
+});
+
+test("paste cross: cancel and a closed dialog end Cancelled, no job", async () => {
+  for (const answers of [[{ choice: "cancel" }], [{}], [{ choice: "replace" }]]) {
+    const d = deps({ store: crossClip(), answers });
+    assert.deepEqual(await handleRequest(crossPaste(), d), { ok: false, error: "Cancelled" });
+    assert.equal(d.calls.some((c) => c[0] === "start"), false);
+  }
+});
+
+test("paste cross: warn_cross_copy false asks nothing", async () => {
+  const d = deps({ store: crossClip() });
+  d.loadConfig = async () => ({ download_folder: "/x", warn_cross_copy: false });
+  assert.equal((await handleRequest(crossPaste(), d)).ok, true);
+  assert.equal(d.asked.length, 0);
+  assert.equal(d.calls.at(-1)[1].from, "box");
+});
+
+test("paste cross: the warning comes before the conflict dialog; presets do not answer it", async () => {
+  const d = deps({ store: crossClip(), info: { name: "a", exists: true }, answers: [{ choice: "copy" }, { choice: "keep_both" }] });
+  assert.equal((await handleRequest(crossPaste(), d)).ok, true);
+  assert.deepEqual(d.asked[0].choices, ["copy", "cancel"]);
+  assert.ok(d.asked[1].choices.includes("keep_both") && !d.asked[1].choices.includes("copy"));
+  assert.equal(d.calls.at(-1)[1].choice, "keep_both");
+  const e = deps({ store: crossClip(), answers: [{ choice: "cancel" }] });
+  assert.deepEqual(await handleRequest(crossPaste({ conflict: "replace", links: "transfer_anyway" }), e), { ok: false, error: "Cancelled" });
+});
+
+test("paste cross: no warning when every path errors in inspect", async () => {
+  const d = deps({ store: crossClip(), info: { name: "a", error: "No such file or folder: /srv/a" } });
+  assert.deepEqual(await handleRequest(crossPaste(), d), { ok: false, error: "No such file or folder: /srv/a", errors: [{ path: "/srv/a", error: "No such file or folder: /srv/a" }] });
+  assert.equal(d.asked.length, 0);
+});
+
+test("paste cross: Cut across machines still errors; same-machine paste has no warning and no from", async () => {
+  const d = deps({ store: crossClip({ cut: true }) });
+  assert.deepEqual(await handleRequest(crossPaste(), d), { ok: false, error: "Cut and Paste work only within one machine" });
+  const e = deps({ store: crossClip() });
+  await handleRequest(crossPaste({ machine: "box" }), e);
+  assert.equal(e.asked.length, 0);
+  assert.equal("from" in e.calls[0][1] || "from" in e.calls[1][1], false);
+});
+
+test("runTransfers: warn is asked after inspect with its own batch id, before createBatch", async () => {
+  const d = deps({ answers: [{ choice: "copy" }] });
+  const r = await runTransfers({ direction: "cross", machine: "other", from: "box", paths: ["/srv/a"], destDir: "/in", warn: { item: WARN_ITEM } }, d);
+  assert.equal(r.ok, true);
+  assert.equal(d.calls[0][0], "inspect");
+  assert.equal(d.asked[0].batch, "b1#0");
+});
+
+test("runMove reserved names include a running cross job on the target machine", async () => {
+  const jobs = { j1: { state: "running", direction: "cross", from: "other", machine: "box", destDir: "/srv/in", dest: "/srv/in/a-1" } };
+  const d = deps({ store: { ...cut("box", "/srv/a"), "filer-pro.jobs": jobs }, inspect: found({ exists: true }) });
+  await handleRequest(paste({ conflict: "keep_both" }), d);
+  assert.deepEqual(d.fileOpsCalls[1][1].reserved, ["a-1"]);
 });

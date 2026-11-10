@@ -14,13 +14,13 @@ test("pastePlan picks the direction from source and target side", () => {
   assert.deepEqual(pastePlan(R, { on: "box", folder: "/srv/in" }), { direction: "remote", machine: "box", src: "/srv/d", destDir: "/srv/in" });
   assert.deepEqual(pastePlan(R, { on: null, folder: "/Users/m/Downloads" }), { direction: "down", machine: "box", src: "/srv/d", destDir: "/Users/m/Downloads" });
   assert.deepEqual(pastePlan(L, { on: "box", folder: "/srv/in" }), { direction: "up", machine: "box", src: "/Users/m/a.txt", destDir: "/srv/in" });
-  assert.deepEqual(pastePlan(R, { on: "other", folder: "/srv" }), { error: "Paste between two machines is not supported" });
+  assert.deepEqual(pastePlan(R, { on: "other", folder: "/srv" }), { direction: "cross", from: "box", machine: "other", src: "/srv/d", destDir: "/srv" });
   assert.deepEqual(pastePlan(null, { on: null, folder: "/x" }), { error: "Nothing to paste" });
   assert.deepEqual(pastePlan({}, { on: null, folder: "/x" }), { error: "Nothing to paste" });
 });
 test("pasteState mirrors pastePlan for the menu", () => {
   assert.deepEqual(pasteState(null, null), { enabled: false, reason: "Nothing to paste" });
-  assert.deepEqual(pasteState(R, "other"), { enabled: false, reason: "Paste between two machines is not supported" });
+  assert.deepEqual(pasteState(R, "other"), { enabled: true, reason: null });
   assert.deepEqual(pasteState(R, "box"), { enabled: true, reason: null });
   assert.deepEqual(pasteState(L, "box"), { enabled: true, reason: null });
 });
@@ -50,4 +50,13 @@ test("cut then paste into the own folder is dimmed, copy is not", () => {
   assert.deepEqual(pasteState(C, "box", "/srv/d/"), { enabled: false, reason: "Already in this folder" });
   assert.deepEqual(pasteState(C, "box", "/srv/d/sub"), { enabled: true, reason: null });
   assert.deepEqual(pasteState(R, "box", "/srv"), { enabled: true, reason: null });
+});
+test("a copy across two machines is a cross plan, the target machine is machine", () => {
+  assert.deepEqual(pastePlan(clipEntry({ on: "a", path: "/s/x", isDir: false, at: 1 }), { on: "b", folder: "/d" }), { direction: "cross", from: "a", machine: "b", src: "/s/x", destDir: "/d" });
+  assert.deepEqual(pastePlan(R, { on: "box", folder: "/d" }).direction, "remote");
+});
+test("pasteState: Copy a to b is enabled, Cut a to b is not", () => {
+  const a = clipEntry({ on: "a", path: "/s/x", isDir: false, at: 1 });
+  assert.deepEqual(pasteState(a, "b", "/d"), { enabled: true, reason: null });
+  assert.deepEqual(pasteState({ ...a, cut: true }, "b", "/d"), { enabled: false, reason: "Cut and Paste work only within one machine" });
 });

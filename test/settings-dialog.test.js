@@ -331,3 +331,21 @@ test("view: the two double click switches start at their defaults, flip on their
   const row = byId(view(s), "filer-pro-settings-double_click_apps");
   assert.deepEqual(texts(row.kids[0]), ["Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident."]);
 });
+
+test("view: Warn before copying between machines is a switch in Transfers & connections; it toggles and saves", async () => {
+  const id = "#filer-pro-settings-warn_cross_copy-switch";
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  assert.equal(s.flags.warn_cross_copy, true);
+  s.advanced = true;
+  const out = texts(view(s));
+  const sw = out.indexOf(id);
+  assert.ok(sw > out.indexOf("Transfers & connections"), "under the Transfers & connections subheading");
+  assert.ok(out.includes("Warn before copying between machines"));
+  const c = makeCx();
+  called(byId(view(s), "filer-pro-settings-warn_cross_copy-switch"), "on_click")[0][0]({}, c);
+  assert.equal(s.flags.warn_cross_copy, false);
+  assert.deepEqual(collect(s), { warn_cross_copy: false });
+  const off = createSettingsDialog(await snapshot({ warn_cross_copy: false }), cx);
+  assert.equal(off.flags.warn_cross_copy, false);
+  assert.deepEqual(collect(off), {});
+});

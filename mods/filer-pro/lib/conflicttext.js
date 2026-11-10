@@ -1,9 +1,15 @@
 // Texts of the target conflict dialog. Pure, so tests can reach them without the UI kit.
 // item: { name, isDir, action?, destIsDir?, direction?, machine?, mergeError? } as the dialog gets it.
 
-// Machine that holds the target: only an upload and a copy on one machine write there.
+// Texts of the warning before a copy between two machines (ui/conflict.js crossView). item: { from, machine }.
+export const CROSS_NOTE = "You can turn this warning off in Settings, Advanced, Transfers & connections.";
+export function crossText(item) {
+  return `Copied through this Mac: the data travels from ${item.from} to this Mac and on to ${item.machine}, twice over your connection.`;
+}
+
+// Machine that holds the target: an upload, a copy on one machine and a copy between machines write there.
 function targetMachine(item) {
-  return item.direction === "up" || item.direction === "remote" ? item.machine ?? null : null;
+  return item.direction === "up" || item.direction === "remote" || item.direction === "cross" ? item.machine ?? null : null;
 }
 
 // kind of the entry in the way: the dialog knows it as destIsDir (a move always, a copy since #54).

@@ -48,6 +48,7 @@ export const SETTINGS = Object.freeze([
   bool("mermaid", true, "Draw diagrams", "Turns Mermaid code in Markdown files into diagrams. Needs Node.js.", "Preview"),
   bool("svg_check", true, "Check SVG images before showing them", "Recommended. Blocks SVG files that try to load content from the internet.", "Security"),
   ...NUMBERS,
+  bool("warn_cross_copy", true, "Warn before copying between machines", "Asks first when you paste a copy from one SSH machine onto another. The data goes through this Mac, twice over your connection.", "Transfers & connections"),
   Object.freeze({ key: "node_path", kind: "path", default: "", label: "Node.js for diagrams", help: "Leave empty to find Node.js automatically. Otherwise the full path, for example /opt/homebrew/bin/node.", section: "Preview limits" }),
 ]);
 

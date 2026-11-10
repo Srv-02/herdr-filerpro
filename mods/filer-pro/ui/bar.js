@@ -29,7 +29,7 @@ function row(job, t, { onCancel, onDismiss }) {
   const small = `${SMALL_LINE_H}px`;
   return v_flex().id(`job-${job.id}`).flex_none().gap(ROW_GAP).px(10).py(ROW_PAD_Y)
     .child(h_flex().h(NAME_LINE_H).line_height(`${NAME_LINE_H}px`).flex_none().gap(6).items_center()
-      .child(div().w(12).flex_none().text_color(t.muted).child({ down: "↓", up: "↑", local: "→", remote: "→" }[job.direction]))
+      .child(div().w(12).flex_none().text_color(t.muted).child({ down: "↓", up: "↑", local: "→", remote: "→", cross: "↔" }[job.direction]))
       .child(div().flex_1().min_w(0).truncate().child(job.name))
       .child(div().id(`job-x-${job.id}`).w(20).flex_none().text_center().cursor_pointer().text_color(t.muted).hover(s => s.text_color(t.foreground))
         .on_click((_e, cx) => { running ? onCancel(job.id) : onDismiss(job.id); cx.notify(); }).child("✕")))

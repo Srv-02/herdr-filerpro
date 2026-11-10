@@ -3,9 +3,9 @@
 // or the confirmation before a delete (choices "delete" and "cancel").
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { conflictText } from "../lib/conflicttext.js";
+import { conflictText, crossText, CROSS_NOTE } from "../lib/conflicttext.js";
 
-const LABEL = { replace: "Replace", merge: "Merge", keep_both: "Keep both", copy_instead: "Copy instead", cancel: "Cancel", transfer_anyway: "Transfer anyway", ok: "OK" };
+const LABEL = { replace: "Replace", merge: "Merge", keep_both: "Keep both", copy_instead: "Copy instead", copy: "Copy", cancel: "Cancel", transfer_anyway: "Transfer anyway", ok: "OK" };
 
 // The delete button says what happens: a move to the Trash here, or a final Delete (red) on a machine.
 function label(choice, item) {
@@ -44,10 +44,23 @@ function volumeView(t, pending, handlers) {
     .child(h_flex().gap(8).justify_end().children((pending.choices ?? []).map(c => button(c, t, handlers.onChoose, item))));
 }
 
+// The warning before a copy between two machines: it goes through this Mac. Copy or Cancel.
+function crossView(t, pending, handlers) {
+  const item = pending.item ?? {};
+  return v_flex().id("filer-pro-conflict").size_full().p(16).gap(12).bg(t.background).text_color(t.foreground).text_size(13)
+    .child(div().font_semibold().child("Copy between machines"))
+    .child(v_flex().flex_1().min_h(0).gap(6)
+      .child(div().text_color(t.muted).child(crossText(item)))
+      .child(div().text_size(11).text_color(t.dim).truncate().child(item.path ?? ""))
+      .child(div().text_size(11).text_color(t.dim).child(CROSS_NOTE)))
+    .child(h_flex().gap(8).justify_end().children((pending.choices ?? []).map(c => button(c, t, handlers.onChoose, item))));
+}
+
 // pending: { batch, item, choices, remaining }; state: { all }; handlers: { onChoose(choice, cx), onToggleAll(cx) }
 export function conflictView(t, pending, state, handlers) {
   if (pending.choices?.includes("delete")) return deleteView(t, pending, handlers);
   if (pending.choices?.includes("copy_instead")) return volumeView(t, pending, handlers);
+  if (pending.choices?.includes("copy")) return crossView(t, pending, handlers);
   const item = pending.item ?? {};
   const isLinks = Boolean(pending.choices?.includes("transfer_anyway") || pending.choices?.includes("ok"));
   const text = isLinks ? item.linkWarning : conflictText(item);

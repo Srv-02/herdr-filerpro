@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { conflictText, conflictHint } from "../mods/filer-pro/lib/conflicttext.js";
+import { conflictText, conflictHint, crossText, CROSS_NOTE } from "../mods/filer-pro/lib/conflicttext.js";
 import { handleRequest } from "../mods/filer-pro/lib/requests.js";
 
 const f = (o = {}) => ({ name: "a.txt", isDir: false, ...o });
@@ -67,4 +67,13 @@ test("#54: a folder over a file offers no Merge in the hint", () => {
     "Replace deletes the existing file on box permanently.");
   assert.equal(conflictHint(d({ direction: "local", machine: null, destIsDir: true })),
     "Replace moves the existing folder to the Trash. Merge overwrites files with the same name.");
+});
+
+test("cross: the warning names both machines and the note says where to turn it off", () => {
+  assert.equal(crossText({ from: "a", machine: "b" }), "Copied through this Mac: the data travels from a to this Mac and on to b, twice over your connection.");
+  assert.equal(CROSS_NOTE, "You can turn this warning off in Settings, Advanced, Transfers & connections.");
+});
+
+test("cross: Replace deletes on the target machine", () => {
+  assert.equal(conflictHint(f({ direction: "cross", from: "a", machine: "b" })), "Replace deletes the existing file on b permanently.");
 });

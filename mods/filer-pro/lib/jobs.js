@@ -83,10 +83,11 @@ export function createJobs(deps) {
     return job;
   }
 
-  // Side of the transfer where a path lives (null = this computer): the source is remote for down,
-  // the destination for up; local copies stay on this computer, remote ones on the machine.
-  const srcOn = (direction, machine) => (direction === "down" || direction === "remote" ? machine : null);
-  const destOn = (direction, machine) => (direction === "up" || direction === "remote" ? machine : null);
+  // Side of the transfer where a path lives (null = this computer): the source is remote for down, the destination for
+  // up; local copies stay on this computer, remote ones on the machine. A copy between machines (cross) reads on `from`
+  // (the source machine) and writes on `machine` (the target machine). A job snapshot without `from` is never cross.
+  const srcOn = (direction, machine, from) => (direction === "down" || direction === "remote" ? machine : direction === "cross" ? from ?? null : null);
+  const destOn = (direction, machine) => (direction === "up" || direction === "remote" || direction === "cross" ? machine : null);
 
   // Any non-zero code is a transport failure (the probe scripts themselves always exit 0). Without stderr the
   // message stays empty, so the caller's fallback text applies (explainError), never "exit code N" (#48).
@@ -107,12 +108,12 @@ export function createJobs(deps) {
   function notifyEnd(job) {
     if (job.preview) return;
     if (job.state === "failed") {
-      const title = { down: "Download failed", up: "Upload failed", local: "Copy failed", remote: "Copy failed" }[job.direction];
+      const title = { down: "Download failed", up: "Upload failed", local: "Copy failed", remote: "Copy failed", cross: "Copy failed" }[job.direction];
       notify({ title, body: job.error, level: "error" });
     } else if (job.state === "done" && job.warning) { // done, but something stayed behind (#46): one warning toast
-      const title = { down: "Downloaded", up: "Uploaded", local: "Copied", remote: "Copied" }[job.direction];
+      const title = { down: "Downloaded", up: "Uploaded", local: "Copied", remote: "Copied", cross: "Copied" }[job.direction];
       notify({ title, body: job.warning, level: "warning" });
-    } else if (job.state === "done" && job.direction === "remote") {
+    } else if (job.state === "done" && (job.direction === "remote" || job.direction === "cross")) {
       notify({ title: "Copied", body: job.name, level: "success" });
     } else if (job.state === "done" && job.direction !== "up") {
       notify({ title: job.direction === "down" ? "Downloaded" : "Copied", body: job.name, level: "success", action: { name: "filer-pro.reveal" } });
@@ -164,11 +165,15 @@ export function createJobs(deps) {
     return into === from || into.startsWith(from === "/" ? "/" : `${from}/`);
   }
 
-  async function inspect({ direction, machine, src, destDir }) {
+  async function inspect({ direction, machine, from, src, destDir }) {
     const name = baseName(src);
     const dest = joinPath(destDir, name);
+    const srcSide = srcOn(direction, machine, from);
+    // The error of a probe on the source is explained with the machine that holds the source (from for cross); the rest with machine.
+    let host = direction === "cross" ? from : machine;
     try {
-      const out = await probe(EXISTS_SCRIPT, src, srcOn(direction, machine));
+      const out = await probe(EXISTS_SCRIPT, src, srcSide);
+      host = machine;
       if (!out.includes("y")) return { name, isDir: false, exists: false, linkWarning: null, linkTitle: null, error: `No such file or folder: ${src}` };
       const isDir = out.includes("d");
       const srcIsLink = out.includes("l");
@@ -184,7 +189,7 @@ export function createJobs(deps) {
       // be emptied. Like Move, Replace stays a choice and is refused after it (requests.js runTransfers). Locally the
       // old entry goes to the Trash by mv (on another volume than the Trash: copied there, then deleted).
       let replaceError = null;
-      if (exists && destOut.includes("d") && (direction === "up" || direction === "remote")) {
+      if (exists && destOut.includes("d") && (direction === "up" || direction === "remote" || direction === "cross")) {
         const r = await exec("sh", ["-c", REPLACE_CHECK_SCRIPT, "x", dest, ...mountTables], { on: destOn(direction, machine) });
         if (r.code !== 0) throw new Error(r.stderr ?? ""); // no message: "Could not check the path" below (#48)
         replaceError = cleanText(String(r.stdout ?? "")) || null;
@@ -195,9 +200,9 @@ export function createJobs(deps) {
       const mergeError = (direction === "local" || direction === "remote") && srcIsLink && isDir && exists && destOut.includes("d") && !destOut.includes("l")
         ? `Cannot merge a symlink into a folder: ${src}` : null;
       let w = null;
-      if (isDir && (direction === "down" || direction === "up")) { // cp -P never follows links, so a copy on one machine needs no check
+      if (isDir && (direction === "down" || direction === "up" || direction === "cross")) { // cp -P never follows links, so a copy on one machine needs no check
         try {
-          w = linkWarning(parseLinks(okOut(await exec("sh", ["-c", LINKS_SCRIPT, "links", src], { on: srcOn(direction, machine) }))), name);
+          w = linkWarning(parseLinks(okOut(await exec("sh", ["-c", LINKS_SCRIPT, "links", src], { on: srcSide }))), name);
         } catch {
           w = linkWarning(null, name);
         }
@@ -209,20 +214,20 @@ export function createJobs(deps) {
         ...(w?.blocked ? { linkBlocked: true } : {}), ...(replaceError ? { replaceError } : {}), ...(mergeError ? { mergeError } : {}),
       };
     } catch (e) {
-      return { name, isDir: false, exists: false, linkWarning: null, linkTitle: null, error: explainError(String(e?.message ?? e), machine, "Could not check the path") };
+      return { name, isDir: false, exists: false, linkWarning: null, linkTitle: null, error: explainError(String(e?.message ?? e), host, "Could not check the path") };
     }
   }
 
   // preview: a Load of the file view (main.js fetchLoad): the view shows the outcome, so the job ends without toast,
   // last_download, changed or reveal. as: the file name at the destination (loads/<key>/<key>.<ext>), the source name
   // stays the job's name. `as` only goes with choice "new"; the keep_both branch below is untouched.
-  async function start({ direction, machine, src, destDir, choice, isDir = false, reveal = false, preview = false, as = null }) {
+  async function start({ direction, machine, from, src, destDir, choice, isDir = false, reveal = false, preview = false, as = null }) {
     const id = newId();
     const name = baseName(src), file = as ?? name;
     const statusFile = `${appHome()}/filer-pro/jobs/${id}.status`;
     const startedAt = now();
     let job = {
-      id, direction, machine, target: null, src, name, destDir, dest: joinPath(destDir, file),
+      id, direction, machine, ...(direction === "cross" ? { from } : {}), target: null, src, name, destDir, dest: joinPath(destDir, file),
       temp: joinPath(destDir, tempName(file, id)), isDir, mode: choice === "keep_both" ? "new" : choice,
       state: "running", total: null, bytes: 0, rate: 0, percent: null, error: null, terminal: null,
       startedAt, lastGrowthAt: startedAt, at: startedAt, statusFile, stalled: false, finishedAt: null,
@@ -230,20 +235,23 @@ export function createJobs(deps) {
       ...(preview ? { preview: true } : {}),
     };
 
-    let t = { target: null };
+    let t = { target: null }, srcT = null;
     if (direction !== "local") {
       try {
-        t = sshTarget(okOut(await hc(["machine", "ls", "--json"])) ?? "", machine);
+        const ls = okOut(await hc(["machine", "ls", "--json"])) ?? "";
+        t = sshTarget(ls, machine);
+        if (direction === "cross" && !t.error) srcT = sshTarget(ls, from); // a cross job needs the SSH target of the source machine too
       } catch (e) {
         put(job);
         return fail(id, explainError(String(e?.message ?? e), machine, "Could not start the transfer"));
       }
-      if (t.error) {
+      if (t.error || srcT?.error) {
         put(job);
-        return fail(id, t.error);
+        return fail(id, t.error ?? srcT.error);
       }
     }
     job.target = t.target;
+    if (srcT) job.srcTarget = srcT.target;
 
     let taken = null;
     if (choice === "keep_both") {
@@ -268,7 +276,7 @@ export function createJobs(deps) {
 
     try {
       const t0 = now();
-      const total = await measure(src, srcOn(direction, machine));
+      const total = await measure(src, srcOn(direction, machine, from));
       const total2 = total !== null && now() - t0 <= SIZE_LIMIT_MS ? total : null;
       if (get(id).cancelRequested) return end(id, { state: "cancelled", total: total2 });
       job = update(id, { total: total2, percent: null });
@@ -278,6 +286,7 @@ export function createJobs(deps) {
         ...sshEnv(limits()),
         "sh", `${appHome()}/mods/filer-pro/bin/transfer.sh`,
         direction, job.mode, t.target ?? "-", src, job.dest, job.temp, statusFile, platform.trashDir(home()),
+        ...(srcT ? [srcT.target] : []), // only cross: the SSH target of the source machine, the 9th argument
       ]);
       if (r.code !== 0) return fail(id, explainError(r.stderr, t.target, "Could not start the transfer"));
       const terminal = JSON.parse(r.stdout).address;
@@ -331,6 +340,7 @@ export function createJobs(deps) {
       if (!status) await removeTemp(job);
       end(id, { state: "cancelled", error: null });
     } else if (status?.state === "failed") {
+      // Known limitation: for cross the host named in a hint is job.target (the target machine), also when the source failed.
       fail(id, explainError(status.stderr, job.target, undefined, job.direction));
     } else {
       fail(id, "Transfer ended unexpectedly");
