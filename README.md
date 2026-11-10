@@ -189,14 +189,14 @@ Right click a file for **Open in <editor>** (a GUI editor, for example **Open in
   "terminal_editor": "helix",
   "terminal_editors": [{ "name": "nvim", "command": "nvim -u NONE" }],
   "gui_editor": "Zed",
-  "gui_editors": [{ "name": "Sublime", "local": "subl {path}", "remote": "subl-remote {target} {path}", "remote_folder": "subl-remote --dir {target} {path}" }]
+  "gui_editors": [{ "name": "Sublime", "local": "subl {path}" }]
 }
 ```
 
 - `terminal_editor`: one of `vi` (default), `vim`, `nano`, `micro`, `fresh`, `helix` (runs `hx`), or the name of an own entry.
 - `terminal_editors`: own entries `{ "name", "command" }`. `command` is the program with its own arguments; the file path is added as the last argument. An own entry with a shipped name replaces it.
 - `gui_editor`: one of `VS Code` (default), `Cursor`, `Zed`, or the name of an own entry.
-- `gui_editors`: own entries `{ "name", "local", "remote", "remote_folder" }`. `local` opens a file or folder on this computer, `remote` (optional) a file on an SSH machine, `remote_folder` (optional) a folder on an SSH machine, with the same placeholders as `remote`. Without `remote` the row entry is dimmed on a machine, without `remote_folder` the free-area entry. An own entry replaces a shipped one of the same name as a whole, so a `VS Code` entry of your own has no `remote_folder` unless you add it. Placeholders: `{path}` (absolute path on the file's machine), `{path_uri}` (the same path percent-encoded for a URI) and `{target}` (the machine's SSH target, `remote` only). Each template needs `{path}` or `{path_uri}`.
+- `gui_editors`: own entries `{ "name", "local", "remote", "remote_folder" }`. `local` opens a file or folder on this computer, `remote` (optional) a file on an SSH machine, `remote_folder` (optional) a folder on an SSH machine, with the same placeholders as `remote`. Without `remote` the row entry is dimmed on a machine, without `remote_folder` the free-area entry. An own entry replaces a shipped one of the same name as a whole, so a `VS Code` entry of your own has no `remote_folder` unless you add it. Placeholders: `{path}` (absolute path on the file's machine), `{path_uri}` (the same path percent-encoded for a URI) and `{target}` (the machine's SSH target, for `remote` and `remote_folder` only). Each template needs `{path}` or `{path_uri}`.
 
 Commands and templates are split into words first (spaces separate, `'…'` and `"…"` group, no escapes), then the placeholders are filled in per word. No shell is involved, so any file name is safe. Unknown names and broken entries fall back to the default; nothing checks beforehand whether the editor is installed. A missing terminal editor shows the shell's "not found" in the new terminal, a failing GUI editor shows its error as a notice. Command line tools that are not on Herdr's `PATH` are also tried in `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`.
 
