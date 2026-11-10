@@ -94,6 +94,8 @@ const called = (el, name) => el.calls.filter((c) => c[0] === name).map((c) => c.
 const textOf = (el) => (typeof el === "string" ? el : (el?.kids ?? []).map(textOf).join(""));
 const cell = (root, path) => findId(root, `file-${path}-size`);
 const lists = () => host.calls.filter((c) => c[1][0] === "files");
+// host.calls keeps args.slice(2): the script itself is gone and the first entry is its $0, "size" for SIZE_SCRIPT.
+const sizeRuns = () => host.calls.filter((c) => c[0] === "sh" && c[1][0] === "size");
 
 test("show_sizes off: the listing gets no size argument and the rows have no size column", async () => {
   const self = await panel({ sizes: false });
@@ -150,6 +152,7 @@ test("Calculate Size: the menu asks, the panel runs SIZE_SCRIPT once with a 120 
   assert.equal(host.shared["filer-pro.sizes"][key].state, "running");
   assert.ok(called(findId(self.render(cx), "file-src-size"), "child").some(([c]) => called(c, "spin").length), "a spinner while it runs");
   await settle();
+  assert.equal(sizeRuns().length, 1, "sizeRuns() sees a real SIZE_SCRIPT run");
   assert.deepEqual(asked, [[["size", "/r/src", "120"], { on: null, timeout: 125000 }]]);
   self.pollSizes(cx); await settle();
   assert.equal(asked.length, 1, "claimed once");
@@ -234,6 +237,6 @@ test("a panel that does not show the folder leaves the request to the one that d
   const self = await panel();
   host.shared["filer-pro.sizes"] = { [sizeKey("box", "/r/src")]: { state: "requested", id: "x" }, [sizeKey(null, "/elsewhere/a")]: { state: "requested", id: "y" } };
   self.pollSizes(cx); await settle();
-  assert.equal(host.calls.filter((c) => c[1][0] === SIZE_SCRIPT).length, 0);
+  assert.equal(sizeRuns().length, 0);
   assert.equal(host.shared["filer-pro.sizes"][sizeKey("box", "/r/src")].state, "requested");
 });

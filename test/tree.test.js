@@ -156,10 +156,19 @@ test("LIST_SCRIPT without <sizes> runs no stat and no xargs (show_sizes off cost
   const d = sizeFixture(), bin = mkTmpSync("filer-pro-spy-"), log = path.join(bin, "log");
   for (const name of ["stat", "xargs"]) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho ${name} >> '${log}'\n`, { mode: 0o755 });
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  for (const args of [[], ["0", "0"], ["0", "0", "1"]]) {
-    const r = spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, "500", ...args], { encoding: "utf8", env });
-    assert.equal(r.status, 0);
-    assert.ok(!r.stdout.includes("S\0"));
+  // `$5=1` prints the real path as `P\0<path>\0`: a folder name that ends in S must not look like the size marker, so one
+  // of the two folders is named so on purpose (random folder names end in S about once in 62 runs).
+  const endsInS = path.join(d, "dirS");
+  fs.mkdirSync(endsInS);
+  fs.writeFileSync(path.join(endsInS, "f"), "x");
+  for (const dir of [d, endsInS]) {
+    for (const args of [[], ["0", "0"], ["0", "0", "1"]]) {
+      const r = spawnSync("sh", ["-c", LIST_SCRIPT, "files", dir, "500", ...args], { encoding: "utf8", env });
+      assert.equal(r.status, 0);
+      const list = parseListing(r.stdout);
+      assert.ok(list.length > 0);
+      assert.ok(list.every((e) => e.size === undefined), "no size block without <sizes>");
+    }
   }
   assert.equal(fs.existsSync(log), false);
   spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, "500", "0", "0", "0", "1"], { encoding: "utf8", env });

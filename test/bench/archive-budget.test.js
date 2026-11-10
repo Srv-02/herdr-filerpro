@@ -35,8 +35,8 @@ export default class Budget extends View { render() { return div(); } }
 throw new Error("RESULT " + JSON.stringify(result));
 `;
 
-// The limit is wall-clock time and `npm test` runs other files in parallel: an interrupted run is tried again after a
-// growing pause, as in test/quickjs-budget.test.js. A pass still needs one complete run inside a single job; the old
+// The limit is wall-clock time and `npm run bench` runs the bench files in parallel: an interrupted run is tried again after a
+// growing pause, as in test/bench/quickjs-budget.test.js. A pass still needs one complete run inside a single job; the old
 // check (one job for the whole list) was interrupted on every try from 5,000 members on.
 const PAUSES_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

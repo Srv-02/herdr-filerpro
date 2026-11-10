@@ -34,9 +34,9 @@ export default class Budget extends View { render() { return div(); } }
 throw new Error("RESULT " + JSON.stringify(result));
 `;
 
-// The limit is wall-clock time, and `npm test` runs the other test files in parallel, so under load a run can be
+// The limit is wall-clock time, and `npm run bench` runs the bench files in parallel (node --test), so under load a run can be
 // interrupted although its work fits. An interrupted run is tried again after a pause that grows (1, 2, 4, 8, 16, 30 s:
-// about a minute in all, as long as a whole `npm test` keeps the CPU busy), so a retry runs on a quieter machine. This
+// about a minute in all, as long as a whole `npm run bench` keeps the CPU busy), so a retry runs on a quieter machine. This
 // does not weaken the check: the old per-byte code needed well over the limit and was interrupted on every try,
 // so a pass still needs one complete run inside a single job.
 const PAUSES_MS = [1000, 2000, 4000, 8000, 16000, 30000];
