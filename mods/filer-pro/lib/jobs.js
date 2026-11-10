@@ -15,6 +15,7 @@ import { numbers } from "./settings.js";
 
 const KEY = "filer-pro.jobs";
 const SIZE_LIMIT_MS = 25_000;
+const SOURCE_SIZE_MS = 5_000;
 export const KEEP_DONE_MS = 10_000;
 
 // The SSH options for transfer.sh (FILER_PRO_SSH_*): an `env` prefix for the hc run argv, only when a value differs from
@@ -100,6 +101,16 @@ export function createJobs(deps) {
   async function measure(path, on) {
     try {
       return parseSize(okOut(await exec("sh", ["-c", SIZE_SCRIPT, "size", path], { on })));
+    } catch {
+      return null;
+    }
+  }
+
+  // Size of a source for the warning before a copy between machines (requests.js): null when it is unknown or takes
+  // longer than timeoutMs, so a big folder never holds the dialog up.
+  async function sourceSize({ direction, machine, from, src }, timeoutMs = SOURCE_SIZE_MS) {
+    try {
+      return parseSize(okOut(await exec("sh", ["-c", SIZE_SCRIPT, "size", src], { on: srcOn(direction, machine, from), timeout: timeoutMs })));
     } catch {
       return null;
     }
@@ -411,5 +422,5 @@ export function createJobs(deps) {
     setShared(KEY, rest);
   }
 
-  return { inspect, start, tick, cancel, recover, clearFinished, dismiss };
+  return { inspect, sourceSize, start, tick, cancel, recover, clearFinished, dismiss };
 }

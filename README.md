@@ -34,7 +34,7 @@ The tree and the open file stay current without polling. On this computer they f
 
 ![A running transfer and the conflict dialog](screenshots/transfers.png)
 
-Drop files from the Finder to upload, right click to download. Every transfer shows progress and can be cancelled, and nothing is overwritten without asking. Copy on one machine and Paste on another copies between the two machines through this Mac (`scp -3`): the data travels over your connection twice, and the two machines need no access to each other. A short warning names both machines first; **Warn before copying between machines** in Settings turns it off. Cut and Paste between two machines is not possible.
+Drop files from the Finder to upload, right click to download. Every transfer shows progress and can be cancelled, and nothing is overwritten without asking. Copy on one machine and Paste on another copies between the two machines through this computer (`scp -3`): the data travels over your connection twice, and the two machines need no access to each other. A short warning names both machines and the amount first; **Don't show again** in it, or **Warn before copying between machines** in Settings, turns it off. Cut and Paste between two machines is not possible.
 
 ### Preview
 
@@ -167,7 +167,7 @@ A missing key means its default. In the file, a number of the wrong type (or wit
 | `ssh_alive_count` | Advanced, Transfers & connections: Drop the connection after | `4` | 1–100 | SSH `ServerAliveCountMax` for transfers and previews |
 | `stall_seconds` | Advanced, Transfers & connections: Stop a stuck transfer after | `120` | 10–3,600 s | A transfer whose temp file does not grow this long is stopped as stalled |
 | `keep_done_seconds` | Advanced, Transfers & connections: Keep finished transfers visible for | `10` | 0–3,600 s | How long finished transfers stay in the transfers bar |
-| `warn_cross_copy` | Advanced, Transfers & connections: Warn before copying between machines | `true` | `true` / `false` | Ask once before a paste copies from one machine to another through this Mac |
+| `warn_cross_copy` | Advanced, Transfers & connections: Warn before copying between machines | `true` | `true` / `false` | Ask once per paste before the data of a copy between two machines travels through this computer; **Don't show again** in the warning sets it to `false` |
 | `perf` | config file only | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart) |
 
 The SSH settings apply to transfers (download, upload, copy on a machine, copy between machines, Load) and to the preview's copy of images and PDFs from a machine (that copy also stops after 30 s). Fixed and not configurable: the 100-megapixel limit for images, the 30 s limit per Mermaid render, and internal timers.
@@ -198,7 +198,7 @@ Remote files: **Edit in Terminal** starts the editor in a split of the focused t
 
 ### What it runs and touches
 
-- **Programs:** `ssh` and `scp` (`scp -3` for a copy between two machines, through this Mac), `hc`, `sh`, `cp`, `mv`, `stat` and `find` (permissions and editing), `chmod`, `id` and `wc` (permissions), `git status` (read only), for editing `head`, `base64`, `tr`, `mktemp`, `cat`, `dirname`, `awk` and `sha256sum` (or `shasum`, or `openssl`), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
+- **Programs:** `ssh` and `scp` (`scp -3` for a copy between two machines, through this computer), `hc`, `sh`, `cp`, `mv`, `stat` and `find` (permissions and editing), `chmod`, `id` and `wc` (permissions), `git status` (read only), for editing `head`, `base64`, `tr`, `mktemp`, `cat`, `dirname`, `awk` and `sha256sum` (or `shasum`, or `openssl`), `open`, `xattr`, `pbcopy`, `/usr/bin/trash`, `osascript` (PDF pages through PDFKit), `node` (Mermaid), and the editors you configure (only when you pick Open in Editor or Edit in Terminal).
 - **Files:** it lists and changes files wherever you browse and act, locally and on your machines. Its own data lives in `~/.config/herdr-app/filer-pro.json`, `~/.config/herdr-app/data/filer-pro/` and `~/.config/herdr-app/filer-pro/`. Editing adds a private folder `~/.cache/filer-pro/edit/` on the machine of the file (upload and backup while a save runs, normally empty afterwards), and unsaved text is kept in the private folder `~/.config/herdr-app/filer-pro/unsaved/` (0700) until it is saved or discarded.
 - **Automation folder:** the mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). Anything that can write to that folder can drive the mod.
 - **Network:** SSH to the machines you added to Herdr, and at most one request per day to GitHub for the update check (off with `"update_check": false`), plus one for each click on **Check now** in Settings. Documents never load remote content; this holds for SVG images only while `svg_check` is on (whether Herdr's image renderer fetches external references of an unchecked SVG is not verified).

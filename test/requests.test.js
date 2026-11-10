@@ -1007,7 +1007,7 @@ test("paste cross: asks the warning once (copy / cancel), then inspects and star
   assert.deepEqual(await handleRequest(crossPaste(), d), { ok: true, jobs: [{ id: "j1" }] });
   assert.equal(d.asked.length, 1);
   assert.deepEqual(d.asked[0].choices, ["copy", "cancel"]);
-  assert.deepEqual(d.asked[0].item, WARN_ITEM);
+  assert.deepEqual(d.asked[0].item, { ...WARN_ITEM, count: 1, size: null }); // no sourceSize in this fake: size unknown
   assert.equal(d.asked[0].remaining, 1);
   assert.deepEqual(d.calls, [
     ["inspect", { direction: "cross", machine: "other", from: "box", src: "/srv/a", destDir: "/in" }],
@@ -1062,6 +1062,38 @@ test("runTransfers: warn is asked after inspect with its own batch id, before cr
   assert.equal(r.ok, true);
   assert.equal(d.calls[0][0], "inspect");
   assert.equal(d.asked[0].batch, "b1#0");
+});
+
+test("paste cross: the warning tells how many entries and bytes travel, measured on the source machine", async () => {
+  const d = deps({ store: crossClip(), answers: [{ choice: "copy" }] });
+  d.jobs.sourceSize = async (a) => (d.calls.push(["sourceSize", a]), 48_100_000);
+  assert.equal((await handleRequest(crossPaste(), d)).ok, true);
+  assert.deepEqual(d.calls[1], ["sourceSize", { direction: "cross", machine: "other", from: "box", src: "/srv/a" }]);
+  assert.equal(d.asked[0].item.count, 1);
+  assert.equal(d.asked[0].item.size, 48_100_000);
+  const e = deps({ store: crossClip(), answers: [{ choice: "copy" }] });
+  e.jobs.sourceSize = async () => null; // unknown or too slow: the dialog leaves the size out
+  await handleRequest(crossPaste(), e);
+  assert.equal(e.asked[0].item.size, null);
+});
+
+test("paste cross: Don't show again with Copy turns warn_cross_copy off; with Cancel nothing is saved", async () => {
+  const saved = [];
+  const d = deps({ store: crossClip(), answers: [{ choice: "copy", apply_to_all: true }] });
+  d.saveConfig = async (edits) => (saved.push(edits), { ok: true });
+  assert.equal((await handleRequest(crossPaste(), d)).ok, true);
+  assert.deepEqual(saved, [{ warn_cross_copy: false }]);
+  const e = deps({ store: crossClip(), answers: [{ choice: "cancel", apply_to_all: true }] });
+  e.saveConfig = async (edits) => (saved.push(edits), { ok: true });
+  assert.deepEqual(await handleRequest(crossPaste(), e), { ok: false, error: "Cancelled" });
+  const f = deps({ store: crossClip(), answers: [{ choice: "copy" }] });
+  f.saveConfig = async (edits) => (saved.push(edits), { ok: true });
+  await handleRequest(crossPaste(), f);
+  assert.equal(saved.length, 1, "only Copy with the box checked saves");
+  // A failing save does not stop the copy.
+  const g = deps({ store: crossClip(), answers: [{ choice: "copy", apply_to_all: true }] });
+  g.saveConfig = async () => { throw new Error("disk full"); };
+  assert.deepEqual(await handleRequest(crossPaste(), g), { ok: true, jobs: [{ id: "j1" }] });
 });
 
 test("runMove reserved names include a running cross job on the target machine", async () => {

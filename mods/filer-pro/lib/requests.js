@@ -223,8 +223,17 @@ export async function runTransfers({ direction, machine, from, paths, destDir, c
   }
   const started = [];
   if (items.length > 0 && warn) {
-    const a = await deps.ask({ batch: `${deps.newBatchId()}#0`, item: warn.item, choices: ["copy", "cancel"], remaining: 1 });
+    // The dialog names how many entries and how many bytes travel; a size that is unknown or slow to get is left out.
+    let size = 0;
+    for (const item of items) {
+      const n = deps.jobs.sourceSize ? await deps.jobs.sourceSize({ direction, machine, ...(from ? { from } : {}), src: item.path }) : null;
+      size = size === null || typeof n !== "number" ? null : size + n;
+    }
+    const a = await deps.ask({ batch: `${deps.newBatchId()}#0`, item: { ...warn.item, count: items.length, size }, choices: ["copy", "cancel"], remaining: 1 });
     if (a?.choice !== "copy") return { ok: false, error: "Cancelled", ...(errors.length > 0 ? { errors } : {}) };
+    // "Don't show again" (the dialog's checkbox, sent as apply_to_all) turns warn_cross_copy off, only together with Copy.
+    // A failed save only means the warning comes again next time.
+    if (a.apply_to_all === true && deps.saveConfig) await Promise.resolve(deps.saveConfig({ warn_cross_copy: false })).catch(() => {});
   }
   if (items.length > 0) {
     const batch = createBatch(items);
@@ -370,7 +379,7 @@ export async function handleRequest(req, deps) {
       const plan = pastePlan(clip, { on: req.machine ?? null, folder: req.folder });
       if (plan.error) return { ok: false, error: plan.error };
       if (plan.move) return runMove({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
-      // A copy between two machines runs through this Mac: one warning per paste unless the setting is off.
+      // A copy between two machines runs through this computer: one warning per paste unless the setting is off.
       const warn = plan.direction === "cross" && (await deps.loadConfig())?.warn_cross_copy !== false
         ? { item: { name: baseName(plan.src), isDir: clip.isDir === true, path: plan.src, from: plan.from, machine: plan.machine, direction: "cross" } } : null;
       return runTransfers({

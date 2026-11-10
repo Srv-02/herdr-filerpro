@@ -1,10 +1,16 @@
 // Texts of the target conflict dialog. Pure, so tests can reach them without the UI kit.
 // item: { name, isDir, action?, destIsDir?, direction?, machine?, mergeError? } as the dialog gets it.
+import { formatBytes } from "./sizes.js";
 
-// Texts of the warning before a copy between two machines (ui/conflict.js crossView). item: { from, machine }.
-export const CROSS_NOTE = "You can turn this warning off in Settings, Advanced, Transfers & connections.";
+// Texts of the warning before a copy between two machines (ui/conflict.js crossView). item: { from, machine, count?,
+// size? } with the herdr machine names; count is the number of pasted entries, size their bytes (null: unknown, left out).
+export const THIS_COMPUTER = "this computer";
+export const CROSS_DONT_SHOW = "Don't show again";
+export const crossTitle = (item) => `Copy from ${item.from} to ${item.machine}?`;
 export function crossText(item) {
-  return `Copied through this Mac: the data travels from ${item.from} to this Mac and on to ${item.machine}, twice over your connection.`;
+  const n = Number.isInteger(item.count) && item.count > 0 ? item.count : 1;
+  const amount = `${n} ${n === 1 ? "item" : "items"}${typeof item.size === "number" ? `, ${formatBytes(item.size)}` : ""}`;
+  return `${amount}. The data travels through ${THIS_COMPUTER}: ${item.from} → ${THIS_COMPUTER} → ${item.machine}. Slower than a direct copy, and it uses ${THIS_COMPUTER}'s connection twice.`;
 }
 
 // Machine that holds the target: an upload, a copy on one machine and a copy between machines write there.

@@ -1275,6 +1275,17 @@ test("inspect cross: the source is probed on from, the target on machine", async
   assert.deepEqual(f.execsOf("sh").map((c) => [c.args[3], c.on]), [["/srv2/data/a.txt", "box2"], ["/srv/in", "box"], ["/srv/in/a.txt", "box"]]);
 });
 
+test("sourceSize: measured on the source machine (from for cross) with a short timeout; unknown or failing gives null", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  f.sizes["/srv2/d"] = 4096;
+  assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), 4096);
+  const call = f.execsOf("sh").at(-1);
+  assert.deepEqual([call.args[3], call.on, call.timeout], ["/srv2/d", "box2", 5000]);
+  assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/missing" }), null);
+  f.sizeError = new Error("timed out");
+  assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), null);
+});
+
 test("inspect cross of a folder: the link check runs on from, the Replace mount check on machine", async () => {
   const { f, jobs } = setup({ machines: TWO });
   withDirs(f, "/srv2/d", "/srv/in", "/srv/in/d");

@@ -341,6 +341,11 @@ test("view: Warn before copying between machines is a switch in Transfers & conn
   const sw = out.indexOf(id);
   assert.ok(sw > out.indexOf("Transfers & connections"), "under the Transfers & connections subheading");
   assert.ok(out.includes("Warn before copying between machines"));
+  assert.ok(out.includes("Asks once per paste when the data has to travel through this computer."));
+  // Approved design: the first row of the group, above the numbers, with the same switch as the basic switches.
+  assert.ok(sw < out.indexOf("#filer-pro-settings-ssh_connect_timeout"), "first row of Transfers & connections");
+  const look = (e) => JSON.stringify(e.calls.filter(([k]) => k !== "id" && k !== "on_click"));
+  assert.equal(look(byId(view(s), "filer-pro-settings-warn_cross_copy-switch")), look(byId(view(s), "filer-pro-settings-svg_check-switch")));
   const c = makeCx();
   called(byId(view(s), "filer-pro-settings-warn_cross_copy-switch"), "on_click")[0][0]({}, c);
   assert.equal(s.flags.warn_cross_copy, false);
