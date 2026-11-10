@@ -258,7 +258,7 @@ function body(t, state, handlers, stored) {
       [input(t, f, 190), button(t, "filer-pro-settings-choose", "Choose…", handlers.onChoose)], { last: true, error: f.error }),
 
     heading(t, "Editors"),
-    editorBlock(t, state, "gui", "Open in Editor", "The app that opens when you pick Open in Editor. Works for files on this Mac and on your SSH machines.", false),
+    editorBlock(t, state, "gui", "Open in Editor", "The app the Open in … menu entries use. Works for files on this Mac and on your SSH machines.", false),
     editorBlock(t, state, "terminal", "Edit in Terminal", "The editor that opens in a new split when you pick Edit in Terminal.", true),
     h_flex().id("filer-pro-settings-editors-info").gap(8).items_start().mt(4).px(12).py(10).rounded(8).bg(t.hover)
       .child(div().mt(2).flex_none().child(icon("info", 14, t.muted)))
