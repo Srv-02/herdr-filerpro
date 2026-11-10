@@ -25,7 +25,8 @@ import { createFileOps, successToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
-import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
+import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, parseListing, psEntries, limitText } from "./lib/tree.js";
+import { SIZE_SCRIPT, FOLDER_SIZE_MS, TOO_LARGE, busy, sizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "./lib/sizes.js";
 import { numbers, saveSettings } from "./lib/settings.js";
 import { GIT_PLACE_ARGS, gitPlace, gitPrefix, gitWatchDirs, gitWatchHit, rootRelative } from "./lib/gitmarks.js";
 import { bindZoomKeys } from "./lib/pdfkeys.js";
@@ -68,7 +69,7 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 // The settings before the config file was read (and in copies that never read it): today's defaults.
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, show_sizes: false };
 const MB = 1024 * 1024;
 // How much of the open file a refresh flight reloads at its end (refresh opts.file, this.fileWanted): TEXT only reads and
 // compares text (a watch batch that did not name the file: no exec), ALL also probes an image or PDF again (a change
@@ -90,21 +91,19 @@ const FAILED = { download: "Download failed", upload: "Upload failed", copy: "Co
 // perFolder: the setting list_per_folder; the listing returns at most one entry more, so a cut folder is noticed.
 // hide: the settings hide_system_files and hide_dotfiles; the listing leaves those entries out before it counts.
 // real (local subfolders): the listing also gives the folder's real path (cd -P), set as entries.real ("" unknown).
-async function directory(path, on, perFolder, hide, real = false) {
+// sizes (setting show_sizes, issue #58): files carry size, from one batched stat in the same call (lib/tree.js).
+async function directory(path, on, perFolder, hide, real = false, sizes = false) {
   if (!on && window()?.platform === "windows") {
-    const r = await exec("powershell", ["-NoProfile", "-Command", psListCommand(path, perFolder, hide)]);
+    const r = await exec("powershell", ["-NoProfile", "-Command", psListCommand(path, perFolder, hide, sizes)]);
     if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
-    const result = JSON.parse(r.stdout || "[]");
-    return Array.isArray(result) ? result : [result];
+    return psEntries(JSON.parse(r.stdout || "[]"));
   }
-  const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder), ...hideArgs(hide), ...(real ? ["1"] : [])], { on });
+  const r = await exec("sh", ["-c", LIST_SCRIPT, "files", path, String(perFolder), ...hideArgs(hide), ...(real || sizes ? [real ? "1" : "0"] : []), ...(sizes ? ["1"] : [])], { on });
   if (r.code === LIST_DENIED) throw Object.assign(new Error(NO_LIST_MESSAGE), { denied: true });
   if (r.code !== 0) throw Object.assign(new Error(r.stderr || "Cannot list this folder"), { missing: folderMissing(r) });
-  const fields = r.stdout.split("\0"), out = [];
-  const first = fields[0] === "P" && fields.length > 1 ? 2 : 0;
-  for (let i = first; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
+  const out = parseListing(r.stdout);
   const entries = markBundles(out, { on, platform: window()?.platform }); // macOS packages (lib/bundles.js), local only
-  entries.real = first ? fields[1] : "";
+  entries.real = out.real;
   return entries;
 }
 
@@ -175,7 +174,7 @@ export default class FilerPro extends View {
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
       // The first listing ran with the defaults: other list settings reload the tree once more (no timer to wait for).
-      if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles"].some((k) => cfg[k] !== DEFAULTS[k])) this.refresh(cx);
+      if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles", "show_sizes"].some((k) => cfg[k] !== DEFAULTS[k])) this.refresh(cx);
       this.version = await this.readVersion();
       if (cfg.perf) await this.startPerf(cx);
     });
@@ -193,7 +192,7 @@ export default class FilerPro extends View {
       this.refreshedAt = Date.now();
       this.reloadConfig(cx, { file: FILE_NAMED });
     });
-    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
+    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.pollSizes(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
     this.drive(cx);
   }
 
@@ -442,7 +441,9 @@ export default class FilerPro extends View {
         close();
       };
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
-      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine), windows: window()?.platform === "windows", bundle: p.bundle === true, contents: p.contents === true };
+      const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
+      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, remote: Boolean(p.machine), windows: window()?.platform === "windows", bundle: p.bundle === true, contents: p.contents === true,
+        size: sizeDetail(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
       // remote the file is downloaded first (download_folder, conflict dialog) and opened by afterDownload.
@@ -472,6 +473,8 @@ export default class FilerPro extends View {
           Promise.resolve(exec(cmd, args)).catch(() => {}).finally(close);
         },
         // The panel that shows the package expands or collapses it (pollPackage).
+        // The panel that shows the folder runs it (pollSizes); the result shows in the size column and here.
+        calculate_size: () => { setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), p.machine, p.path, this.newId(), Date.now())); close(); },
         package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
@@ -761,7 +764,7 @@ export default class FilerPro extends View {
     const { on, cwd: root } = context;
     let entries;
     try {
-      entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder, this.conf, Boolean(path) && !on);
+      entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder, this.conf, Boolean(path) && !on, this.conf.show_sizes === true);
     } catch (e) {
       // A folder that cannot be read or searched shows a note instead of looking empty (issue #49); the root has the message below the tree.
       if (e?.denied && this.current(context) && (!path || this.folders.has(path))) { this.entries.set(path, Object.assign([], { denied: true })); return; }
@@ -889,6 +892,30 @@ export default class FilerPro extends View {
     this.packageSeen = r.id;
     const rel = expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on);
     if (rel) cx.spawn(async (cx) => this.showPackage(rel, r.show === true, cx));
+  }
+
+  // Calculate Size (issue #58): the menu copy asks through shared filer-pro.sizes (lib/sizes.js requestSize). The panel
+  // copy that shows the folder claims the request and runs SIZE_SCRIPT there (one find, never following links), with
+  // FOLDER_SIZE_MS as the limit: a bigger tree is "Too large to calculate", a failure a toast. Called every 250 ms.
+  // Another copy's claim or result redraws this one too (the value changed since the last tick).
+  pollSizes(cx) {
+    const map = shared("filer-pro.sizes");
+    if (map !== this.sizesSeen) { this.sizesSeen = map; if (this.conf.show_sizes) cx.notify(); }
+    if (!map || !this.root) return;
+    const got = claimSizes(map, (machine, path) => (machine ?? null) === (this.on ?? null) && expandPath({ machine, folder: path }, this.root, this.on) !== null, Date.now());
+    if (!got) return;
+    setShared("filer-pro.sizes", got.map);
+    for (const { key, machine, path, id } of got.claimed) cx.spawn(async (cx) => {
+      const start = Date.now();
+      let outcome;
+      try { outcome = sizeResult({ result: await exec("sh", ["-c", SIZE_SCRIPT, "size", path], { on: machine, timeout: FOLDER_SIZE_MS }), ms: Date.now() - start }); }
+      catch (e) { outcome = sizeResult({ error: e, ms: Date.now() - start }); }
+      setShared("filer-pro.sizes", storeSize(shared("filer-pro.sizes"), key, id, outcome));
+      if (outcome.state === "failed") notify({ title: "Calculate Size failed", body: outcome.error, level: "error" });
+      else if (outcome.state === "toolarge") notify({ title: "Calculate Size", body: `${TOO_LARGE}: ${baseName(path)}`, level: "info" });
+      cx.notify();
+    });
+    cx.notify();
   }
 
   // The loaded entry of a path relative to the root, or undefined.
@@ -1894,7 +1921,12 @@ export default class FilerPro extends View {
   refreshButton(t) {
     return div().id("files-refresh").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover)).tooltip("Refresh").accessibility_label("Refresh")
-      .on_click((_e, cx) => this.reloadConfig(cx, { file: FILE_NAMED, force: true }))
+      .on_click((_e, cx) => {
+        // Calculated folder sizes are a snapshot (lib/sizes.js): Refresh drops those of the shown folder and below.
+        const sizes = shared("filer-pro.sizes"), next = dropSizes(sizes, this.on, this.root, Date.now());
+        if (next !== sizes) setShared("filer-pro.sizes", next);
+        this.reloadConfig(cx, { file: FILE_NAMED, force: true });
+      })
       .child(svg(`${BASE}/refresh-cw.svg`).size(14).text_color(t.muted));
   }
 
@@ -1978,8 +2010,10 @@ export default class FilerPro extends View {
     return visibleRows(this.entries, this.folders, { limit: this.conf.list_total, maxDepth: this.conf.tree_depth, isDir: (entry, path) => treeDir(entry, path, this.packages) });
   }
 
-  // The tree rows; the last opened file is marked with t.selected (issue #5).
+  // The tree rows; the last opened file is marked with t.selected (issue #5). With show_sizes (issue #58) a size column
+  // sits right-aligned directly left of the git mark, which then keeps a fixed slot at the edge so the sizes line up.
   rows(t, dark) {
+    const sizes = this.conf.show_sizes === true ? shared("filer-pro.sizes") ?? {} : null, font = sizes ? settings().font_family : null;
     return this.visible().map(({ path, entry, depth }) => {
       if (entry.note) return h_flex().id(`file-${path}-note`).h(ROW_H).flex_none().pl(8 + depth * 18 + 19).pr(8).items_center().text_size(12).text_color(t.dim).child(div().flex_1().min_w(0).truncate().child(entry.name));
       const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
@@ -1997,8 +2031,19 @@ export default class FilerPro extends View {
         .child(dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(image(bundle && !dir ? bundleIcon(entry.name, dark) : icon(path, entry.dir, open, dark)).size(16).flex_none())
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
-        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark)));
+        .when(Boolean(sizes), el => el.child(this.sizeCell(path, entry, sizes, font, t)))
+        .when(Boolean(mark) || Boolean(sizes), el => el.child(div().text_size(11).when(Boolean(sizes), m => m.w(12).flex_none().flex().justify_center()).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark ?? "")));
     });
+  }
+
+  // The size of a row (lib/sizes.js sizeCell): text 11, dim, in the terminal font so the digits line up; a spinner
+  // while Calculate Size runs on the folder.
+  sizeCell(path, entry, sizes, font, t) {
+    const calc = Boolean(this.on) || window()?.platform !== "windows"; // Calculate Size is dimmed on local Windows
+    const cell = sizeCell(entry, entry.dir ? sizes[sizeKey(this.on, joinPath(this.root, path))] : undefined, Date.now(), calc);
+    const el = div().id(`file-${path}-size`).flex_none().flex().justify_end().text_size(11).text_color(t.dim).when(Boolean(font), e => e.font_family(font));
+    if (cell.spin) return el.child(svg(`${BASE}/loader-circle.svg`).size(11).text_color(t.dim).spin(900));
+    return el.when(Boolean(cell.title), e => e.tooltip(cell.title)).child(cell.text);
   }
 
   // A rename, a delete or a finished job changed the file system: reload the tree and the open file soon.

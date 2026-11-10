@@ -187,7 +187,7 @@ test("the row menu of a package gets bundle props, its parent as paste target, a
   assert.equal(o.height, menuHeight(rowMenuItems({ paste: { enabled: false }, isDir: true, bundle: true })));
   handler(byId(self.render(cx), "file-src"), "on_mouse_down", "right")({}, cx);
   assert.equal(log.overlays.at(-1).props.bundle, false);
-  assert.equal(log.overlays.at(-1).height, menuHeight(rowMenuItems({ paste: { enabled: false } })));
+  assert.equal(log.overlays.at(-1).height, menuHeight(rowMenuItems({ paste: { enabled: false }, isDir: true })), "a folder: with Calculate Size (issue #58)");
 });
 
 test("a drop onto a closed package lands in its folder, onto shown package contents inside it", async () => {

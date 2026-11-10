@@ -42,6 +42,7 @@ export const SETTINGS = Object.freeze([
   Object.freeze({ key: "download_folder", kind: "text", default: "~/Downloads", label: "Download folder", help: "Where Download and Download to… put files.", section: "Downloads" }),
   bool("hide_system_files", true, "Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them.", "File list"),
   bool("hide_dotfiles", false, "Hide hidden files", "Hides every file and folder whose name starts with a dot, such as .env or .gitignore.", "File list"),
+  bool("show_sizes", false, "Show file sizes", "Sizes next to files. Folders show a size after Calculate Size.", "File list"),
   bool("double_click_files", false, "Open files with a double click", "A single click only marks a file. Folders still open with a single click.", "File list"),
   bool("double_click_apps", true, "Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident.", "File list"),
   bool("preview", true, "Show previews", "Markdown, HTML, images and PDFs open formatted. Turn off to always see the raw text.", "Preview"),

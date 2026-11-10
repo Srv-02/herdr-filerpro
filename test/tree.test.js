@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, LIST_SCRIPT, psListCommand, limitText } from "../mods/filer-pro/lib/tree.js";
+import { pruneFolder, folderMissing, expandPath, visibleRows, ROW_H, LIST_SCRIPT, psListCommand, parseListing, psEntries, limitText } from "../mods/filer-pro/lib/tree.js";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -102,4 +102,85 @@ test("limitText names the configured numbers, also without Intl (herdr's engine)
     assert.equal(limitText(500, 5000), "File list limited to 500 entries per folder and 5,000 total");
     assert.equal(limitText(1200, 20000), "File list limited to 1,200 entries per folder and 20,000 total");
   });
+});
+
+// Issue #58: file sizes from one batched stat in the same sh -c as the listing.
+function sizeFixture() {
+  const d = mkTmpSync("filer-pro-sizes-");
+  fs.writeFileSync(path.join(d, "a b.txt"), "hello");
+  fs.writeFileSync(path.join(d, "-lead"), "x".repeat(1500));
+  fs.writeFileSync(path.join(d, "new\nline"), "12");
+  fs.writeFileSync(path.join(d, "empty"), "");
+  fs.mkdirSync(path.join(d, "sub"));
+  fs.writeFileSync(path.join(d, "sub", "inner"), "not counted");
+  fs.symlinkSync("a b.txt", path.join(d, "link"));
+  fs.symlinkSync("sub", path.join(d, "dirlink"));
+  return d;
+}
+const sizesOf = (stdout) => Object.fromEntries(parseListing(stdout).map((e) => [e.name, e.dir ? "dir" : e.size]));
+const EXPECTED = { "a b.txt": 5, "-lead": 1500, "new\nline": 2, empty: 0, sub: "dir", link: 7, dirlink: "dir" };
+const SHELLS = ["sh", ...["/bin/dash", "/usr/bin/dash"].filter((p) => fs.existsSync(p)).slice(0, 1)];
+
+for (const shell of SHELLS) test(`LIST_SCRIPT with <sizes> 1 gives each file's size, a link as itself (${shell})`, () => {
+  const d = sizeFixture();
+  const r = spawnSync(shell, ["-c", LIST_SCRIPT, "files", d, "500", "0", "0", "0", "1"], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "");
+  assert.deepEqual(sizesOf(r.stdout), EXPECTED);
+});
+
+// GNU stat (-c%s) is what Linux machines have; tested where it is installed as gstat (Homebrew coreutils) or is the stat.
+const GSTAT = ["/opt/homebrew/bin/gstat", "/usr/local/bin/gstat"].find((p) => fs.existsSync(p));
+test("LIST_SCRIPT sizes with GNU stat", { skip: !GSTAT && process.platform !== "linux" && "no GNU stat here" }, () => {
+  const d = sizeFixture(), bin = mkTmpSync("filer-pro-gnu-");
+  if (GSTAT) fs.symlinkSync(GSTAT, path.join(bin, "stat"));
+  const r = spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, "500", "0", "0", "0", "1"], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(sizesOf(r.stdout), EXPECTED);
+});
+
+test("LIST_SCRIPT with sizes keeps the real path pair, the limit and the exit code of a missing folder", () => {
+  const d = sizeFixture();
+  const r = spawnSync("sh", ["-c", LIST_SCRIPT, "files", path.join(d, "sub"), "500", "0", "0", "1", "1"], { encoding: "utf8" });
+  const list = parseListing(r.stdout);
+  assert.equal(list.real, fs.realpathSync(path.join(d, "sub")));
+  assert.deepEqual(list.map((e) => [e.name, e.size]), [["inner", 11]]);
+  const cut = parseListing(spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, "2", "0", "0", "0", "1"], { encoding: "utf8" }).stdout);
+  assert.equal(cut.length, 3, "one past the limit, as without sizes");
+  assert.ok(cut.filter((e) => !e.dir).every((e) => Number.isInteger(e.size)));
+  const gone = spawnSync("sh", ["-c", LIST_SCRIPT, "files", path.join(d, "nope"), "500", "0", "0", "0", "1"], { encoding: "utf8" });
+  assert.equal(folderMissing({ code: gone.status, stdout: gone.stdout, stderr: gone.stderr }), true);
+});
+
+test("LIST_SCRIPT without <sizes> runs no stat and no xargs (show_sizes off costs nothing)", () => {
+  const d = sizeFixture(), bin = mkTmpSync("filer-pro-spy-"), log = path.join(bin, "log");
+  for (const name of ["stat", "xargs"]) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho ${name} >> '${log}'\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  for (const args of [[], ["0", "0"], ["0", "0", "1"]]) {
+    const r = spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, "500", ...args], { encoding: "utf8", env });
+    assert.equal(r.status, 0);
+    assert.ok(!r.stdout.includes("S\0"));
+  }
+  assert.equal(fs.existsSync(log), false);
+  spawnSync("sh", ["-c", LIST_SCRIPT, "files", d, "500", "0", "0", "0", "1"], { encoding: "utf8", env });
+  assert.equal(fs.existsSync(log), true, "the spy itself works");
+});
+
+test("parseListing: pairs, the real path, a file named S, and sizes only when they match the files", () => {
+  assert.deepEqual(parseListing("f\0S\0d\0x\0"), Object.assign([{ name: "S", dir: false }, { name: "x", dir: true }], { real: "" }));
+  const withP = parseListing("P\0/real\0f\0a\0d\0b\0f\0c\0S\0" + "3\n40\0");
+  assert.equal(withP.real, "/real");
+  assert.deepEqual(withP.map((e) => [e.name, e.dir, e.size]), [["a", false, 3], ["b", true, undefined], ["c", false, 40]]);
+  assert.deepEqual(parseListing("f\0a\0f\0b\0S\0" + "3\0").map((e) => e.size), [undefined, undefined], "a vanished file: no sizes at all");
+  assert.deepEqual(parseListing("f\0a\0S\0x\0").map((e) => e.size), [undefined]);
+  assert.deepEqual(parseListing("d\0a\0S\0\0").map((e) => e.name), ["a"], "no files, empty S block");
+  assert.deepEqual(parseListing(""), Object.assign([], { real: "" }));
+});
+
+test("psListCommand adds the Length only with sizes; psEntries keeps a number on files only", () => {
+  assert.equal(psListCommand("C:\\x", 20, {}).includes("size="), false);
+  assert.match(psListCommand("C:\\x", 20, {}, true), /; size=\$_\.Length \} \}\)/);
+  assert.deepEqual(psEntries([{ name: "a", dir: false, size: 12 }, { name: "b", dir: true, size: null }, { name: "c", dir: false }]),
+    [{ name: "a", dir: false, size: 12 }, { name: "b", dir: true }, { name: "c", dir: false }]);
+  assert.deepEqual(psEntries({ name: "one", dir: false }), [{ name: "one", dir: false }], "a single entry comes as an object");
 });
