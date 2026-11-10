@@ -1276,6 +1276,41 @@ test("inspect cross: the source is probed on from, the target on machine", async
   assert.deepEqual(f.execsOf("sh").map((c) => [c.args[3], c.on]), [["/srv2/data/a.txt", "box2"], ["/srv/in", "box"], ["/srv/in/a.txt", "box"]]);
 });
 
+// One SSH host registered under two herdr machine names (#72): the paste is "cross", but the tree is the same.
+const ALIAS = { machines: [{ name: "box", target: "user@box", via: false }, { name: "alias", target: "user@box", via: false }, { name: "box2", target: "user@box2", via: false }] };
+const LOOPHOLE = "Loophole: A folder can't go inside itself!";
+
+test("inspect cross: a folder pasted into itself or a subfolder through two names of one SSH target is refused (#72)", async () => {
+  for (const destDir of ["/srv/p", "/srv/p/sub"]) {
+    const { f, jobs } = setup({ machines: ALIAS });
+    withDirs(f, "/srv/p", "/srv/p/sub");
+    const r = await jobs.inspect({ direction: "cross", machine: "box", from: "alias", src: "/srv/p", destDir });
+    assert.equal(r.error, LOOPHOLE, destDir);
+    assert.equal(r.isDir, true);
+  }
+});
+
+test("inspect cross: different SSH targets and plain files are not refused by the alias check (#72)", async () => {
+  const a = setup({ machines: ALIAS });
+  withDirs(a.f, "/srv/p", "/srv/p/sub");
+  assert.equal((await a.jobs.inspect({ direction: "cross", machine: "box", from: "box2", src: "/srv/p", destDir: "/srv/p/sub" })).error, undefined);
+  const b = setup({ machines: ALIAS });
+  withDirs(b.f, "/srv/p");
+  b.f.existing.add("/srv/p/a.txt");
+  assert.equal((await b.jobs.inspect({ direction: "cross", machine: "box", from: "alias", src: "/srv/p/a.txt", destDir: "/srv/p" })).error, undefined);
+  const c = setup({ machines: ALIAS });
+  withDirs(c.f, "/srv/p", "/srv/q");
+  assert.equal((await c.jobs.inspect({ direction: "cross", machine: "box", from: "alias", src: "/srv/p", destDir: "/srv/q" })).error, undefined);
+});
+
+test("inspect cross: when the machine list cannot be read the alias check is skipped and the paste is not blocked (#72)", async () => {
+  const { f } = setup({ machines: ALIAS });
+  withDirs(f, "/srv/p", "/srv/p/sub");
+  f.hc = async () => { throw new Error("hc failed"); };
+  const r = await createJobs(f.deps()).inspect({ direction: "cross", machine: "box", from: "alias", src: "/srv/p", destDir: "/srv/p/sub" });
+  assert.equal(r.error, undefined);
+});
+
 test("sourceSize: measured on the source machine (from for cross) with a short timeout; unknown or failing gives null", async () => {
   const { f, jobs } = setup({ machines: TWO });
   f.sizes["/srv2/d"] = 4096;
