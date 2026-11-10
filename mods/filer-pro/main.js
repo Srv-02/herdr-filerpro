@@ -26,7 +26,7 @@ import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
-import { numbers } from "./lib/settings.js";
+import { numbers, saveSettings } from "./lib/settings.js";
 import { GIT_PLACE_ARGS, gitPlace, gitPrefix, gitWatchDirs, gitWatchHit, rootRelative } from "./lib/gitmarks.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
@@ -278,6 +278,12 @@ export default class FilerPro extends View {
                     jobs, getShared: shared, setShared, loadConfig: () => loadConfig(readTextFile, appHome, home),
                     ask: (pending) => this.ask(pending), newBatchId: () => this.newId(),
                     fileOps: this.fileOps, now: Date.now, sleep: (ms) => cx.sleep(ms),
+                    // "Don't show again" in the warning before a copy between machines: written like the Settings dialog does.
+                    saveConfig: async (edits) => {
+                      const out = await saveSettings(edits, { readTextFile, writeTextFile, path: `${appHome()}/filer-pro.json` });
+                      if (out.ok) setShared("filer-pro.config", { at: Date.now() });
+                      return out;
+                    },
                   });
                 } catch (e) {
                   if (ui) notify({ title: failed ?? "Request failed", body: String(e?.message ?? e), level: "error" });
@@ -402,7 +408,8 @@ export default class FilerPro extends View {
     const turn = (this.asking ?? Promise.resolve()).then(() => new Promise((resolve) => {
       setShared("filer-pro.answer", null);
       setShared("filer-pro.pending", pending);
-      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: 240 });
+      // The warning before a copy between machines has a route strip and a footer checkbox: a little taller.
+      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: pending.choices?.includes("copy") ? 270 : 240 });
       this.waiter = { batch: pending.batch, overlay, at: Date.now(), resolve };
     }));
     this.asking = turn.catch(() => {});

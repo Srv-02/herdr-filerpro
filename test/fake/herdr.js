@@ -64,7 +64,7 @@ export function createFake(over = {}) {
   f.execsOf = (cmd) => f.execCalls.filter((c) => c.cmd === cmd);
 
   f.exec = async (cmd, args = [], opts = {}) => {
-    f.execCalls.push({ cmd, args, on: opts.on ?? null });
+    f.execCalls.push({ cmd, args, on: opts.on ?? null, ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}) });
     if (cmd === "sh" && args[0] === "-c") {
       const script = args[1];
       const path = args[3];

@@ -1,10 +1,12 @@
 #!/bin/sh
-# Fake scp for tests: drops options, strips "box:" and the SFTP glob masking
+# Fake scp for tests: drops options, strips "box:" / "box2:" and the SFTP glob masking
 # from remote paths, copies with cp -R. FAKE_SLEEP / FAKE_FAIL steer failures.
 sflag=
+tflag=
 while [ $# -gt 0 ]; do
   case $1 in
     -s) sflag=1; shift ;;
+    -3) tflag=1; shift ;;
     -o|-i|-P|-F|-J|-c|-l|-S) shift 2 ;;
     -*) shift ;;
     *) break ;;
@@ -13,12 +15,16 @@ done
 # Prints the value plus "." so a trailing newline survives $(...); the caller cuts the "." off.
 conv() {
   case $1 in
-    box:*)
-      if [ -n "$2" ]; then printf '%s.' "${1#box:}" | sed 's/\\\([]*?[\\]\)/\1/g'; else printf '%s.' "${1#box:}"; fi ;;
+    box:*|box2:*)
+      if [ -n "$2" ]; then printf '%s.' "${1#*:}" | sed 's/\\\([]*?[\\]\)/\1/g'; else printf '%s.' "${1#*:}"; fi ;;
     *) printf '%s.' "$1" ;;
   esac
 }
 [ -n "$sflag" ] || { echo "fake scp: -s (SFTP mode) missing" >&2; exit 2; }
+# Like real scp, two remote ends need -3 (otherwise it would copy remote to remote directly).
+case $1:$2 in
+  box*:*:box*:*) [ -n "$tflag" ] || { echo "fake scp: -3 missing for a remote to remote copy" >&2; exit 2; } ;;
+esac
 # Like real scp in SFTP mode: only the source is glob-unmasked.
 src=$(conv "$1" unmask); src=${src%.}
 dst=$(conv "$2"); dst=${dst%.}
