@@ -305,3 +305,10 @@ test("probe: types line matches the members of a good tar (folder without a trai
   assert.equal(p.types, "d-l");
   assert.deepEqual(checkMembers(p.names, { types: p.types }).tops, [{ name: "proj", isDir: true }, { name: "ln", isDir: false }]);
 });
+
+test("probe: an encrypted zip entry is reported (zipinfo's capital T/B), a plain zip is not", { skip: !have("unzip") && "unzip is not installed" }, () => {
+  const enc = parseProbe(probe("zip", "-", put("enc.zip", zipBuffer([{ name: "s.txt", data: "secret" }], { encrypted: true }))).stdout);
+  assert.equal(enc.encrypted, true);
+  const plain = parseProbe(probe("zip", "-", put("plain.zip", zipBuffer([{ name: "s.txt", data: "open" }]))).stdout);
+  assert.equal(plain.encrypted, undefined);
+});

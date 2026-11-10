@@ -67,7 +67,8 @@ const LOCALE = `L=$(locale -a 2>/dev/null | grep -i -m1 -E '^(C|en_US)\\.utf-?8$
 //     archive absolute path (a leading "-" is made safe)
 //   stdout  `tool=<t>` (tar | bsdtar | unzip | gzip | bzip2 | xz | zstd, the one extract.sh and ARCHIVE_SIZE_SCRIPT
 //           get as <tool>), `types=<c...>` (tar and zip: the first character of each member's line in the long listing,
-//           in member order: d folder, - file, l symlink, h hard link, ...), a line `--`, then one member per line
+//           in member order: d folder, - file, l symlink, h hard link, ...), `encrypted=<0|1>` (1: a zip entry is
+//           encrypted, seen by unzip), a line `--`, then one member per line
 //           (nothing for single). Directory members usually end in "/".
 //           tar/bsdtar print a newline in a name as \n, a backslash as \\ and non-ASCII bytes maybe as \ooo (parseProbe decodes).
 //   exit 0  ok
@@ -82,7 +83,7 @@ case "$a" in -*) a=./$a;; esac
 miss() { printf 'missing=%s\\n' "$1"; exit 3; }
 has() { command -v "$1" >/dev/null 2>&1; }
 bad() { [ -n "$m" ] && printf '%s\\n' "$m" >&2; exit 4; }
-m= y=
+m= y= e=0
 case "$f" in
   single)
     t=$n; has "$t" || miss "$t"
@@ -90,6 +91,8 @@ case "$f" in
   zip)
     if has unzip && m=$(unzip -Z1 "$a" 2>/dev/null); then t=unzip
       y=$(unzip -Z -s "$a" 2>/dev/null | sed '1,2d;$d' | cut -c1 | tr -d '\\n')
+      # zipinfo writes the t/b column in capitals for an encrypted entry
+      e=$(unzip -Z -s "$a" 2>/dev/null | awk 'NR > 2 && $5 ~ /^[TB]/ { f = 1 } END { print f + 0 }')
     elif has bsdtar; then t=bsdtar; m=$(bsdtar -tf "$a") || bad
       y=$(bsdtar -tvf "$a" 2>/dev/null | cut -c1 | tr -d '\\n')
     elif has unzip; then m=$(unzip -Z1 "$a" 2>&1); bad
@@ -102,7 +105,7 @@ case "$f" in
     fi
     y=$(tar -tvf "$a" 2>/dev/null | cut -c1 | tr -d '\\n');;
 esac
-printf 'tool=%s\\ntypes=%s\\n--\\n%s\\n' "$t" "$y" "$m"
+printf 'tool=%s\\ntypes=%s\\nencrypted=%s\\n--\\n%s\\n' "$t" "$y" "$e" "$m"
 `;
 
 // ARCHIVE_SIZE_SCRIPT: how much room the extracted files need and how much the target folder has (R4). A separate exec
@@ -199,7 +202,7 @@ export function unescapeName(line) {
   return utf8Decode(bytes) ?? line;
 }
 
-// stdout of ARCHIVE_PROBE_SCRIPT -> { tool, names, types? }. names are the members (escapes of tar/bsdtar decoded; unzip -Z1
+// stdout of ARCHIVE_PROBE_SCRIPT -> { tool, names, types?, encrypted? }. names are the members (escapes of tar/bsdtar decoded; unzip -Z1
 // prints names as they are); types the type characters in member order (absent for an older output without the line).
 export function parseProbe(stdout) {
   const lines = String(stdout ?? "").split("\n");
@@ -208,7 +211,10 @@ export function parseProbe(stdout) {
   const tool = (head.find((l) => l.startsWith("tool=")) ?? "").slice(5) || null;
   const typeLine = head.find((l) => l.startsWith("types="));
   const raw = cut < 0 ? [] : lines.slice(cut + 1).filter((l) => l !== "");
-  return { tool, names: tool === "tar" || tool === "bsdtar" ? raw.map(unescapeName) : raw, ...(typeLine !== undefined ? { types: typeLine.slice(6) } : {}) };
+  return {
+    tool, names: tool === "tar" || tool === "bsdtar" ? raw.map(unescapeName) : raw, ...(typeLine !== undefined ? { types: typeLine.slice(6) } : {}),
+    ...(head.includes("encrypted=1") ? { encrypted: true } : {}),
+  };
 }
 
 // stdout of ARCHIVE_SIZE_SCRIPT -> { size, avail } in bytes, null when unknown (df prints KiB; its first column can hold

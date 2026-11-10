@@ -338,6 +338,7 @@ export function createJobs(deps) {
       if (r.code === 3) return { error: missingTool(/^missing=(.+)$/m.exec(String(r.stdout ?? ""))?.[1] ?? type.need, machine) };
       if (r.code !== 0) return { error: explainError(r.stderr ?? "", machine, "Could not read the archive") };
       const p = parseProbe(r.stdout);
+      if (p.encrypted) return { error: "Encrypted archives are not supported" };
       let tops;
       if (type.family === "single") tops = [{ name: type.stem, isDir: false }];
       else {

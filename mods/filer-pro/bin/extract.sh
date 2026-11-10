@@ -196,6 +196,13 @@ if ! command -v "$tool" >/dev/null 2>&1; then
   rm -rf -- "$temp"
   exit 1
 fi
+# An encrypted zip is refused before unzip runs: with a wrong (empty) password some unzip builds do not report "password"
+# but write garbage and fail later with "invalid compressed data". zipinfo writes the t/b column in capitals for it.
+if [ "$tool" = unzip ] && unzip -Z -s "$a" 2>/dev/null | awk 'NR > 2 && $5 ~ /^[TB]/ { f = 1 } END { exit !f }'; then
+  echo 'Encrypted archives are not supported' >&2
+  rm -rf -- "$temp"
+  exit 1
+fi
 # One background process, so a stop can end exactly this one. stdin is /dev/null, the messages go to <temp>/err.
 # bsdtar always gets a dummy passphrase ("--passphrase ''" is refused by bsdtar: "Empty passphrase is unacceptable"): on an
 # encrypted zip it must fail, not ask on the terminal (for a tar it is ignored).

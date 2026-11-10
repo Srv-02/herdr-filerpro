@@ -1637,3 +1637,11 @@ test("recover: a snapshot without kind (old job) settles like a transfer", async
   assert.equal(f.execCalls.some((c) => c.args[1] === EXTRACT_STOP_SCRIPT), false);
   assert.deepEqual(f.notifications, [{ title: "Download failed", body: "Interrupted", level: "error" }]);
 });
+
+test("inspectArchive: an encrypted zip is refused before anything is asked or started", async () => {
+  const { f, jobs } = archiveFake();
+  f.archives[ARC] = { code: 0, stdout: "tool=unzip\ntypes=-\nencrypted=1\n--\nsecret.txt\n" };
+  const r = await jobs.inspectArchive({ machine: null, src: ARC, how: "here", spaceCheck: true });
+  assert.deepEqual(r, { error: "Encrypted archives are not supported" });
+  assert.equal(f.hcRuns().length, 0);
+});

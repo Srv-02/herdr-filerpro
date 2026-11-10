@@ -280,6 +280,15 @@ test("an encrypted zip under a pty: failed, no password prompt", { skip: (!HAS_P
   assert.deepEqual(names(a.dest), []);
 });
 
+test("an encrypted zip without a terminal: refused before unzip runs, nothing extracted", { skip: !HAS_UNZIP && "unzip is not installed" }, () => {
+  const d = setup();
+  const a = build(d, "e.zip", zipBuffer([{ name: "a.txt", data: "secret" }], { encrypted: true }), { tool: "unzip" });
+  const r = run(a);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(status(a), /^state=failed\ncode=1\nEncrypted archives are not supported\n/);
+  assert.deepEqual(names(a.dest), []);
+});
+
 test("extract.sh carries EXTRACT_STOP_SCRIPT unchanged", () => {
   const text = fs.readFileSync(SCRIPT, "utf8");
   const m = /^# BEGIN EXTRACT_STOP_SCRIPT\nstop_sh\(\) {\n  cat <<'EOF'\n([\s\S]*?)\nEOF\n}\n# END EXTRACT_STOP_SCRIPT$/m.exec(text);
