@@ -45,6 +45,13 @@ export function rowMenuItems(state) {
   ];
 }
 
+// The row's part of that state, built the same way where the popup is sized (the row's right click in main.js) and where
+// it is drawn (the popup copy): sized from a state without remote and windows, a local Windows archive row left an
+// empty strip where Extract Here and Extract to are not shown (follow-up to #68).
+export function rowMenuState({ name, isDir, machine, platform, bundle, contents }) {
+  return { isDir: isDir === true, name: typeof name === "string" ? name : "", remote: Boolean(machine), windows: platform === "windows", bundle: bundle === true, contents: contents === true };
+}
+
 export function rootMenuItems(state) {
   return [entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), SEPARATOR, entry("settings", "Settings…")];
 }

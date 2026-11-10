@@ -23,7 +23,7 @@ import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
 import { createFileOps, successToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
-import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
+import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, parseListing, psEntries, limitText } from "./lib/tree.js";
 import { SIZE_SCRIPT, FOLDER_SIZE_MS, TOO_LARGE, busy, sizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "./lib/sizes.js";
@@ -161,9 +161,12 @@ export default class FilerPro extends View {
       return;
     }
     this.cfg = DEFAULTS;
+    // The jobs' timer (the sliced member check of an archive): an AsyncContext, since this cx answers only during init.
+    let timers = null;
+    cx.spawn(async (acx) => { timers = acx; });
     this.jobs = createJobs({
       exec, hc, readTextFile, localPlatform: () => window()?.platform, getShared: shared, setShared, notify, now: Date.now, appHome, home, settings: () => this.cfg,
-      newId: () => (Math.random().toString(36).slice(2) + "00000000").slice(0, 8),
+      newId: () => (Math.random().toString(36).slice(2) + "00000000").slice(0, 8), after: (ms, fn) => (timers ?? cx).timer.after(ms, () => fn()),
     });
     const base = createFileOps({ exec, localPlatform: () => window()?.platform });
     this.fileOps = { ...base, ...createMoveOps({ exec, localPlatform: () => window()?.platform, check: base.check, trashDir: platform.trashDir(home()) }) };
@@ -442,7 +445,7 @@ export default class FilerPro extends View {
       };
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
-      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), isDir: p.isDir === true, name: typeof p.path === "string" ? baseName(p.path) : "", remote: Boolean(p.machine), windows: window()?.platform === "windows", bundle: p.bundle === true, contents: p.contents === true,
+      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents }),
         size: sizeDetail(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -2021,12 +2024,12 @@ export default class FilerPro extends View {
       const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
       // A macOS package acts as a file until its contents are shown (lib/bundles.js); `dir` decides chevron, click and drop.
       const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
-      const menuState = { paste: { enabled: false }, isDir: entry.dir, name: entry.name, bundle, contents };
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .on_click((e, cx) => e.modifiers.platform && !(this.on && !dir && isBinaryName(path)) ? this.reveal(path) : dir ? this.toggle(path, cx) : this.clickFile(path, bundle, e, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
+          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
           openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))

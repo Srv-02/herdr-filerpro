@@ -7,6 +7,7 @@ import zlib from "node:zlib";
 import {
   ARCHIVE_TYPES, archiveOf, extractToLabel, ARCHIVE_PROBE_SCRIPT, ARCHIVE_SIZE_SCRIPT, EXTRACT_STOP_SCRIPT,
   parseProbe, parseSize, unescapeName, checkMembers, spaceError, missingTool,
+  memberCheck, checkListing, tooManyMembers, ARCHIVE_MAX_MEMBERS, CHECK_SLICE, CHECK_INTERRUPTED,
 } from "../mods/filer-pro/lib/archives.js";
 import { tarBuffer, zipBuffer } from "./archive-craft.js";
 import { mkTmpSync } from "./tmp-helper.js";
@@ -311,4 +312,163 @@ test("probe: an encrypted zip entry is reported (zipinfo's capital T/B), a plain
   assert.equal(enc.encrypted, true);
   const plain = parseProbe(probe("zip", "-", put("plain.zip", zipBuffer([{ name: "s.txt", data: "open" }]))).stdout);
   assert.equal(plain.encrypted, undefined);
+});
+
+// ---- the member check of a big listing in slices (follow-up to #68) ----
+// herdr interrupts a QuickJS job after about 0.5 s (uncatchable); a node_modules or kernel tarball lists 100,000 members
+// and more. test/archive-budget.test.js measures each job inside herdr; these tests pin the logic.
+
+// A fake timer like test/readfile.test.js's: run(0) fires the zero timers armed so far, as the host does after a job.
+function fakeTimers() {
+  const armed = [];
+  return {
+    armed,
+    after: (ms, fn) => armed.push({ ms, fn }),
+    run: (ms) => armed.filter((t) => t.ms === ms && !t.fired).forEach((t) => { t.fired = true; t.fn(); }),
+  };
+}
+const settle = () => new Promise((r) => setImmediate(r));
+async function drain(t, rounds = 1000) { for (let i = 0; i < rounds; i++) { t.run(0); await settle(); } }
+
+const CASES = [
+  [["a/", "a/b.txt", "c.txt"]], [["../escape.txt"]], [["/abs.txt"]], [["l", "l/pwned.txt"]], [["L", "l/x"]], [[]], [["", ".", "./"]],
+  [["C:\\x.txt"], { zip: true }], [["a\\b.txt"], { zip: true }], [["Foo.txt", "foo.TXT", "e\u0301/", "\u00e9/x"]],
+  [["l/", "l/x.txt"], { types: "l-" }], [["l", "l/", "l/x.txt"], { types: "ld-" }], [["Foo", "FOO/", "Foo/x.txt"], { types: "ld-" }],
+  [["proj", "proj/a.txt"], { types: "d-" }], [["a", "b"], { types: "-" }], [["x/y/z/1", "x/y/z/2", "X/Y/z", "x/y/z/3"]],
+];
+
+test("memberCheck: every budget gives the result of checkMembers, null until it is known", () => {
+  for (const [names, opts] of CASES) {
+    const whole = checkMembers(names, opts);
+    for (const budget of [1, 17, 40, 1000]) {
+      const c = memberCheck(names, opts);
+      let r = null, steps = 0;
+      while (!(r = c.step(budget))) steps++;
+      assert.deepEqual(r, whole, `${JSON.stringify(names)} budget ${budget}`);
+      assert.deepEqual(c.step(budget), whole, "a finished check keeps its result");
+      if (budget === 1 && names.length > 2 && whole.tops) assert.ok(steps >= names.length, "one member per step with budget 1");
+    }
+  }
+});
+
+test("memberCheck: decode turns each line into the name first; too many members are refused before any work", () => {
+  assert.deepEqual(memberCheck(["\\303\\251/a", "\\303\\251/b"], { decode: unescapeName }).step(Infinity), { tops: [{ name: "é", isDir: true }] });
+  const many = { length: ARCHIVE_MAX_MEMBERS + 1 }; // never read: the count alone refuses
+  assert.deepEqual(memberCheck(many).step(1), { error: "The archive lists 200,001 entries: more than 200,000 cannot be checked" });
+  assert.equal(tooManyMembers(undefined), "The archive lists more than 200,000 entries: too many to check");
+  assert.equal(tooManyMembers(NaN), tooManyMembers(undefined));
+});
+
+// A listing as the probe prints it: GNU tar style paths below node_modules, one folder per ten members.
+function bigListing(n) {
+  const names = [];
+  let types = "";
+  for (let i = 0; i < n; i++) {
+    const dir = i % 10 === 0;
+    names.push(`node_modules/pkg${i % 997}/lib/sub${i % 13}/file-${i}${dir ? "/" : ".js"}`);
+    types += dir ? "d" : "-";
+  }
+  return { names, stdout: `tool=tar\ntypes=${types}\nsize=4096\nencrypted=0\n--\n${names.join("\n")}\n` };
+}
+
+test("checkListing: 100,000 members are checked in slices of CHECK_SLICE, each in its own job, same result as at once", async () => {
+  const { names, stdout } = bigListing(100000);
+  const t = fakeTimers(), results = [];
+  checkListing(stdout, { family: "tar", stem: "big", after: t.after }).then((r) => results.push(r));
+  await settle();
+  assert.deepEqual(results, [], "nothing after the parse in the job that received the listing");
+  await drain(t, 400);
+  assert.equal(results.length, 1);
+  assert.deepEqual(results[0].tops, checkMembers(names, { types: stdout.split("\n")[1].slice(6) }).tops);
+  assert.equal(results[0].probe.size, 4096);
+  const units = names.reduce((a, n) => a + 16 + n.length, 0) * 2; // two passes over every member
+  const jobs = t.armed.filter((a) => a.ms === 0).length / 2; // a guard and a yield per slice
+  assert.ok(jobs >= units / CHECK_SLICE, `${jobs} jobs for ${units} units`);
+});
+
+test("checkListing: errors, encrypted, a single file and the order of the refusals", async () => {
+  const run = (stdout, opts = {}) => checkListing(stdout, { family: "tar", stem: "s", ...opts });
+  assert.deepEqual(await run("tool=tar\ntypes=--\n--\na\n../b\n"), { error: 'The archive contains a path with "..": ../b' });
+  assert.deepEqual(await run("tool=tar\ntypes=l-\n--\nl\nl/x\n"), { error: "The archive writes through a link: l/x" });
+  assert.deepEqual(await run("tool=unzip\ntypes=-\nencrypted=1\n--\na\n", { family: "zip" }), { error: "Encrypted archives are not supported" });
+  assert.deepEqual((await run("tool=gzip\n--\n", { family: "single", stem: "log.txt" })).tops, [{ name: "log.txt", isDir: false }]);
+  assert.deepEqual((await run("tool=tar\ntypes=-\n--\n\\303\\251.txt\n")).tops, [{ name: "é.txt", isDir: false }], "tar escapes decoded");
+  assert.deepEqual((await run("tool=unzip\ntypes=-\n--\na\\b\n", { family: "zip" })).tops, [{ name: "a", isDir: true }], "zip: backslash separates");
+});
+
+test("checkListing: an interrupted parse or slice still ends, with an error the dialog shows", async () => {
+  // The interrupt cannot be caught: nothing after it runs in that job, then the host fires the timers armed before it.
+  // Modelled by work that fires the zero timers while it is still running (and then never returns normally).
+  for (const where of ["parse", "slice"]) {
+    const t = fakeTimers(), results = [];
+    const interrupt = () => { t.run(0); throw new Error("interrupted"); };
+    const stdout = where === "parse" ? { toString: interrupt } : "tool=tar\ntypes=-\n--\nx\n";
+    const check = () => ({ step: interrupt });
+    checkListing(stdout, { family: "tar", stem: "s", after: t.after, ...(where === "slice" ? { check } : {}) }).then((r) => results.push(r));
+    await drain(t, 20);
+    assert.deepEqual(results, [{ error: CHECK_INTERRUPTED }], where);
+  }
+});
+
+// A fake tar first on the PATH: logs its arguments, prints `lines` names for -tf and the long listing `long` for -tvf.
+function fakeTar(name, { lines = 0, names = [], long = "" }) {
+  const bin = path.join(dir, `fakebin-${name}`);
+  fs.mkdirSync(bin, { recursive: true });
+  const log = path.join(bin, "calls");
+  fs.writeFileSync(path.join(bin, "names"), names.map((x) => `${x}\n`).join(""));
+  fs.writeFileSync(path.join(bin, "long"), long);
+  fs.writeFileSync(path.join(bin, "tar"), `#!/bin/sh
+printf '%s\\n' "$1" >> '${log}'
+case "$1" in
+  -tf) if [ ${lines} -gt 0 ]; then awk 'BEGIN { for (i = 1; i <= ${lines}; i++) print "m" i }'; else cat '${path.join(bin, "names")}'; fi;;
+  -tvf) cat '${path.join(bin, "long")}';;
+esac
+`, { mode: 0o755 });
+  return { env: { ...process.env, PATH: `${bin}:${SYSTEM_PATH}` }, calls: () => fs.readFileSync(log, "utf8").split("\n").filter(Boolean) };
+}
+
+test("probe: a tar.gz is read twice (names, long listing), the long listing gives types and the size", () => {
+  const entries = [{ name: "d", type: "dir" }, { name: "d/a", data: "a".repeat(1000) }, { name: "b", data: "b".repeat(234) }, { name: "l", type: "symlink", target: "b" }];
+  const tar = put("sz.tar", tarBuffer(entries));
+  for (const f of [tar, put("sz.tar.gz", zlib.gzipSync(fs.readFileSync(tar)))]) {
+    const p = parseProbe(probe("tar", f.endsWith(".gz") ? "gzip" : "-", f).stdout);
+    assert.equal(p.types, "d--l", f);
+    assert.equal(p.size, 1234, `${path.basename(f)}: the regular files only`);
+  }
+  const fake = fakeTar("count", { names: ["a"], long: "-rw-r--r-- user/group 5 2026-01-01 12:00 a\n" });
+  const r = probe("tar", "gzip", tar, { env: fake.env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(fake.calls(), ["-tf", "-tvf"], "no third pass");
+});
+
+test("probe: size from GNU/busybox and bsdtar long listings; an unknown layout leaves it empty", () => {
+  const gnu = "drwxr-xr-x root/root         0 2026-01-01 12:00 d/\n-rw-r--r-- root/root      1000 2026-01-01 12:00 d/a b.txt\n"
+    + "hrw-r--r-- root/root         0 2026-01-01 12:00 d/h link to d/a b.txt\n-rw-r--r-- 0/0 234 2026-01-01 12:00:00 c\n";
+  const bsd = "drwxr-xr-x  0 m      staff       0 Jan  1 12:00 d/\n-rw-r--r--  0 m      staff    1000 Jan  1 12:00 d/a\n"
+    + "lrwxr-xr-x  0 m      staff       0 Jan  1 12:00 l -> d/a\n-rw-r--r--  0 m      staff     234 Jan  1 12:00 c\n";
+  const odd = "-rw-r--r-- some owner with spaces 12 Jan  1 12:00 x\n";
+  for (const [name, long, size, types] of [["gnu", gnu, 1234, "d-h-"], ["bsd", bsd, 1234, "d-l-"], ["odd", odd, undefined, "-"]]) {
+    const fake = fakeTar(name, { names: types.split("").map((_, i) => `m${i}`), long });
+    const p = parseProbe(probe("tar", "-", put(`${name}.tar`, "x"), { env: fake.env }).stdout);
+    assert.equal(p.size, size, name);
+    assert.equal(p.types, types, name);
+  }
+});
+
+test("probe: more than ARCHIVE_MAX_MEMBERS members exit 5 with the count, before the long listing", () => {
+  const fake = fakeTar("many", { lines: ARCHIVE_MAX_MEMBERS + 1 });
+  const r = probe("tar", "-", put("many.tar", "x"), { env: fake.env });
+  assert.equal(r.status, 5, r.stderr);
+  assert.equal(r.stdout, `count=${ARCHIVE_MAX_MEMBERS + 1}\n`);
+  assert.deepEqual(fake.calls(), ["-tf"]);
+  const ok = fakeTar("max", { lines: ARCHIVE_MAX_MEMBERS });
+  const s = probe("tar", "-", put("max.tar", "x"), { env: ok.env, maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(s.status, 0, "exactly the bound is fine");
+  assert.equal(parseProbe(s.stdout).names.length, ARCHIVE_MAX_MEMBERS);
+});
+
+test("size script: tool - only asks df (the probe gave the size)", () => {
+  const r = parseSize(run(ARCHIVE_SIZE_SCRIPT, ["-", put("dash.tar", tarBuffer([{ name: "a", data: "1" }])), dir]).stdout);
+  assert.equal(r.size, null);
+  assert.ok(r.avail > 0);
 });

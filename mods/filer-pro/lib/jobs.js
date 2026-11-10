@@ -1,7 +1,8 @@
 // Job manager: one `transfer.sh` run per job in its own invisible hc terminal. The manager only
 // starts it, polls the temp size and the terminal state, and settles the end state. Pure: every
 // herdr API arrives through `deps` (exec, hc, readTextFile, getShared, setShared, notify, now,
-// newId, appHome, home; optional settings() -> the config of lib/config.js, read at each use). Jobs live in shared("filer-pro.jobs") as a plain object id -> job.
+// newId, appHome, home; optional settings() -> the config of lib/config.js, read at each use, and after(ms, fn), a
+// timer that starts a new QuickJS job: the member check of an archive runs in slices with it). Jobs live in shared("filer-pro.jobs") as a plain object id -> job.
 import { keepBothName, tempName, joinPath, parentOf, baseName, nameKey } from "./names.js";
 import { sshTarget } from "./machines.js";
 import { explainError as explainRaw, cleanText } from "./errors.js";
@@ -13,7 +14,7 @@ import { LINKS_SCRIPT, parseLinks, linkWarning } from "./links.js";
 import { MOUNT_FN, normalizePath } from "./fileops.js";
 import { numbers } from "./settings.js";
 import {
-  archiveOf, ARCHIVE_PROBE_SCRIPT, ARCHIVE_SIZE_SCRIPT, EXTRACT_STOP_SCRIPT, parseProbe, parseSize as parseArchiveSize, checkMembers, spaceError, missingTool,
+  archiveOf, ARCHIVE_PROBE_SCRIPT, ARCHIVE_SIZE_SCRIPT, EXTRACT_STOP_SCRIPT, checkListing, tooManyMembers, parseSize as parseArchiveSize, spaceError, missingTool,
 } from "./archives.js";
 
 const KEY = "filer-pro.jobs";
@@ -336,25 +337,24 @@ export function createJobs(deps) {
       if (here.includes("d")) return { error: `Not an archive: ${name}` };
       const r = await exec("sh", ["-c", ARCHIVE_PROBE_SCRIPT, "x", type.family, type.need, src], { on, timeout: 600000 });
       if (r.code === 3) return { error: missingTool(/^missing=(.+)$/m.exec(String(r.stdout ?? ""))?.[1] ?? type.need, machine) };
+      if (r.code === 5) return { error: tooManyMembers(Number(/^count=(\d+)$/m.exec(String(r.stdout ?? ""))?.[1])) };
       if (r.code !== 0) return { error: explainError(r.stderr ?? "", machine, "Could not read the archive") };
-      const p = parseProbe(r.stdout);
-      if (p.encrypted) return { error: "Encrypted archives are not supported" };
-      let tops;
-      if (type.family === "single") tops = [{ name: type.stem, isDir: false }];
-      else {
-        const c = checkMembers(p.names, { zip: type.family === "zip" || p.tool === "unzip", types: p.types });
-        if (c.error) return { error: c.error };
-        tops = c.tops;
-      }
+      // in slices, one QuickJS job each, and ends with an error instead of never when herdr interrupts a job
+      const checked = await checkListing(r.stdout, { family: type.family, stem: type.stem, after: deps.after ?? null });
+      if (checked.error) return { error: checked.error };
+      const { probe: p, tops } = checked;
       let total = null;
       if (spaceCheck) {
         try {
-          const s = await exec("sh", ["-c", ARCHIVE_SIZE_SCRIPT, "x", p.tool, src, destDir], { on, timeout: 120000 });
+          // the probe's long listing gave the size of a tar: the script only asks df then ("-"), no further unpacking
+          const known = Number.isFinite(p.size);
+          const s = await exec("sh", ["-c", ARCHIVE_SIZE_SCRIPT, "x", known ? "-" : p.tool, src, destDir], { on, timeout: 120000 });
           if (s.code === 0) {
             const m = parseArchiveSize(s.stdout);
-            const e = spaceError(m.size, m.avail);
+            const size = known ? p.size : m.size;
+            const e = spaceError(size, m.avail);
             if (e) return { error: e };
-            total = m.size;
+            total = size;
           }
         } catch {
           // no measurement, no refusal

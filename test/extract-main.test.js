@@ -122,3 +122,27 @@ test("transfers bar: an extract job shows the extract arrow, a copy keeps its ow
   assert.equal(arrow("x1"), "↘");
   assert.equal(arrow("c1"), "→");
 });
+
+// Follow-up to #68: the row sizes the popup before it opens; on local Windows the popup leaves the Extract entries out,
+// so the row has to size it from the same state (an empty strip of 63 px otherwise).
+test("row menu: the popup height matches the drawn entries, also for an archive on local Windows", async () => {
+  const { menuHeight, rowMenuItems } = await import("../mods/filer-pro/lib/menuitems.js");
+  for (const [platform, machine] of [["windows", null], ["macos", null], ["windows", "box"]]) {
+    const { log } = host({ platform, machine });
+    if (platform === "windows" && !machine) { // a local Windows folder is listed through PowerShell
+      const exec = globalThis.__impl.exec;
+      globalThis.__impl.exec = async (cmd, args, opts) => cmd === "powershell"
+        ? { code: 0, stdout: JSON.stringify([{ name: "f", dir: false, size: 1 }, { name: "pics.tar.gz", dir: false, size: 2 }]), stderr: "" } : exec(cmd, args, opts);
+    }
+    const cx = fakeCx();
+    const self = await loaded(cx);
+    handler(byId(self.render(cx), "file-pics.tar.gz"), "on_mouse_down", "right")({}, cx);
+    const opened = log.overlays.at(-1);
+    globalThis.__impl.props = () => ({ ...opened.props, overlay: "menu1" });
+    const drawn = rowMenuItems({ paste: { enabled: false }, isDir: false, name: "pics.tar.gz", remote: Boolean(machine), windows: platform === "windows" });
+    const extract = drawn.some((i) => i.action === "extract_here");
+    assert.equal(extract, !(platform === "windows" && !machine), `${platform} ${machine}: Extract shown`);
+    assert.equal(Boolean(byId(Object.create(FilerPro.prototype).overlayView(cx), "filer-pro-menu-extract-here")), extract, `${platform} ${machine}: popup`);
+    assert.equal(opened.height, menuHeight(drawn), `${platform} ${machine}: height`);
+  }
+});

@@ -1499,6 +1499,38 @@ test("inspectArchive on a machine: an existing folder gets destIsDir and the mou
   assert.equal(f.execCalls.filter((c) => c.args[1] === REPLACE_CHECK_SCRIPT).length, 1, "locally Replace goes to the Trash: no check");
 });
 
+test("inspectArchive: the probe's size skips the unpacking pass (size script with tool -), too many members are refused", async () => {
+  const { f, jobs } = archiveFake();
+  f.archives[ARC] = { code: 0, stdout: "tool=tar\ntypes=-d-\nsize=5000000000\n--\na.txt\nd/\nd/x\n" };
+  f.archiveSizes[ARC] = SIZE_OUT("", 1000);
+  assert.match((await jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: true })).error, /^Not enough space: 5\.0 GB needed/);
+  const s = f.execCalls.find((c) => c.args[1] === ARCHIVE_SIZE_SCRIPT);
+  assert.deepEqual(s.args.slice(2), ["x", "-", ARC, DIR], "df only, no tar -xOf");
+  f.archives[ARC] = { code: 0, stdout: "tool=tar\ntypes=-d-\nsize=700\n--\na.txt\nd/\nd/x\n" };
+  assert.equal((await jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: true })).total, 700);
+  f.archives[ARC] = { code: 5, stdout: "count=250000\n" };
+  assert.equal((await jobs.inspectArchive({ src: ARC, how: "here" })).error, "The archive lists 250,000 entries: more than 200,000 cannot be checked");
+});
+
+test("inspectArchive: the member check runs in jobs of its own; an interrupted job ends with an error, not never", async () => {
+  const armed = [];
+  const after = (ms, fn) => armed.push({ ms, fn });
+  const fire = () => armed.splice(0).filter((t) => t.ms === 0).forEach((t) => t.fn());
+  const settle = () => new Promise((r) => setImmediate(r));
+  const { f } = archiveFake();
+  const jobs = createJobs({ ...f.deps(), after });
+  let r = null;
+  jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: false }).then((x) => { r = x; });
+  for (let i = 0; i < 50 && !r; i++) { await settle(); fire(); }
+  assert.deepEqual(r.entries.map((e) => e.name), ["a.txt", "d"]);
+  // the interrupt: the job that parses never returns (a listing whose read fires the timers, then throws uncaught)
+  f.archives[ARC] = { code: 0, stdout: { toString: () => { fire(); throw new Error("interrupted"); } } };
+  r = null;
+  jobs.inspectArchive({ src: ARC, how: "here", spaceCheck: false }).then((x) => { r = x; });
+  for (let i = 0; i < 50 && !r; i++) { await settle(); fire(); }
+  assert.deepEqual(r, { error: "Could not check the archive in time: it lists too many entries" });
+});
+
 const INFO = { name: "photos.tar.gz", stem: "photos", family: "tar", tool: "tar", need: "gzip", total: 500, destDir: DIR, entries: [{ name: "a.txt", isDir: false }, { name: "d", isDir: true }], taken: [] };
 const XSTATUS = "/Users/m/.config/herdr-app/filer-pro/jobs/id1.status";
 const XSH = "/Users/m/.config/herdr-app/mods/filer-pro/bin/extract.sh";
