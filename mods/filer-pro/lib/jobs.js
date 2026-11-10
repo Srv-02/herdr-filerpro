@@ -12,6 +12,9 @@ import { progressOf } from "./progress.js";
 import { LINKS_SCRIPT, parseLinks, linkWarning } from "./links.js";
 import { MOUNT_FN, normalizePath } from "./fileops.js";
 import { numbers } from "./settings.js";
+import {
+  archiveOf, ARCHIVE_PROBE_SCRIPT, ARCHIVE_SIZE_SCRIPT, EXTRACT_STOP_SCRIPT, parseProbe, parseSize as parseArchiveSize, checkMembers, spaceError, missingTool,
+} from "./archives.js";
 
 const KEY = "filer-pro.jobs";
 const SIZE_LIMIT_MS = 25_000;
@@ -66,6 +69,7 @@ const okOut = (r) => (r && r.code === 0 ? r.stdout : null);
 
 // The line transfer.sh writes when a Replace on a machine could not remove the set-aside old copy (the job stays done).
 // The path runs to the end of stderr: a name may hold a newline, and nothing is written after this line.
+const LINKS_OUTSIDE = /^Warning: (\d+ links? points? outside the extracted files)\r?$/m;
 const OLD_COPY_LEFT = /(?:^|\n)Warning: could not fully remove old copy: ([\s\S]*)$/;
 
 export function createJobs(deps) {
@@ -118,6 +122,12 @@ export function createJobs(deps) {
 
   function notifyEnd(job) {
     if (job.preview) return;
+    if (job.kind === "extract") { // never last_download, Finder or the clipboard: the archive stays where it was
+      if (job.state === "failed") notify({ title: "Extract failed", body: job.error, level: "error" });
+      else if (job.state === "done" && job.warning) notify({ title: "Extracted", body: job.warning, level: "warning" });
+      else if (job.state === "done") notify({ title: "Extracted", body: job.name, level: "success" });
+      return;
+    }
     if (job.state === "failed") {
       const title = { down: "Download failed", up: "Upload failed", local: "Copy failed", remote: "Copy failed", cross: "Copy failed" }[job.direction];
       notify({ title, body: job.error, level: "error" });
@@ -310,6 +320,123 @@ export function createJobs(deps) {
     }
   }
 
+  // The archive menu (#57): everything the request needs to ask before anything is written. how: "here" (the top-level
+  // entries of the archive land in its folder) or "to" (one folder named like the archive). The probe runs on the
+  // archive's side; the size look (only with spaceCheck) is a separate, shorter exec whose failure never refuses.
+  // Returns { name, stem, family, tool, need, total, destDir, entries: [{ name, isDir, exists, destIsDir?, replaceError? }],
+  // taken: [names in the folder] } or { error }.
+  async function inspectArchive({ machine, src, how, spaceCheck }) {
+    const on = machine ?? null, name = baseName(src);
+    const type = archiveOf(name);
+    if (!type) return { error: `Not an archive: ${name}` };
+    const destDir = parentOf(src);
+    try {
+      const here = await probe(EXISTS_SCRIPT, src, on);
+      if (!here.includes("y")) return { error: `No such file or folder: ${src}` };
+      if (here.includes("d")) return { error: `Not an archive: ${name}` };
+      const r = await exec("sh", ["-c", ARCHIVE_PROBE_SCRIPT, "x", type.family, type.need, src], { on, timeout: 600000 });
+      if (r.code === 3) return { error: missingTool(/^missing=(.+)$/m.exec(String(r.stdout ?? ""))?.[1] ?? type.need, machine) };
+      if (r.code !== 0) return { error: explainError(r.stderr ?? "", machine, "Could not read the archive") };
+      const p = parseProbe(r.stdout);
+      if (p.encrypted) return { error: "Encrypted archives are not supported" };
+      let tops;
+      if (type.family === "single") tops = [{ name: type.stem, isDir: false }];
+      else {
+        const c = checkMembers(p.names, { zip: type.family === "zip" || p.tool === "unzip", types: p.types });
+        if (c.error) return { error: c.error };
+        tops = c.tops;
+      }
+      let total = null;
+      if (spaceCheck) {
+        try {
+          const s = await exec("sh", ["-c", ARCHIVE_SIZE_SCRIPT, "x", p.tool, src, destDir], { on, timeout: 120000 });
+          if (s.code === 0) {
+            const m = parseArchiveSize(s.stdout);
+            const e = spaceError(m.size, m.avail);
+            if (e) return { error: e };
+            total = m.size;
+          }
+        } catch {
+          // no measurement, no refusal
+        }
+      }
+      const entries = how === "to" ? [{ name: type.stem, isDir: true }] : tops;
+      const listed = (await probe(LIST_SCRIPT, destDir, on)).split("\0").filter(Boolean).map((e) => e.replace(/^\.\//, ""));
+      const keys = new Set(listed.map(nameKey));
+      const out = [];
+      for (const e of entries) {
+        if (!keys.has(nameKey(e.name))) { out.push({ ...e, exists: false }); continue; }
+        const dest = joinPath(destDir, e.name);
+        const o = await probe(EXISTS_SCRIPT, dest, on);
+        const exists = o.includes("y");
+        let replaceError = null;
+        if (exists && o.includes("d") && machine) {
+          const c = await exec("sh", ["-c", REPLACE_CHECK_SCRIPT, "x", dest, ...mountTables], { on });
+          if (c.code !== 0) throw new Error(c.stderr ?? "");
+          replaceError = cleanText(String(c.stdout ?? "")) || null;
+        }
+        out.push({ ...e, exists, ...(exists ? { destIsDir: o.includes("d") && !o.includes("l") } : {}), ...(replaceError ? { replaceError } : {}) });
+      }
+      return { name, stem: type.stem, family: type.family, tool: p.tool, need: type.need, total, destDir, entries: out, taken: listed };
+    } catch (e) {
+      return { error: explainError(String(e?.message ?? e), machine, "Could not read the archive") };
+    }
+  }
+
+  // Starts extract.sh for an inspected archive. plan: [{ entry, mode: skip|new|replace|merge, name }] for the entries that
+  // are not plain "new under their own name". The job shows the folder for "to", else the archive; names are the final
+  // top-level names it creates (a later Extract in the same folder keeps clear of them).
+  async function startExtract({ machine, src, how, info, plan = [] }) {
+    const id = newId();
+    const on = machine ?? null, destDir = info.destDir, archiveName = info.name;
+    const statusFile = `${appHome()}/filer-pro/jobs/${id}.status`;
+    const startedAt = now();
+    const to = how === "to";
+    const finalOf = (entry) => plan.find((p) => p.entry === entry)?.name ?? entry;
+    const finalName = to ? finalOf(info.stem) : null;
+    const names = to ? [finalName] : info.entries.filter((e) => plan.find((p) => p.entry === e.name)?.mode !== "skip").map((e) => finalOf(e.name));
+    let job = {
+      id, kind: "extract", direction: on ? "remote" : "local", machine: on, target: null, src, name: to ? finalName : archiveName, destDir,
+      dest: to ? joinPath(destDir, finalName) : destDir, temp: joinPath(destDir, tempName(archiveName, id)), names, isDir: to, mode: how,
+      state: "running", total: info.total ?? null, bytes: 0, rate: 0, percent: null, error: null, terminal: null,
+      startedAt, lastGrowthAt: startedAt, at: startedAt, statusFile, stalled: false, finishedAt: null,
+    };
+    let target = null;
+    if (on) {
+      try {
+        const t = sshTarget(okOut(await hc(["machine", "ls", "--json"])) ?? "", on);
+        if (t.error) { put(job); return fail(id, t.error); }
+        target = t.target;
+      } catch (e) {
+        put(job);
+        return fail(id, explainError(String(e?.message ?? e), on, "Could not start the extraction"));
+      }
+    }
+    job.target = target;
+    put(job);
+    try {
+      await exec("mkdir", ["-p", `${appHome()}/filer-pro/jobs`], { on: null });
+      if (get(id).cancelRequested) return end(id, { state: "cancelled" });
+      const words = [...sshEnv(limits()).slice(1), ...(on ? [`FILER_PRO_MACHINE=${on}`] : [])];
+      const r = await hc([
+        "run", "--bg", "--json", "--no-parent", "--no-notify", "--name", `fs-${id}`, "--",
+        ...(words.length ? ["env", ...words] : []),
+        "sh", `${appHome()}/mods/filer-pro/bin/extract.sh`,
+        target ?? "-", info.tool, info.family === "tar" ? info.need : "-", src, to ? info.stem : "-", info.family === "single" ? info.stem : "-",
+        job.temp, destDir, statusFile, platform.trashDir(home()),
+        ...plan.flatMap((p) => [p.entry, p.mode, p.name]),
+      ]);
+      if (r.code !== 0) return fail(id, explainError(r.stderr, target, "Could not start the extraction"));
+      const terminal = JSON.parse(r.stdout).address;
+      if (typeof terminal !== "string") return fail(id, "Could not start the extraction");
+      const started = update(id, { terminal });
+      if (started.cancelRequested) await hc(["kill", terminal]).catch(() => {});
+      return started;
+    } catch (e) {
+      return fail(id, explainError(String(e?.message ?? e), target));
+    }
+  }
+
   async function readStatus(job) {
     let text = null;
     try {
@@ -327,6 +454,10 @@ export function createJobs(deps) {
   // The temp a killed transfer left behind; for a copy on a machine the cp there is stopped first.
   async function removeTemp(job) {
     const on = destOn(job.direction, job.machine);
+    if (job.kind === "extract") { // stops the extractor of that job (by its id in the side shell's arguments), then removes the temp
+      await exec("sh", ["-c", EXTRACT_STOP_SCRIPT, "x", job.temp, job.id], { on }).catch(() => {});
+      return;
+    }
     const run = job.direction === "remote"
       ? exec("sh", ["-c", STOP_REMOVE_SCRIPT, "x", job.temp, job.id], { on })
       : exec("rm", ["-rf", "--", job.temp], { on });
@@ -343,7 +474,10 @@ export function createJobs(deps) {
     } else if (status?.state === "done") {
       const m = OLD_COPY_LEFT.exec(status.stderr);
       const left = m ? cleanText(m[1]) : "";
-      end(id, { state: "done", error: null, percent: 100, ...(left ? { warning: `Could not fully remove the old copy: ${left}` } : {}) });
+      const oldCopy = left ? `Could not fully remove the old copy: ${left}` : "";
+      // An extract also reports links that point outside the extracted files (extract.sh writes that line first).
+      const warning = job.kind === "extract" ? [LINKS_OUTSIDE.exec(status.stderr)?.[1], oldCopy].filter(Boolean).join(" ") : oldCopy;
+      end(id, { state: "done", error: null, percent: 100, ...(warning ? { warning } : {}) });
     } else if (job.stalled) {
       fail(id, "Transfer stalled");
     } else if (status?.state === "cancelled" || (!status && info.reason === "killed")) {
@@ -379,8 +513,10 @@ export function createJobs(deps) {
       if (cur?.state !== "running") continue;
       const p = progressOf({ bytes: cur.bytes, at: cur.at, lastGrowthAt: cur.lastGrowthAt, rate: cur.rate }, size ?? cur.bytes, cur.total, now(), limits().stall_seconds * 1000);
       // A missing temp (not created yet, or already moved away while finalizing) is no stall.
-      const stalled = size !== null && p.stalled;
-      const lastGrowthAt = size === null ? p.at : p.lastGrowthAt;
+      // Finalizing an extract moves entries out of the temp, so for it any change of the size is progress (R8).
+      const moved = cur.kind === "extract" && size !== null && size !== cur.bytes;
+      const stalled = size !== null && !moved && p.stalled;
+      const lastGrowthAt = size === null ? p.at : moved ? now() : p.lastGrowthAt;
       const job = update(cur.id, { bytes: p.bytes, at: p.at, lastGrowthAt, percent: p.percent, rate: p.rate, stalled: cur.stalled || stalled });
       const info = await terminalInfo(job);
       if (info?.state === "finished") {
@@ -422,5 +558,5 @@ export function createJobs(deps) {
     setShared(KEY, rest);
   }
 
-  return { inspect, sourceSize, start, tick, cancel, recover, clearFinished, dismiss };
+  return { inspect, inspectArchive, startExtract, sourceSize, start, tick, cancel, recover, clearFinished, dismiss };
 }

@@ -1,22 +1,25 @@
 #!/bin/sh
 # filer-pro transfer: scp download/upload, copy between two machines, local copy and copy on one machine with safe finalization.
-# Usage: transfer.sh <down|up|local|remote|cross> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir> [<src_target>]
+# Usage: transfer.sh <down|up|local|remote|cross|place|rplace> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir> [<src_target>]
 #   down: src is remote, dest/temp are local.  up: src is local, dest/temp are remote.
 #   local: src, dest and temp are local (cp -R -P -p, never follows links); <target> is ignored ("-").
 #   remote: src, dest and temp are all on <target> (cp -R -P -p in one ssh call, never follows links).
 #   cross: src is on <src_target>, dest/temp are on <target> (scp -3: the data runs through this computer).
 #     Only cross takes the 9th argument <src_target> (and requires it); every other direction takes exactly 8.
+#   place, rplace: finalize only (extract.sh, #57). <temp> already holds the finished copy; nothing is copied, <temp> is
+#     moved to <dest> with <mode> as for local (place, incl. the trash for replace and merge) or on <target> as for
+#     up (rplace, incl. the mount guard). <src> is only used in messages.
 # Writes <status_file> (state=done|failed|cancelled, code=<n>, last 20 stderr lines).
 # Exit 0 only for done, 130 for cancelled.
 # Must stay POSIX sh (dash and macOS sh).
 
 usage() {
-  echo "usage: transfer.sh <down|up|local|remote|cross> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir> [<src_target>]" >&2
+  echo "usage: transfer.sh <down|up|local|remote|cross|place|rplace> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir> [<src_target>]" >&2
   exit 2
 }
 case $1 in
   cross) [ $# -eq 9 ] || usage ;;
-  down|up|local|remote) [ $# -eq 8 ] || usage ;;
+  down|up|local|remote|place|rplace) [ $# -eq 8 ] || usage ;;
   *) usage ;;
 esac
 
@@ -100,7 +103,7 @@ cleanup_temp() {
            "$temp" "(^|/)cp -R -P -p -- .*fs-$id\\.part\$" ;;
     esac
     printf '%s\n' "$RS" | "$SSH" $SSH_OPTS "$target" "sh -s" >/dev/null 2>&1
-  elif [ "$dir" = up ] || [ "$dir" = cross ]; then
+  elif [ "$dir" = up ] || [ "$dir" = cross ] || [ "$dir" = rplace ]; then
     rs 'rm -rf -- "$1"' "$temp"
     printf '%s\n' "$RS" | "$SSH" $SSH_OPTS "$target" "sh -s" >/dev/null 2>&1
   else
@@ -134,7 +137,10 @@ fail() { # code
 # computer (both ends remote); the source is masked like a download source.
 # Run scp in the background and wait, so signals are handled immediately.
 # local: cp -P never follows links, so links arrive as links.
-if [ "$dir" = local ]; then
+# place, rplace: nothing to copy, <temp> is already there (the else branch below would run scp).
+if [ "$dir" = place ] || [ "$dir" = rplace ]; then
+  :
+elif [ "$dir" = local ]; then
   "$CP" -R -P -p -- "$src" "$temp" </dev/null 2>>"$err" &
 elif [ "$dir" = remote ]; then
   rs 'cp -R -P -p -- "$1" "$2"' "$src" "$temp"
@@ -158,11 +164,13 @@ else
     "$SCP" -s -r -p $SSH_OPTS "$from" "$to" </dev/null 2>>"$err" &
   fi
 fi
-pid=$!
-wait "$pid"
-rc=$?
-pid=
-[ "$rc" -eq 0 ] || fail "$rc"
+if [ "$dir" != place ] && [ "$dir" != rplace ]; then
+  pid=$!
+  wait "$pid"
+  rc=$?
+  pid=
+  [ "$rc" -eq 0 ] || fail "$rc"
+fi
 
 # From here on stderr goes to the status file, and signals are deferred:
 # finalization is short and must not be left half done.
@@ -382,7 +390,7 @@ REMOTE_SCRIPT="MERGE_SH=$(q "$MERGE_SH")
 $MOUNT_SH
 $REMOTE_BODY"
 
-if [ "$dir" = down ] || [ "$dir" = local ]; then
+if [ "$dir" = down ] || [ "$dir" = local ] || [ "$dir" = place ]; then
   local_finalize
   frc=$?
 else

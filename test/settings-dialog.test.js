@@ -332,6 +332,27 @@ test("view: the two double click switches start at their defaults, flip on their
   assert.deepEqual(texts(row.kids[0]), ["Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident."]);
 });
 
+test("view: Check free space before extracting is the last switch of File list; it toggles and is collected", async () => {
+  const id = "#filer-pro-settings-extract_space_check-switch";
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  assert.equal(s.flags.extract_space_check, true);
+  const out = texts(view(s));
+  const sw = out.indexOf(id);
+  assert.ok(sw > out.indexOf("Open apps with a double click"), "after double_click_apps");
+  assert.ok(sw < out.indexOf("#filer-pro-settings-preview-switch"), "still in File list, above the Preview switches");
+  assert.ok(out.includes("Check free space before extracting"));
+  assert.ok(out.includes("Stops when the archive would not fit. Costs one extra look into the archive."));
+  const look = (e) => JSON.stringify(e.calls.filter(([k]) => k !== "id" && k !== "on_click"));
+  assert.equal(look(byId(view(s), "filer-pro-settings-extract_space_check-switch")), look(byId(view(s), "filer-pro-settings-svg_check-switch")));
+  const c = makeCx();
+  called(byId(view(s), "filer-pro-settings-extract_space_check-switch"), "on_click")[0][0]({}, c);
+  assert.equal(s.flags.extract_space_check, false);
+  assert.deepEqual(collect(s), { extract_space_check: false });
+  const off = createSettingsDialog(await snapshot({ extract_space_check: false }), cx);
+  assert.equal(off.flags.extract_space_check, false);
+  assert.deepEqual(collect(off), {});
+});
+
 test("view: Warn before copying between machines is a switch in Transfers & connections; it toggles and saves", async () => {
   const id = "#filer-pro-settings-warn_cross_copy-switch";
   const s = createSettingsDialog(await snapshot(undefined), cx);

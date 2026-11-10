@@ -1102,3 +1102,126 @@ test("runMove reserved names include a running cross job on the target machine",
   await handleRequest(paste({ conflict: "keep_both" }), d);
   assert.deepEqual(d.fileOpsCalls[1][1].reserved, ["a-1"]);
 });
+
+// ---- extract (#57)
+test("parseRequest: extract", () => {
+  assert.deepEqual(parseRequest('{"action":"extract","path":"/Users/m/a.zip","how":"here"}'), { action: "extract", path: "/Users/m/a.zip", how: "here" });
+  assert.deepEqual(parseRequest('{"action":"extract","machine":"box","path":"/s/a.tgz","how":"to","conflict":"keep_both","links":"cancel","reveal":true}'),
+    { action: "extract", machine: "box", path: "/s/a.tgz", how: "to", conflict: "keep_both" });
+  assert.deepEqual(parseRequest('{"action":"extract","path":"/a.zip","how":"there"}'), { error: "how must be here or to" });
+  assert.deepEqual(parseRequest('{"action":"extract","path":"/a.zip"}'), { error: "how must be here or to" });
+  assert.deepEqual(parseRequest('{"action":"extract","path":"a.zip","how":"here"}'), { error: "path must be absolute" });
+  assert.deepEqual(parseRequest('{"action":"extract","path":"/","how":"here"}'), { error: '"/" cannot be extracted' });
+  assert.deepEqual(parseRequest('{"action":"extract","path":"/a/../b.zip","how":"here"}'), { error: 'Path must not contain ".", ".." or "//"' });
+  assert.deepEqual(parseRequest('{"action":"extract","machine":3,"path":"/a.zip","how":"here"}'), { error: "machine must be a name" });
+  assert.deepEqual(parseRequest('{"action":"extract","path":"/a.zip","how":"here","conflict":"zap"}'), { error: "conflict must be one of replace, merge, keep_both, cancel" });
+});
+
+const XA = "/Users/m/Downloads/pics.tar.gz";
+const XD = "/Users/m/Downloads";
+function xdeps(over = {}) {
+  const d = deps(over);
+  const entries = over.entries ?? [{ name: "a.txt", isDir: false, exists: false }, { name: "d", isDir: true, exists: false }];
+  const info = over.archive ?? { name: "pics.tar.gz", stem: "pics", family: "tar", tool: "tar", need: "gzip", total: null, destDir: XD, entries, taken: entries.filter((e) => e.exists).map((e) => e.name) };
+  d.jobs.inspectArchive = async (a) => (d.calls.push(["inspectArchive", a]), over.archiveError ? { error: over.archiveError } : info);
+  d.jobs.startExtract = async (a) => (d.calls.push(["startExtract", a]), { id: "x1" });
+  d.loadConfig = async () => over.config ?? {};
+  return d;
+}
+const xr = (x = {}) => ({ action: "extract", path: XA, how: "here", ...x });
+const starts = (d) => d.calls.filter((c) => c[0] === "startExtract").map((c) => c[1]);
+
+test("extract: no conflict starts with an empty plan, spaceCheck on by default and off with the setting", async () => {
+  const d = xdeps();
+  assert.deepEqual(await handleRequest(xr(), d), { ok: true, job: { id: "x1" } });
+  assert.deepEqual(d.asked, []);
+  assert.equal(starts(d).length, 1);
+  assert.deepEqual([starts(d)[0].src, starts(d)[0].how, starts(d)[0].plan, starts(d)[0].info.name], [XA, "here", [], "pics.tar.gz"]);
+  assert.deepEqual(d.calls.find((c) => c[0] === "inspectArchive")[1], { machine: undefined, src: XA, how: "here", spaceCheck: true });
+  const e = xdeps({ config: { extract_space_check: false } });
+  await handleRequest(xr({ machine: "box" }), e);
+  assert.deepEqual(e.calls.find((c) => c[0] === "inspectArchive")[1], { machine: "box", src: XA, how: "here", spaceCheck: false });
+});
+
+test("extract: inspect errors (space, tool, unreadable) pass through, nothing starts", async () => {
+  const d = xdeps({ archiveError: "Not enough space: 5 GB needed, 1 GB free" });
+  assert.deepEqual(await handleRequest(xr(), d), { ok: false, error: "Not enough space: 5 GB needed, 1 GB free" });
+  assert.deepEqual(starts(d), []);
+});
+
+const both = [{ name: "a.txt", isDir: false, exists: true, destIsDir: false }, { name: "d", isDir: true, exists: true, destIsDir: true }, { name: "n", isDir: false, exists: false }];
+
+test("extract: one question per colliding entry; Replace and Merge go into the plan, Cancel skips", async () => {
+  const d = xdeps({ entries: both, answers: [{ choice: "replace" }, { choice: "cancel" }] });
+  assert.equal((await handleRequest(xr(), d)).ok, true);
+  assert.equal(d.asked.length, 2);
+  assert.deepEqual(d.asked[0].item, { key: "0", path: `${XD}/a.txt`, name: "a.txt", isDir: false, direction: "local", machine: undefined, exists: true, destIsDir: false, linkWarning: null });
+  assert.deepEqual(d.asked[0].choices, ["replace", "keep_both", "cancel"]);
+  assert.deepEqual(d.asked[1].choices, ["merge", "replace", "keep_both", "cancel"]);
+  assert.deepEqual(starts(d)[0].plan, [{ entry: "a.txt", mode: "replace", name: "a.txt" }, { entry: "d", mode: "skip", name: "d" }]);
+  const m = xdeps({ entries: both, answers: [{ choice: "cancel" }, { choice: "merge" }] });
+  await handleRequest(xr({ machine: "box" }), m);
+  assert.equal(m.asked[0].item.direction, "remote");
+  assert.deepEqual(starts(m)[0].plan[1], { entry: "d", mode: "merge", name: "d" });
+});
+
+test("extract: Apply to all answers entries of the same kind once", async () => {
+  const entries = [{ name: "a", isDir: false, exists: true, destIsDir: false }, { name: "b", isDir: false, exists: true, destIsDir: false }];
+  const d = xdeps({ entries, answers: [{ choice: "keep_both", apply_to_all: true }] });
+  await handleRequest(xr(), d);
+  assert.equal(d.asked.length, 1);
+  assert.deepEqual(starts(d)[0].plan, [{ entry: "a", mode: "new", name: "a-1" }, { entry: "b", mode: "new", name: "b-1" }]);
+});
+
+test("extract: cancelling every entry gives Cancelled and starts nothing", async () => {
+  const d = xdeps({ entries: both.slice(0, 2), answers: [{ choice: "cancel", apply_to_all: true }, { choice: "cancel" }] });
+  assert.deepEqual(await handleRequest(xr(), d), { ok: false, error: "Cancelled" });
+  assert.deepEqual(starts(d), []);
+});
+
+test("extract: Keep Both avoids the folder, every top name, earlier choices and running jobs", async () => {
+  const entries = [{ name: "a.txt", isDir: false, exists: true, destIsDir: false }, { name: "a-1.txt", isDir: false, exists: false }];
+  const store = { "filer-pro.jobs": {
+    j1: { id: "j1", state: "running", kind: "extract", destDir: XD, machine: null, names: ["A-2.txt"] },
+    j2: { id: "j2", state: "running", direction: "down", destDir: XD, machine: "box", dest: `${XD}/a-3.txt` },
+    j3: { id: "j3", state: "running", direction: "up", destDir: XD, machine: "box", dest: `${XD}/a-4.txt` },
+    j4: { id: "j4", state: "done", kind: "extract", destDir: XD, machine: null, names: ["a-5.txt"] },
+  } };
+  const d = xdeps({ entries, store, answers: [{ choice: "keep_both" }] });
+  await handleRequest(xr(), d);
+  // a-1.txt is a top name of the archive, a-2.txt belongs to a running extract and a-3.txt to a running download here (down writes locally)
+  assert.deepEqual(starts(d)[0].plan, [{ entry: "a.txt", mode: "new", name: "a-4.txt" }]);
+});
+
+test("extract: the archive's own name is never asked and always kept both", async () => {
+  const entries = [{ name: "PICS.tar.gz", isDir: false, exists: true, destIsDir: false }, { name: "x", isDir: false, exists: false }];
+  const d = xdeps({ entries, conflict: "replace" });
+  await handleRequest(xr({ conflict: "replace" }), d);
+  assert.deepEqual(d.asked, []);
+  assert.deepEqual(starts(d)[0].plan, [{ entry: "PICS.tar.gz", mode: "new", name: "PICS-1.tar.gz" }]);
+});
+
+test("extract: Replace of a folder with a mount is refused per entry; all refused gives the error", async () => {
+  const entries = [{ name: "d", isDir: true, exists: true, destIsDir: true, replaceError: "Refusing to replace, a file system is mounted at: /m" }, { name: "f", isDir: false, exists: false }];
+  const d = xdeps({ entries, answers: [{ choice: "replace" }] });
+  const r = await handleRequest(xr({ machine: "box" }), d);
+  assert.deepEqual(r.errors, [{ path: `${XD}/d`, error: "Refusing to replace, a file system is mounted at: /m" }]);
+  assert.equal(r.ok, true);
+  assert.deepEqual(starts(d)[0].plan, [{ entry: "d", mode: "skip", name: "d" }]);
+  const one = xdeps({ entries: entries.slice(0, 1), answers: [{ choice: "replace" }] });
+  const o = await handleRequest(xr({ machine: "box" }), one);
+  assert.deepEqual([o.ok, o.error, o.errors.length], [false, "Refusing to replace, a file system is mounted at: /m", 1]);
+  assert.deepEqual(starts(one), []);
+});
+
+test("extract: the request's conflict answers up front", async () => {
+  const d = xdeps({ entries: both.slice(0, 2) });
+  await handleRequest(xr({ conflict: "keep_both" }), d);
+  assert.deepEqual(d.asked, []);
+  assert.deepEqual(starts(d)[0].plan, [{ entry: "a.txt", mode: "new", name: "a-1.txt" }, { entry: "d", mode: "new", name: "d-1" }]);
+  const c = xdeps({ entries: both.slice(0, 2) });
+  assert.deepEqual(await handleRequest(xr({ conflict: "cancel" }), c), { ok: false, error: "Cancelled" });
+  const m = xdeps({ entries: both.slice(0, 2) });
+  await handleRequest(xr({ conflict: "merge" }), m);
+  assert.deepEqual(starts(m)[0].plan, [{ entry: "a.txt", mode: "replace", name: "a.txt" }, { entry: "d", mode: "merge", name: "d" }]);
+});
