@@ -17,16 +17,19 @@ export { createImages } from "./images.js";
 export { clearLoads, loadDir, previewJob, loadOutcome, resolveFile } from "./images.js";
 export { createPdfs } from "./pdf.js";
 export { colorKey } from "./mermaid.js";
-export { layout, renderSize, zoomStep, canZoom, spreadPages, spreadStart, wheelZoom, RENDER_TIERS, pageLabel, turnTargets } from "./zoom.js";
+export { layout, renderSize, zoomStep, presetOf, canZoom, spreadPages, spreadStart, wheelZoom, RENDER_TIERS, pageLabel, turnTargets } from "./zoom.js";
 
 export const WIDTH_STEP = 32;
 
-// The look of the PDF header buttons in one place: glyph files (Lucide, beside main.js), tooltips (also the accessibility
-// labels) and the sizes of the icon button (as ui/edit.js: 14px glyph in a 24px hit area).
+// The look of the PDF header controls in one place: glyph files (Lucide, beside main.js), tooltips (also the accessibility
+// labels), the icon button (as ui/edit.js: 14px glyph in a 24px hit area) and the segmented controls (a bordered, rounded
+// group of touching segments; the active one is t.selected with t.foreground text, the others t.muted with a hover).
 const PDF_UI = {
-  glyph: { prev: "chevron-left", next: "chevron-right", out: "zoom-out", in: "zoom-in", fit: "move-horizontal", spread: "book-open" },
-  tip: { prev: "Previous page", next: "Next page", out: "Zoom out", in: "Zoom in", fit: "Fit width", spread: "Two pages", single: "Single page" },
-  box: 24, glyphSize: 14, radius: 6, gap: 2, textSize: 11,
+  glyph: { prev: "chevron-left", next: "chevron-right", out: "zoom-out", in: "zoom-in", single: "rectangle-vertical", spread: "book-open" },
+  tip: { prev: "Previous page", next: "Next page", out: "Zoom out", in: "Zoom in", single: "Single page", spread: "Two pages",
+    page: "Fit the whole page", width: "Fit the page width", actual: "Actual size" },
+  label: { page: "Page", width: "Width", actual: "100 %" },
+  box: 24, glyphSize: 14, radius: 6, gap: 2, textSize: 11, segPad: 8,
 };
 
 // Document links are untrusted: only web links open, and only on a click.
@@ -57,11 +60,11 @@ function picture(doc, width, onWidth) {
     .child(div().id("files-image").flex_none().mx_auto().w(w).child(image(doc.path).w(w).h(h)));
 }
 
-// The dialog's PDF view: one page or a spread at the sizes main.js computed (layout() in zoom.js), scrolling both ways.
+// The PDF view (panel and dialog): one page or a spread at the sizes main.js computed (layout() in zoom.js), scrolling both ways.
 // The row is centered with mx_auto, NOT with items_center/justify_center on the container: free space is then 0 when the
 // pages are wider than the view and the left edge stays reachable by scrolling. The wrapper (as large as the view at least)
 // takes the cmd + wheel anywhere in the view; the container's own scrolling is stopped only for cmd. The exact width is
-// reported (floored): Fit must fill the view without a stray horizontal scrollbar. items: [{ path, w, h }].
+// reported (floored): the fit presets must fill the view without a stray scrollbar; the height gives "page" its room. items: [{ path, w, h }].
 function pages(items, handlers, focus) {
   const total = items.reduce((a, i) => a + i.w, 0) + SPREAD_GAP * (items.length - 1), height = Math.max(...items.map((i) => i.h));
   const row = h_flex().id("files-image").flex_none().mx_auto().w(total).h(height).gap(SPREAD_GAP)
@@ -74,8 +77,8 @@ function pages(items, handlers, focus) {
     .when(Boolean(focus), (el) => el.track_focus(focus))
     .on_action(ACTIONS.in, (_e, cx) => handlers.onZoom("in", cx))
     .on_action(ACTIONS.out, (_e, cx) => handlers.onZoom("out", cx))
-    .on_action(ACTIONS.fit, (_e, cx) => handlers.onZoom("fit", cx))
-    .on_size_change((size, cx) => handlers.onWidth(Math.floor(size.width), cx))
+    .on_action(ACTIONS.page, (_e, cx) => handlers.onZoom("page", cx))
+    .on_size_change((size, cx) => handlers.onWidth(Math.floor(size.width), cx, Math.floor(size.height)))
     .child(wrap);
 }
 
@@ -116,11 +119,26 @@ function iconButton(t, id, key, tip, { enabled = true, active = false } = {}, on
     .child(svg(`${BASE}/${u.glyph[key]}.svg`).size(u.glyphSize).flex_none().text_color(enabled ? t.muted : t.dim));
 }
 
+// A segmented control: one bordered, rounded group of touching segments. segs: [{ id, tip, glyph | label, on, click }].
+function segmented(t, id, segs) {
+  const u = PDF_UI;
+  return h_flex().id(id).flex_none().items_center().border_1().border_color(t.border).rounded(u.radius).overflow_hidden()
+    .children(segs.map((s) => {
+      const color = s.on ? t.foreground : t.muted;
+      return div().id(s.id).h(u.box).flex_none().flex().items_center().justify_center().when(Boolean(s.glyph), (el) => el.w(u.box)).when(!s.glyph, (el) => el.px(u.segPad))
+        .text_size(u.textSize).text_color(color).cursor_pointer()
+        .when(s.on, (el) => el.bg(t.selected)).when(!s.on, (el) => el.hover((st) => st.bg(t.hover)))
+        .on_click((_e, cx) => s.click(cx)).tooltip(s.tip).accessibility_label(s.tip)
+        .child(s.glyph ? svg(`${BASE}/${u.glyph[s.glyph]}.svg`).size(u.glyphSize).flex_none().text_color(color) : s.label);
+    }));
+}
+
 /**
- * The header buttons of a document. PDF model: { page, pages, full (the dialog), spread, percent, fit }; handlers: onPage(n, cx),
- * onZoom("in" | "out" | "fit", cx), onSpread(cx). Zoom and spread belong to the dialog only; the panel has the page buttons.
+ * The header buttons of a document. PDF model: { page, pages, full (the dialog), spread, percent (effective), preset
+ * ("page" | "width" | "actual" | null) }; handlers: onPage(n, cx), onZoom("in" | "out" | "page" | "width" | "actual", cx),
+ * onLayout(spread, cx). The layout and zoom controls belong to the dialog only; the panel has the page buttons.
  */
-export function tools(doc, { mode, canOpen, page, pages, full, spread, percent, fit }, t, { onToggle, onOpen, onPage, onZoom, onSpread }) {
+export function tools(doc, { mode, canOpen, page, pages, full, spread, percent, preset }, t, { onToggle, onOpen, onPage, onZoom, onLayout }) {
   if (doc.kind === "image") return [];
   if (doc.kind === "pdf") {
     // Previous · "3 / 12" · Next; a button at its end is dimmed and has no click. main.js owns page and pages.
@@ -131,14 +149,19 @@ export function tools(doc, { mode, canOpen, page, pages, full, spread, percent, 
       iconButton(t, "files-page-next", "next", u.tip.next, { enabled: to.next > 0 }, (cx) => onPage(to.next, cx)),
     ];
     if (full) {
-      const can = canZoom(percent);
-      out.push(h_flex().id("files-zoom-tools").flex_none().gap(u.gap).items_center().children([
-        iconButton(t, "files-zoom-out", "out", u.tip.out, { enabled: can.out }, (cx) => onZoom("out", cx)),
-        div().id("files-zoom-level").text_size(u.textSize).text_color(t.muted).child(`${percent} %`),
-        iconButton(t, "files-zoom-in", "in", u.tip.in, { enabled: can.in }, (cx) => onZoom("in", cx)),
-        iconButton(t, "files-zoom-fit", "fit", u.tip.fit, { active: Boolean(fit) }, (cx) => onZoom("fit", cx)),
-        iconButton(t, "files-spread", "spread", spread ? u.tip.single : u.tip.spread, { active: Boolean(spread) }, (cx) => onSpread(cx)),
-      ]));
+      const can = canZoom(percent), pre = (key) => ({ id: `files-zoom-${key}`, tip: u.tip[key], label: u.label[key], on: preset === key, click: (cx) => onZoom(key, cx) });
+      out.push(
+        segmented(t, "files-layout", [
+          { id: "files-layout-single", tip: u.tip.single, glyph: "single", on: !spread, click: (cx) => onLayout(false, cx) },
+          { id: "files-layout-spread", tip: u.tip.spread, glyph: "spread", on: Boolean(spread), click: (cx) => onLayout(true, cx) },
+        ]),
+        segmented(t, "files-zoom-presets", [pre("page"), pre("width"), pre("actual")]),
+        h_flex().id("files-zoom-tools").flex_none().gap(u.gap).items_center().children([
+          iconButton(t, "files-zoom-out", "out", u.tip.out, { enabled: can.out }, (cx) => onZoom("out", cx)),
+          div().id("files-zoom-level").text_size(u.textSize).text_color(t.muted).child(`${percent} %`),
+          iconButton(t, "files-zoom-in", "in", u.tip.in, { enabled: can.in }, (cx) => onZoom("in", cx)),
+        ]),
+      );
     }
     return out;
   }

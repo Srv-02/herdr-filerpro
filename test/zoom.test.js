@@ -1,17 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, MAX_EDGE, RENDER_TIERS, SPREAD_GAP, VIEW_PAD, spreadPages, spreadStart, pageLabel, turnTargets, layout, zoomStep, canZoom, renderSize, wheelZoom } from "../mods/filer-pro/preview/zoom.js";
+import { ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, MAX_EDGE, RENDER_TIERS, SPREAD_GAP, VIEW_PAD, VIEW_PAD_Y, spreadPages, spreadStart, pageLabel, turnTargets, layout, zoomStep, presetOf, canZoom, renderSize, wheelZoom } from "../mods/filer-pro/preview/zoom.js";
 import { ACTIONS, PDF_CONTEXT, ZOOM_KEYS } from "../mods/filer-pro/lib/pdfkeys.js";
 
 test("constants and key table", () => {
   assert.deepEqual(ZOOM_STEPS, [50, 75, 100, 125, 150, 200, 300]);
-  assert.deepEqual([ZOOM_MIN, ZOOM_MAX, MAX_EDGE, SPREAD_GAP, VIEW_PAD], [50, 300, 6144, 8, 16]);
+  assert.deepEqual([ZOOM_MIN, ZOOM_MAX, MAX_EDGE, SPREAD_GAP, VIEW_PAD, VIEW_PAD_Y], [50, 300, 6144, 8, 16, 10]);
   assert.deepEqual(RENDER_TIERS, [3072, 4096, 6144]);
-  assert.deepEqual(ACTIONS, { in: "filer_pro_zoom_in", out: "filer_pro_zoom_out", fit: "filer_pro_zoom_fit" });
+  assert.deepEqual(ACTIONS, { in: "filer_pro_zoom_in", out: "filer_pro_zoom_out", page: "filer_pro_zoom_page" });
   assert.equal(PDF_CONTEXT, "FilerProPdf");
   assert.equal(ZOOM_KEYS.length, 8);
   assert.ok(ZOOM_KEYS.every((b) => b.context === PDF_CONTEXT && Object.values(ACTIONS).includes(b.action)));
   assert.deepEqual(ZOOM_KEYS.map((b) => b.keystroke), ["cmd-+", "cmd-=", "cmd--", "cmd-0", "+", "=", "-", "0"]);
+  assert.deepEqual(ZOOM_KEYS.filter((b) => b.action === ACTIONS.page).map((b) => b.keystroke), ["cmd-0", "0"], "cmd-0 and 0 fit the page");
 });
 
 test("spreadPages and spreadStart", () => {
@@ -47,20 +48,40 @@ test("turnTargets single and spread", () => {
   assert.deepEqual(turnTargets(1, 1, true), { prev: 0, next: 0 });
 });
 
-test("layout: fit uses the true width, upscales, floors and clamps", () => {
+test("layout: width mode uses the true width, upscales, floors and clamps", () => {
   const page = [{ width: 600, height: 800 }];
-  const f = layout(page, "fit", 1032);
+  const f = layout(page, "width", 1032);
   assert.deepEqual(f.items, [{ w: 1000, h: 1333 }]);
   assert.equal(f.percent, 167);
   assert.equal(f.width, 1000);
   assert.equal(f.height, 1333);
-  const g = layout([{ width: 100, height: 100 }], "fit", 1032);
-  assert.equal(g.percent, 300, "fit is clamped to ZOOM_MAX");
+  const g = layout([{ width: 100, height: 100 }], "width", 1032);
+  assert.equal(g.percent, 300, "width is clamped to ZOOM_MAX");
   assert.deepEqual(g.items, [{ w: 300, h: 300 }]);
-  const fl = layout([{ width: 300, height: 700 }], "fit", 100 + 2 * VIEW_PAD + 0.9);
+  const fl = layout([{ width: 300, height: 700 }], "width", 100 + 2 * VIEW_PAD + 0.9);
   assert.ok(fl.width <= 100.9);
-  assert.deepEqual(layout(page, "fit", 0).items, [{ w: 600, h: 800 }], "unknown width: factor 1");
-  assert.equal(layout(page, "fit", 10).width, 80, "room is at least 80");
+  assert.deepEqual(layout(page, "width", 0).items, [{ w: 600, h: 800 }], "unknown width: factor 1");
+  assert.deepEqual(layout(page, "page", 0, 500).items, [{ w: 600, h: 800 }], "unknown width: factor 1 for page too");
+  assert.equal(layout(page, "width", 10).width, 80, "room is at least 80");
+  assert.equal(layout(page, "width", 1032, 100).height, 1333, "the height is ignored in width mode");
+});
+
+test("layout: page mode fits the whole page or spread into the view", () => {
+  const page = [{ width: 600, height: 800 }];
+  assert.deepEqual(layout(page, "page", 1032, 5000).items, [{ w: 1000, h: 1333 }], "tall view: the width limits");
+  const s = layout(page, "page", 1032, 400 + 2 * VIEW_PAD_Y); // the height limits: 400 of 800 points
+  assert.equal(s.percent, 50);
+  assert.deepEqual(s.items, [{ w: 300, h: 400 }]);
+  assert.ok(s.height <= 400 && s.width <= 1032 - 2 * VIEW_PAD);
+  const odd = layout([{ width: 601, height: 800 }], "page", 1032, 400 + 2 * VIEW_PAD_Y);
+  assert.deepEqual(odd.items, [{ w: 300, h: 400 }], "widths and heights are floored");
+  assert.deepEqual(layout(page, "page", 1032, 0).items, [{ w: 1000, h: 1333 }], "no height known yet: width mode");
+  assert.equal(layout([{ width: 100, height: 100 }], "page", 2000, 2000).percent, 300, "clamped at ZOOM_MAX");
+  const two = layout([{ width: 500, height: 500 }, { width: 500, height: 500 }], "page", 1000 + 2 * VIEW_PAD + SPREAD_GAP, 5000);
+  assert.deepEqual(two.items, [{ w: 500, h: 500 }, { w: 500, h: 500 }]);
+  assert.equal(two.width, 1008);
+  const short = layout([{ width: 500, height: 500 }, { width: 500, height: 500 }], "page", 2000, 250 + 2 * VIEW_PAD_Y);
+  assert.deepEqual(short.items, [{ w: 250, h: 250 }, { w: 250, h: 250 }]);
 });
 
 test("layout: zoom, spread heights and gap", () => {
@@ -74,22 +95,26 @@ test("layout: zoom, spread heights and gap", () => {
   const diff = layout([{ width: 600, height: 800 }, { width: 400, height: 400 }], 100, 5000);
   assert.deepEqual(diff.items.map((i) => i.h), [800, 800], "same height");
   assert.deepEqual(diff.items.map((i) => i.w), [600, 800]);
-  const fit = layout([{ width: 500, height: 500 }, { width: 500, height: 500 }], "fit", 1000 + 2 * VIEW_PAD + SPREAD_GAP);
+  const fit = layout([{ width: 500, height: 500 }, { width: 500, height: 500 }], "width", 1000 + 2 * VIEW_PAD + SPREAD_GAP);
   assert.deepEqual(fit.items, [{ w: 500, h: 500 }, { w: 500, h: 500 }]);
   assert.equal(fit.width, 1008);
 });
 
-test("zoomStep and canZoom", () => {
-  assert.equal(zoomStep("fit", 167, "in"), 200);
-  assert.equal(zoomStep("fit", 167, "out"), 150);
+test("zoomStep, presetOf and canZoom", () => {
+  assert.equal(zoomStep("page", 167, "in"), 200);
+  assert.equal(zoomStep("width", 167, "out"), 150);
   assert.equal(zoomStep(100, 100, "in"), 125);
   assert.equal(zoomStep(100, 100, "out"), 75);
   assert.equal(zoomStep(50, 50, "out"), 50);
   assert.equal(zoomStep(300, 300, "in"), 300);
-  assert.equal(zoomStep("fit", 280, "in"), 300);
-  assert.equal(zoomStep("fit", 300, "in"), "fit", "unchanged");
-  assert.equal(zoomStep(100, 100, "fit"), "fit");
-  assert.equal(zoomStep("fit", 30, "out"), "fit", "unchanged below the minimum");
+  assert.equal(zoomStep("width", 280, "in"), 300);
+  assert.equal(zoomStep("page", 300, "in"), "page", "unchanged");
+  assert.equal(zoomStep("page", 30, "out"), "page", "unchanged below the minimum");
+  assert.equal(presetOf("page"), "page");
+  assert.equal(presetOf("width"), "width");
+  assert.equal(presetOf(100), "actual");
+  assert.equal(presetOf(125), null);
+  assert.equal(presetOf(50), null);
   assert.deepEqual(canZoom(100), { in: true, out: true });
   assert.deepEqual(canZoom(300), { in: false, out: true });
   assert.deepEqual(canZoom(50), { in: true, out: false });

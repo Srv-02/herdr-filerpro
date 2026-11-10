@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
+import { readFileSync } from "node:fs";
 import * as zoom from "../mods/filer-pro/preview/zoom.js";
 import { bindZoomKeys, ZOOM_KEYS } from "../mods/filer-pro/lib/pdfkeys.js";
 
@@ -29,20 +30,29 @@ function make({ full = true, spread = false, loader } = {}) {
   const pdfs = { load: async (a) => { calls.push(a); return loader ? loader(a) : page(a); } };
   const cx = { notify() {}, spawn: (fn) => fn(cx), timer: { after: (ms, fn) => timers.push({ ms, fn }) } };
   const self = Object.create(FilerPro.prototype);
-  Object.assign(self, { context: { fixed: true }, root: "/data", on: null, file: "a.pdf", page: 1, pages: 12, fullView: full, spread, zoom: "fit", previewWidth: 1000,
+  Object.assign(self, { context: { fixed: true }, root: "/data", on: null, file: "a.pdf", page: 1, pages: 12, fullView: full, spread, zoom: full ? "page" : "width", previewWidth: 1000, previewHeight: 0,
     pdfs, previewer: zoom, sharp: new Map(), doc2: null, force: false, current: () => true, doc: page({ page: 1 }) });
   return { self, cx, calls, timers, set, store, fire: async () => { timers.splice(0).forEach((x) => x.fn()); await flush(); } };
 }
 
-test("main.js show(): the zoom stays for the same path and resets for a new path", () => {
+test("main.js show(): the zoom stays for the same path and resets for a new path (dialog: Page, panel: Width)", () => {
   const { self } = make();
   self.zoom = 150;
   self.show("a.pdf");
   assert.equal(self.zoom, 150);
   self.show("b.pdf");
-  assert.equal(self.zoom, "fit");
+  assert.equal(self.zoom, "page");
   assert.equal(self.doc2, null);
   assert.equal(self.sharp.size, 0);
+  const panel = make({ full: false }).self;
+  panel.show("b.pdf");
+  assert.equal(panel.zoom, "width");
+});
+
+test("main.js: no remembered spread any more", () => {
+  const src = readFileSync(new URL("../mods/filer-pro/main.js", import.meta.url), "utf8");
+  assert.equal(src.includes("filer-pro.spread"), false);
+  assert.equal(/toggleSpread|"fit"/.test(src), false);
 });
 
 test("main.js dialog spread: a turn loads both pages and swaps doc and doc2 together", async () => {
@@ -81,7 +91,7 @@ test("main.js a stale turn (older turnGen) is dropped", async () => {
 
 test("main.js zoomBy steps the zoom; sharpen asks for the tier after the timer", async () => {
   const m = make();
-  m.self.zoomBy("in", m.cx); // Fit at a 1000 px view is 161 %, the next step is 200
+  m.self.zoomBy("in", m.cx); // Page without a known height falls back to the width: 161 % in a 1000 px view, the next step is 200
   assert.equal(m.self.zoom, 200);
   m.self.zoomBy("out", m.cx);
   assert.equal(m.self.zoom, 150);
@@ -133,30 +143,74 @@ test("main.js sharpen: tooLarge falls back to a lower tier, then records a null 
   assert.equal(n.calls.length, 3, "no retry after the null record");
 });
 
-test("main.js panel (fullView false): turnPage never passes a size and zoom and sharpen do nothing", async () => {
+test("main.js panel: fits the width and upscales past the natural size, sharpens with a tier, never zooms", async () => {
   const m = make({ full: false });
+  assert.equal(m.self.zoom, "width");
+  const lay = m.self.pdfLayout();
+  assert.equal(lay.percent, 161, "600x800 points in a 1000 px panel: wider than 100 %");
+  assert.deepEqual(lay.items, [{ w: 968, h: 1290 }]);
   m.self.turnPage(2, m.cx);
   await flush();
   assert.equal(m.calls.length, 1);
-  assert.equal("size" in m.calls[0], false);
-  assert.equal("keep" in m.calls[0], false);
-  m.self.zoomBy("in", m.cx);
+  assert.equal("size" in m.calls[0], false, "the page turn loads the base render");
+  assert.equal(m.timers.length, 1, "the sharpen is debounced");
+  assert.equal(m.timers[0].ms, 250);
+  await m.fire();
+  assert.equal(m.calls.length, 2);
+  assert.equal(m.calls[1].size, 3072, "need 2580 px: first tier");
+  assert.equal(m.calls[1].page, 2);
+  assert.equal(m.self.sharp.get(2).path, "p23072.png");
+  m.self.previewWidth = 1500; // the panel grows: sharper again
   m.self.sharpen(m.cx);
   await m.fire();
-  assert.equal(m.calls.length, 1);
-  assert.equal(m.self.zoom, "fit");
+  assert.equal(m.calls.at(-1).size, 4096);
+  m.self.zoomBy("in", m.cx);
+  m.self.zoomBy("page", m.cx);
+  assert.equal(m.self.zoom, "width", "the panel never changes its zoom");
+  assert.equal(m.self.spread, false);
 });
 
-test("main.js toggleSpread writes the shared setting and loads the spread", async () => {
+test("main.js panel: a bigger bitmap does not replace the old one before it arrives", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const m = make({ full: false, loader: async (a) => { if (a.size) await gate; return page(a); } });
+  m.self.sharpen(m.cx);
+  await m.fire();
+  assert.equal(m.self.sharp.size, 0, "the view keeps the base bitmap");
+  release();
+  await flush();
+  assert.equal(m.self.sharp.get(1).size, 3072);
+});
+
+test("main.js zoomBy: Page, Width and 100 % set the preset; Page uses the view height", () => {
   const m = make();
+  m.self.zoomBy("width", m.cx);
+  assert.equal(m.self.zoom, "width");
+  m.self.zoomBy("actual", m.cx);
+  assert.equal(m.self.zoom, 100);
+  m.self.zoomBy("page", m.cx);
+  assert.equal(m.self.zoom, "page");
+  m.self.previewHeight = 420; // 400 px of room: 50 % of 800
+  assert.equal(m.self.pdfLayout().percent, 50);
+  m.self.previewHeight = 0;
+  m.self.zoomBy("out", m.cx);
+  assert.equal(m.self.zoom, 150, "stepping starts from the effective percent");
+});
+
+test("main.js dialog starts with Single page; setLayout loads the spread and is a no-op when unchanged", async () => {
+  const m = make();
+  assert.equal(m.self.spread, false);
   m.self.page = 3;
-  m.self.toggleSpread(m.cx);
-  assert.deepEqual(m.set, [["filer-pro.spread", true]]);
+  m.self.setLayout(false, m.cx);
+  await flush();
+  assert.equal(m.calls.length, 0, "unchanged: nothing loaded");
+  m.self.setLayout(true, m.cx);
+  assert.equal(m.self.spread, true);
+  assert.deepEqual(m.set, [], "nothing is stored in the shared values");
   await flush();
   assert.equal(m.self.page, 2);
   assert.deepEqual(m.calls.map((c) => c.page).sort(), [2, 3]);
-  m.self.toggleSpread(m.cx);
-  assert.deepEqual(m.set.at(-1), ["filer-pro.spread", false]);
+  m.self.setLayout(false, m.cx);
   await flush();
   assert.equal(m.self.doc2, null);
 });

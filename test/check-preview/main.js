@@ -14,7 +14,7 @@ const HTML = '<h1>Title</h1><p>Text <a href="https://example.com">link</a></p><i
 export default class CheckPreview extends View {
   render() {
     const t = theme(), noop = () => {}, handlers = { onWidth: noop };
-    const pdfHandlers = { onToggle: noop, onOpen: noop, onPage: noop, onZoom: noop, onSpread: noop };
+    const pdfHandlers = { onToggle: noop, onOpen: noop, onPage: noop, onZoom: noop, onLayout: noop };
     const withDiagrams = prepare(SAMPLE, { kind: "markdown", mermaid: true });
     withDiagrams.parts.filter((p) => p.kind === "mermaid").forEach((p) => { p.diagram = { error: "demo" }; });
     withDiagrams.truncated = true;
@@ -27,8 +27,10 @@ export default class CheckPreview extends View {
       .child(frame(view(html, { t, font: "monospace", file: "c.html", width: 320 }, handlers)))
       .child(frame(view({ kind: "pdf", path: "data/filer-pro/images/none.png", width: 300, height: 150, page: 2, pages: 5 }, { t, font: "monospace", file: "d.pdf", width: 320 }, handlers)))
       .children(tools({ kind: "pdf" }, { mode: "preview", canOpen: false, page: 2, pages: 5 }, t, pdfHandlers))
-      .children(tools({ kind: "pdf" }, { mode: "preview", canOpen: false, page: 3, pages: 12, full: true, spread: true, percent: 100, fit: true }, t, pdfHandlers))
+      .children(tools({ kind: "pdf" }, { mode: "preview", canOpen: false, page: 3, pages: 12, full: true, spread: true, percent: 100, preset: "page" }, t, pdfHandlers))
+      .children(tools({ kind: "pdf" }, { mode: "preview", canOpen: false, page: 3, pages: 12, full: true, spread: false, percent: 125, preset: null }, t, pdfHandlers))
       .child(frame(view({ kind: "pdf", path: "data/filer-pro/images/none.png", width: 300, height: 150, page: 2, pages: 5 }, { t, font: "monospace", file: "e.pdf", width: 320, pdf: { items: [{ path: "data/filer-pro/images/none.png", w: 150, h: 100 }, { path: "data/filer-pro/images/none2.png", w: 150, h: 100 }] } }, { onWidth: noop, onZoom: noop, onWheel: noop })))
+      .child(frame(view({ kind: "pdf", path: "data/filer-pro/images/none.png", width: 300, height: 150, page: 2, pages: 5 }, { t, font: "monospace", file: "f.pdf", width: 320, pdf: { items: [{ path: "data/filer-pro/images/none.png", w: 200, h: 100 }] } }, { onWidth: noop, onZoom: noop, onWheel: noop })))
       .child(frame(largeNote("File is larger than 20 MB", t, noop)))
       .children(tools(html, { mode: "preview", canOpen: true }, t, { onToggle: noop, onOpen: noop }));
   }

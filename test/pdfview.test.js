@@ -19,7 +19,7 @@ register("data:text/javascript," + encodeURIComponent(hooks));
 const { tools, view } = await import("../mods/filer-pro/preview/index.js");
 const { ACTIONS, PDF_CONTEXT } = await import("../mods/filer-pro/lib/pdfkeys.js");
 
-const t = { muted: "muted", dim: "dim", hover: "hover", selected: "selected", border: "border", raised: "raised", ansi1: "red" };
+const t = { muted: "muted", dim: "dim", hover: "hover", selected: "selected", border: "border", raised: "raised", ansi1: "red", foreground: "fg" };
 const calls = (e, name) => e.calls.filter(([k]) => k === name);
 const has = (e, name) => calls(e, name).length > 0;
 const arg = (e, name) => calls(e, name).at(-1)?.[1][0];
@@ -28,8 +28,8 @@ const byId = (els, id) => els.flatMap(all).find((e) => calls(e, "id").some(([, [
 const textOf = (e) => calls(e, "child").map(([, [c]]) => c).filter((c) => typeof c === "string").join("");
 const doc = { kind: "pdf", path: "x.png", page: 3, pages: 12, width: 300, height: 400 };
 const noop = () => {};
-const hs = () => { const log = []; return { log, onToggle: noop, onOpen: noop, onPage: (n) => log.push(["page", n]), onZoom: (d) => log.push(["zoom", d]), onSpread: () => log.push(["spread"]) }; };
-const model = (over = {}) => ({ mode: "preview", canOpen: false, page: 3, pages: 12, full: false, spread: false, percent: 100, fit: true, ...over });
+const hs = () => { const log = []; return { log, onToggle: noop, onOpen: noop, onPage: (n) => log.push(["page", n]), onZoom: (d) => log.push(["zoom", d]), onLayout: (v) => log.push(["layout", v]) }; };
+const model = (over = {}) => ({ mode: "preview", canOpen: false, page: 3, pages: 12, full: false, spread: false, percent: 100, preset: "page", ...over });
 
 test("panel: previous, counter, next only, as icon buttons with ids, tooltips and chevrons", () => {
   const h = hs(), out = tools(doc, model(), t, h);
@@ -49,7 +49,7 @@ test("panel: previous, counter, next only, as icon buttons with ids, tooltips an
   calls(prev, "on_click")[0][1][0]({}, {});
   calls(next, "on_click")[0][1][0]({}, {});
   assert.deepEqual(h.log, [["page", 2], ["page", 4]]);
-  for (const id of ["files-zoom-out", "files-zoom-level", "files-zoom-in", "files-zoom-fit", "files-spread"]) assert.equal(byId(out, id), undefined, `${id} not in the panel`);
+  for (const id of ["files-layout", "files-layout-single", "files-layout-spread", "files-zoom-presets", "files-zoom-page", "files-zoom-width", "files-zoom-actual", "files-zoom-out", "files-zoom-level", "files-zoom-in"]) assert.equal(byId(out, id), undefined, `${id} not in the panel`);
 });
 
 test("panel ignores spread and zoom fields without full", () => {
@@ -72,49 +72,82 @@ test("edge buttons are dimmed and have no click", () => {
   assert.equal(live, "muted");
 });
 
-test("dialog adds zoom and spread buttons after the page buttons", () => {
-  const h = hs(), out = tools(doc, model({ full: true, percent: 125, fit: false }), t, h);
-  assert.deepEqual(["files-page-prev", "files-page-next"].map((id) => Boolean(byId(out, id))), [true, true]);
-  const ids = ["files-zoom-out", "files-zoom-level", "files-zoom-in", "files-zoom-fit", "files-spread"];
-  for (const id of ids) assert.ok(byId(out, id), id);
+const seg = (out, id) => byId(out, id);
+const IDS = ["files-layout-single", "files-layout-spread", "files-zoom-page", "files-zoom-width", "files-zoom-actual", "files-zoom-out", "files-zoom-level", "files-zoom-in"];
+
+test("dialog adds the layout control and the zoom controls after the page buttons", () => {
+  const h = hs(), out = tools(doc, model({ full: true, percent: 125, preset: null }), t, h);
+  assert.deepEqual(["files-page-prev", "files-page-next", "files-layout", "files-zoom-presets"].map((id) => Boolean(byId(out, id))), [true, true, true, true]);
+  for (const id of IDS) assert.ok(byId(out, id), id);
   const order = out.flatMap(all).map((e) => calls(e, "id")[0]?.[1][0]).filter(Boolean);
-  assert.ok(order.indexOf("files-page-next") < order.indexOf("files-zoom-out"));
-  assert.deepEqual(ids.map((id) => order.indexOf(id)), ids.map((id) => order.indexOf(id)).sort((a, b) => a - b), "left to right");
+  assert.ok(order.indexOf("files-page-next") < order.indexOf("files-layout-single"));
+  assert.deepEqual(IDS.map((id) => order.indexOf(id)), IDS.map((id) => order.indexOf(id)).sort((a, b) => a - b), "left to right");
   assert.equal(textOf(byId(out, "files-zoom-level")), "125 %");
   const glyph = (id) => all(byId(out, id)).find((e) => e.tag === "svg").args[0];
+  assert.equal(glyph("files-layout-single"), "mods/filer-pro/rectangle-vertical.svg");
+  assert.equal(glyph("files-layout-spread"), "mods/filer-pro/book-open.svg");
   assert.equal(glyph("files-zoom-out"), "mods/filer-pro/zoom-out.svg");
   assert.equal(glyph("files-zoom-in"), "mods/filer-pro/zoom-in.svg");
-  assert.equal(glyph("files-zoom-fit"), "mods/filer-pro/move-horizontal.svg");
-  assert.equal(glyph("files-spread"), "mods/filer-pro/book-open.svg");
-  assert.deepEqual(["files-zoom-out", "files-zoom-in", "files-zoom-fit", "files-spread"].map((id) => arg(byId(out, id), "tooltip")), ["Zoom out", "Zoom in", "Fit width", "Two pages"]);
-  assert.deepEqual(["files-zoom-out", "files-zoom-in", "files-zoom-fit", "files-spread"].map((id) => arg(byId(out, id), "accessibility_label")), ["Zoom out", "Zoom in", "Fit width", "Two pages"]);
-  for (const id of ["files-zoom-out", "files-zoom-in", "files-zoom-fit", "files-spread"]) assert.equal(has(byId(out, id), "bg"), false, `${id} not selected`);
-  calls(byId(out, "files-zoom-out"), "on_click")[0][1][0]({}, {});
-  calls(byId(out, "files-zoom-in"), "on_click")[0][1][0]({}, {});
-  calls(byId(out, "files-zoom-fit"), "on_click")[0][1][0]({}, {});
-  calls(byId(out, "files-spread"), "on_click")[0][1][0]({}, {});
-  assert.deepEqual(h.log, [["zoom", "out"], ["zoom", "in"], ["zoom", "fit"], ["spread"]]);
+  assert.equal(out.flatMap(all).some((e) => e.args[0] === "mods/filer-pro/move-horizontal.svg"), false, "move-horizontal is gone");
+  assert.deepEqual(["files-layout-single", "files-layout-spread", "files-zoom-out", "files-zoom-in"].map((id) => arg(byId(out, id), "tooltip")), ["Single page", "Two pages", "Zoom out", "Zoom in"]);
+  assert.deepEqual(["files-layout-single", "files-layout-spread", "files-zoom-out", "files-zoom-in"].map((id) => arg(byId(out, id), "accessibility_label")), ["Single page", "Two pages", "Zoom out", "Zoom in"]);
+  assert.deepEqual(["files-zoom-page", "files-zoom-width", "files-zoom-actual"].map((id) => textOf(byId(out, id))), ["Page", "Width", "100 %"]);
+  for (const id of ["files-zoom-page", "files-zoom-width", "files-zoom-actual"]) assert.ok(arg(byId(out, id), "tooltip"), `${id} has a tooltip`);
+  for (const id of ["files-zoom-out", "files-zoom-in"]) assert.equal(has(byId(out, id), "bg"), false, `${id} not selected`);
+  for (const id of ["files-layout-single", "files-layout-spread", "files-zoom-page", "files-zoom-width", "files-zoom-actual", "files-zoom-out", "files-zoom-in"]) calls(byId(out, id), "on_click")[0][1][0]({}, {});
+  assert.deepEqual(h.log, [["layout", false], ["layout", true], ["zoom", "page"], ["zoom", "width"], ["zoom", "actual"], ["zoom", "out"], ["zoom", "in"]]);
 });
 
-test("zoom-in is dimmed at 300, zoom-out at 50, fit is selected while fit", () => {
-  const max = tools(doc, model({ full: true, percent: 300 }), t, hs());
+test("segmented groups: bordered, rounded, gapless; the active segment is selected and foreground", () => {
+  const out = tools(doc, model({ full: true }), t, hs());
+  for (const id of ["files-layout", "files-zoom-presets"]) {
+    const g = byId(out, id);
+    assert.equal(has(g, "border_1"), true, `${id} border`);
+    assert.equal(arg(g, "border_color"), "border");
+    assert.equal(arg(g, "rounded"), 6);
+    assert.equal(has(g, "gap"), false, "segments touch");
+  }
+  // single page + Page preset: those two are on, the others are not
+  const on = (id) => arg(seg(out, id), "bg") === "selected";
+  assert.deepEqual(["files-layout-single", "files-layout-spread", "files-zoom-page", "files-zoom-width", "files-zoom-actual"].map(on), [true, false, true, false, false]);
+  const color = (id) => (has(seg(out, id), "text_color") ? arg(seg(out, id), "text_color") : all(seg(out, id)).find((e) => e.tag === "svg").calls.find(([k]) => k === "text_color")[1][0]);
+  assert.equal(color("files-zoom-page"), "fg");
+  assert.equal(color("files-zoom-width"), "muted");
+  assert.equal(color("files-layout-single"), "fg");
+  assert.equal(color("files-layout-spread"), "muted");
+  assert.equal(has(seg(out, "files-zoom-width"), "hover"), true, "an inactive segment has a hover");
+});
+
+test("preset highlighting: Width, 100 %, and none while stepped away from a preset", () => {
+  const sel = (over) => {
+    const out = tools(doc, model({ full: true, ...over }), t, hs());
+    return ["files-zoom-page", "files-zoom-width", "files-zoom-actual"].filter((id) => arg(seg(out, id), "bg") === "selected");
+  };
+  assert.deepEqual(sel({ preset: "width" }), ["files-zoom-width"]);
+  assert.deepEqual(sel({ preset: "actual", percent: 100 }), ["files-zoom-actual"]);
+  assert.deepEqual(sel({ preset: null, percent: 125 }), []);
+  assert.deepEqual(sel({ preset: "page", percent: 62 }), ["files-zoom-page"]);
+});
+
+test("the value shows the effective percent with and without a preset", () => {
+  assert.equal(textOf(byId(tools(doc, model({ full: true, preset: "page", percent: 62 }), t, hs()), "files-zoom-level")), "62 %");
+  assert.equal(textOf(byId(tools(doc, model({ full: true, preset: null, percent: 150 }), t, hs()), "files-zoom-level")), "150 %");
+});
+
+test("zoom-in is dimmed at 300, zoom-out at 50", () => {
+  const max = tools(doc, model({ full: true, percent: 300, preset: null }), t, hs());
   assert.equal(has(byId(max, "files-zoom-in"), "on_click"), false);
   assert.equal(has(byId(max, "files-zoom-out"), "on_click"), true);
-  const min = tools(doc, model({ full: true, percent: 50, fit: false }), t, hs());
+  const min = tools(doc, model({ full: true, percent: 50, preset: null }), t, hs());
   assert.equal(has(byId(min, "files-zoom-out"), "on_click"), false);
   assert.equal(has(byId(min, "files-zoom-in"), "on_click"), true);
-  assert.equal(arg(byId(max, "files-zoom-fit"), "bg"), "selected", "fit selected");
-  assert.equal(has(byId(min, "files-zoom-fit"), "bg"), false);
 });
 
-test("spread: counter shows both pages, the toggle is selected and says Single page", () => {
+test("two pages: the counter shows both, the spread segment is selected, turning moves by spreads", () => {
   const out = tools(doc, model({ full: true, spread: true }), t, hs());
   assert.equal(textOf(out[1]), "2–3 / 12");
-  const btn = byId(out, "files-spread");
-  assert.equal(arg(btn, "bg"), "selected");
-  assert.equal(arg(btn, "tooltip"), "Single page");
-  assert.equal(arg(btn, "accessibility_label"), "Single page");
-  // turning moves by spreads: from 2-3 back to the cover, forward to 4
+  assert.equal(arg(byId(out, "files-layout-spread"), "bg"), "selected");
+  assert.equal(has(byId(out, "files-layout-single"), "bg"), false);
   const h = hs(), again = tools(doc, model({ full: true, spread: true }), t, h);
   calls(again[0], "on_click")[0][1][0]({}, {});
   calls(again[2], "on_click")[0][1][0]({}, {});
@@ -143,7 +176,7 @@ test("picture (panel PDF and image): the child is centered with mx_auto and an e
 
 const ITEMS = [{ path: "a.png", w: 300, h: 400 }, { path: "b.png", w: 200, h: 400 }];
 function pagesView(over = {}) {
-  const log = [], h = { onWidth: (w) => log.push(["width", w]), onZoom: (d) => log.push(["zoom", d]), onWheel: () => log.push(["wheel"]) };
+  const log = [], h = { onWidth: (w, _cx, h) => log.push(["width", w, h]), onZoom: (d) => log.push(["zoom", d]), onWheel: () => log.push(["wheel"]) };
   const focus = over.focus;
   return { log, el: view(doc, { t, font: "m", file: "a.pdf", width: 400, pdf: { items: ITEMS, focus } }, h) };
 }
@@ -156,16 +189,16 @@ test("dialog pages view: key context, three actions, scrolls both ways, no cente
   assert.equal(has(el, "overflow_scrollbar"), true);
   for (const bad of ["items_center", "justify_center", "overflow_y_scrollbar"]) assert.equal(has(el, bad), false, bad);
   const actions = calls(el, "on_action");
-  assert.deepEqual(actions.map(([, [a]]) => a), [ACTIONS.in, ACTIONS.out, ACTIONS.fit]);
+  assert.deepEqual(actions.map(([, [a]]) => a), [ACTIONS.in, ACTIONS.out, ACTIONS.page]);
   actions.forEach(([, [, fn]]) => fn({}, {}));
-  assert.deepEqual(log, [["zoom", "in"], ["zoom", "out"], ["zoom", "fit"]]);
+  assert.deepEqual(log, [["zoom", "in"], ["zoom", "out"], ["zoom", "page"]]);
 });
 
-test("dialog pages view without a focus handle draws without track_focus; the width is reported exactly", () => {
+test("dialog pages view without a focus handle draws without track_focus; width and height are reported exactly", () => {
   const { el, log } = pagesView();
   assert.equal(has(el, "track_focus"), false);
   calls(el, "on_size_change")[0][1][0]({ width: 1037.6, height: 500 }, {});
-  assert.deepEqual(log, [["width", 1037]], "floored, not in 32 px steps");
+  assert.deepEqual(log, [["width", 1037, 500]], "floored, not in 32 px steps");
 });
 
 test("dialog pages view: wrapper with the wheel, row centered with explicit size and one image per item", () => {
@@ -190,7 +223,13 @@ test("dialog pages view: wrapper with the wheel, row centered with explicit size
   assert.deepEqual([log, stopped], [[["wheel"]], 1]);
 });
 
-test("a PDF without ctx.pdf still gets the picture (panel)", () => {
+test("the pages view serves the panel too: no focus handle, same centering", () => {
+  const { el } = pagesView();
+  assert.equal(has(el, "track_focus"), false);
+  assert.equal(has(el.kids[0].kids[0], "mx_auto"), true);
+});
+
+test("a PDF without ctx.pdf still gets the picture", () => {
   const el = view(doc, { t, font: "m", file: "a.pdf", width: 400 }, { onWidth: noop });
   assert.equal(has(el, "overflow_y_scrollbar"), true);
 });
