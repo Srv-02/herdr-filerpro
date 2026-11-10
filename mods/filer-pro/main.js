@@ -1678,7 +1678,7 @@ export default class FilerPro extends View {
   sharpen(cx) {
     if (!this.fullView || this.doc?.kind !== "pdf" || !this.previewer || this.sharpTimer) return;
     this.sharpTimer = true;
-    cx.timer.after(250, () => { this.sharpTimer = false; this.sharpNow(cx); });
+    cx.timer.after(250, (tcx) => { this.sharpTimer = false; this.sharpNow(tcx ?? cx); }); // the timer's own cx: the caller's task may be over
   }
 
   sharpNow(cx) {
