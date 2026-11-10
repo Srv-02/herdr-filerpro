@@ -66,7 +66,9 @@ const LOCALE = `L=$(locale -a 2>/dev/null | grep -i -m1 -E '^(C|en_US)\\.utf-?8$
 //     need    archiveOf().need: the helper a compressed tar needs (gzip|bzip2|xz|zstd) or "-"; for single the tool itself
 //     archive absolute path (a leading "-" is made safe)
 //   stdout  `tool=<t>` (tar | bsdtar | unzip | gzip | bzip2 | xz | zstd, the one extract.sh and ARCHIVE_SIZE_SCRIPT
-//           get as <tool>), a line `--`, then one member per line (nothing for single). Directory members end in "/".
+//           get as <tool>), `types=<c...>` (tar and zip: the first character of each member's line in the long listing,
+//           in member order: d folder, - file, l symlink, h hard link, ...), a line `--`, then one member per line
+//           (nothing for single). Directory members usually end in "/".
 //           tar/bsdtar print a newline in a name as \n, a backslash as \\ and non-ASCII bytes maybe as \ooo (parseProbe decodes).
 //   exit 0  ok
 //   exit 3  a tool is missing: stdout `missing=<tool>`
@@ -80,14 +82,16 @@ case "$a" in -*) a=./$a;; esac
 miss() { printf 'missing=%s\\n' "$1"; exit 3; }
 has() { command -v "$1" >/dev/null 2>&1; }
 bad() { [ -n "$m" ] && printf '%s\\n' "$m" >&2; exit 4; }
-m=
+m= y=
 case "$f" in
   single)
     t=$n; has "$t" || miss "$t"
     printf 'tool=%s\\n--\\n' "$t"; exit 0;;
   zip)
     if has unzip && m=$(unzip -Z1 "$a" 2>/dev/null); then t=unzip
+      y=$(unzip -Z -s "$a" 2>/dev/null | sed '1,2d;$d' | cut -c1 | tr -d '\\n')
     elif has bsdtar; then t=bsdtar; m=$(bsdtar -tf "$a") || bad
+      y=$(bsdtar -tvf "$a" 2>/dev/null | cut -c1 | tr -d '\\n')
     elif has unzip; then m=$(unzip -Z1 "$a" 2>&1); bad
     else miss unzip; fi;;
   *)
@@ -95,9 +99,10 @@ case "$f" in
     if ! m=$(tar -tf "$a"); then
       [ "$n" != - ] && ! has "$n" && miss "$n"
       bad
-    fi;;
+    fi
+    y=$(tar -tvf "$a" 2>/dev/null | cut -c1 | tr -d '\\n');;
 esac
-printf 'tool=%s\\n--\\n%s\\n' "$t" "$m"
+printf 'tool=%s\\ntypes=%s\\n--\\n%s\\n' "$t" "$y" "$m"
 `;
 
 // ARCHIVE_SIZE_SCRIPT: how much room the extracted files need and how much the target folder has (R4). A separate exec
@@ -194,15 +199,16 @@ export function unescapeName(line) {
   return utf8Decode(bytes) ?? line;
 }
 
-// stdout of ARCHIVE_PROBE_SCRIPT -> { tool, names }. names are the members (escapes of tar/bsdtar decoded; unzip -Z1 prints
-// names as they are).
+// stdout of ARCHIVE_PROBE_SCRIPT -> { tool, names, types? }. names are the members (escapes of tar/bsdtar decoded; unzip -Z1
+// prints names as they are); types the type characters in member order (absent for an older output without the line).
 export function parseProbe(stdout) {
   const lines = String(stdout ?? "").split("\n");
   const cut = lines.indexOf("--");
   const head = cut < 0 ? lines : lines.slice(0, cut);
   const tool = (head.find((l) => l.startsWith("tool=")) ?? "").slice(5) || null;
+  const typeLine = head.find((l) => l.startsWith("types="));
   const raw = cut < 0 ? [] : lines.slice(cut + 1).filter((l) => l !== "");
-  return { tool, names: tool === "tar" || tool === "bsdtar" ? raw.map(unescapeName) : raw };
+  return { tool, names: tool === "tar" || tool === "bsdtar" ? raw.map(unescapeName) : raw, ...(typeLine !== undefined ? { types: typeLine.slice(6) } : {}) };
 }
 
 // stdout of ARCHIVE_SIZE_SCRIPT -> { size, avail } in bytes, null when unknown (df prints KiB; its first column can hold
@@ -225,29 +231,34 @@ export function parseSize(stdout) {
 
 // The member list of an archive -> { tops: [{ name, isDir }] } (the entries that land in the target folder) or { error }.
 // This is the second line of defense; the first are the tools' defaults (bsdtar refuses "..", absolute names and writing
-// through links, GNU tar strips or defers them, Info-ZIP strips "../"). Refusing the archive here means nothing is
-// written at all. Refused: an absolute member, a ".." component, a member below a non-directory member (a symlink that
-// later members would be written through). zip names also treat "\\" as a separator.
-export function checkMembers(names, { zip = false } = {}) {
+// through links, GNU tar strips them and defers dangerous links, Info-ZIP strips "../"). Refusing the archive here means
+// nothing is written at all. Refused: an absolute member, a ".." component, a member below a member that is no folder (a
+// symlink or hard link that later members would be written through, also a link listed with a trailing slash), and a
+// path listed both as a folder and as something else. types: one character per member from the long listing (d folder,
+// l symlink, h hard link, - file); without it (or when it does not match the list) a member counts as a folder only with a
+// trailing slash. Paths are compared with nameKey on every side: on APFS "Foo" and "foo/x" are the same path, and on a
+// case-sensitive machine a refusal of such an archive is only overly careful. zip names also treat "\\" as a separator.
+export function checkMembers(names, { zip = false, types } = {}) {
+  const typed = typeof types === "string" && types.length === names.length;
+  if (typeof types === "string" && !typed) return { error: "Could not read the member types of the archive" };
   const members = [];
-  for (const raw of names) {
+  names.forEach((raw, i) => {
+    if (members.error) return;
     const name = zip ? raw.replace(/\\/g, "/") : raw;
-    if (name.startsWith("/") || (zip && /^[A-Za-z]:/.test(name))) return { error: `The archive contains an absolute path: ${raw}` };
+    if (name.startsWith("/") || (zip && /^[A-Za-z]:/.test(name))) { members.error = `The archive contains an absolute path: ${raw}`; return; }
     const parts = name.split("/").filter((p) => p !== "" && p !== ".");
-    if (parts.includes("..")) return { error: `The archive contains a path with "..": ${raw}` };
-    if (parts.length) members.push({ raw, parts, dir: name.endsWith("/") });
-  }
+    if (parts.includes("..")) { members.error = `The archive contains a path with "..": ${raw}`; return; }
+    if (parts.length) members.push({ raw, parts, dir: typed ? types[i] === "d" : name.endsWith("/") });
+  });
+  if (members.error) return { error: members.error };
   if (!members.length) return { error: "The archive is empty" };
   const key = (parts) => parts.map(nameKey).join("/");
-  const plain = new Set(), dirs = new Set(); // plain: listed without a trailing slash (file or link); dirs: listed as folders
+  const dirs = new Set(), other = new Set(); // other: files, links and anything else that is no folder
+  for (const m of members) (m.dir ? dirs : other).add(key(m.parts));
   for (const m of members) {
-    const k = key(m.parts);
-    (m.dir ? dirs : plain).add(k);
-  }
-  for (const m of members) {
+    if (dirs.has(key(m.parts)) && other.has(key(m.parts))) return { error: `The archive lists a path both as a folder and as a file or link: ${m.raw}` };
     for (let i = 1; i < m.parts.length; i++) {
-      const k = key(m.parts.slice(0, i));
-      if (plain.has(k) && !dirs.has(k)) return { error: `The archive writes through a link: ${m.raw}` };
+      if (other.has(key(m.parts.slice(0, i)))) return { error: `The archive writes through a link: ${m.raw}` };
     }
   }
   const tops = new Map();

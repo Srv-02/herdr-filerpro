@@ -267,3 +267,41 @@ test("EXTRACT_STOP_SCRIPT: kills a matching process and removes the temp; a reus
   assert.equal(run(EXTRACT_STOP_SCRIPT, [path.join(dir, "absent"), "abc"]).status, 0, "no temp, no pid: still fine");
   assert.equal(run(EXTRACT_STOP_SCRIPT, ["", "abc"]).status, 1, "refuses an empty temp path");
 });
+
+// Security review of #57: the write-through check must not rely on the trailing slash alone, and a path must not be
+// listed both as a folder and as a link (exactly or only in letter case: on APFS it is the same entry).
+test("checkMembers with types: a link listed with a trailing slash, a path that is folder and link, case variants", () => {
+  assert.match(checkMembers(["l/", "l/x.txt"], { types: "l-" }).error, /^The archive writes through a link: l\/x\.txt$/);
+  assert.match(checkMembers(["l", "l/", "l/x.txt"], { types: "ld-" }).error, /^The archive lists a path both as a folder and as a file or link: l$/);
+  assert.match(checkMembers(["Foo", "FOO/", "Foo/x.txt"], { types: "ld-" }).error, /both as a folder and as a file or link/);
+  assert.match(checkMembers(["h", "h/x"], { types: "h-" }).error, /writes through a link/, "a hard link is no folder either");
+  assert.deepEqual(checkMembers(["proj", "proj/a.txt"], { types: "d-" }).tops, [{ name: "proj", isDir: true }], "a folder without a slash is fine with types");
+  assert.equal(checkMembers(["a", "b"], { types: "-" }).error, "Could not read the member types of the archive");
+  assert.match(checkMembers(["l", "l/", "l/x.txt"]).error, /both as a folder/, "without types: the slash decides");
+});
+test("probe + checkMembers: crafted tar and zip with a slash-named link, link plus folder, and case variants are refused", () => {
+  const cases = [
+    ["slash", [{ name: "l/", type: "symlink", target: "../victim" }, { name: "l/x.txt", data: "x" }], /writes through a link/],
+    ["both", [{ name: "l", type: "symlink", target: "../victim" }, { name: "l/", type: "dir" }, { name: "l/x.txt", data: "x" }], /both as a folder/],
+    ["fold", [{ name: "Foo", type: "symlink", target: "../victim" }, { name: "FOO/", type: "dir" }, { name: "Foo/x.txt", data: "x" }], /both as a folder/],
+    ["caseonly", [{ name: "Foo", type: "symlink", target: "../victim" }, { name: "foo/x.txt", data: "x" }], /writes through a link/],
+  ];
+  for (const [name, entries, re] of cases) {
+    const r = probe("tar", "-", put(`sec-${name}.tar`, tarBuffer(entries)));
+    assert.equal(r.status, 0, `${name}.tar: ${r.stderr}`);
+    const p = parseProbe(r.stdout);
+    assert.equal(p.types.length, p.names.length, `${name}.tar types`);
+    assert.match(checkMembers(p.names, { types: p.types }).error, re, `${name}.tar`);
+    if (!have("unzip") && !have("bsdtar")) continue; // zip needs one of them
+    const z = probe("zip", "-", put(`sec-${name}.zip`, zipBuffer(entries)));
+    assert.equal(z.status, 0, `${name}.zip: ${z.stderr}`);
+    const q = parseProbe(z.stdout);
+    assert.match(checkMembers(q.names, { zip: true, types: q.types }).error, re, `${name}.zip`);
+  }
+});
+test("probe: types line matches the members of a good tar (folder without a trailing slash counts as a folder)", () => {
+  const r = probe("tar", "-", put("typed.tar", tarBuffer([{ name: "proj", type: "dir" }, { name: "proj/a.txt", data: "a" }, { name: "ln", type: "symlink", target: "proj/a.txt" }])));
+  const p = parseProbe(r.stdout);
+  assert.equal(p.types, "d-l");
+  assert.deepEqual(checkMembers(p.names, { types: p.types }).tops, [{ name: "proj", isDir: true }, { name: "ln", isDir: false }]);
+});
