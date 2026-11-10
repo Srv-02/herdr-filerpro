@@ -4,9 +4,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { mkTmpSync } from "./tmp-helper.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const mod = path.join(root, "mods/filer-pro");
@@ -27,7 +27,7 @@ test("the hook is not part of the shipped mod", () => {
 });
 
 test("demo-hook.mjs applies to the current mod and the result still parses", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "filerpro-hook-"));
+  const tmp = mkTmpSync("filerpro-hook-");
   try {
     const copy = path.join(tmp, "filer-pro");
     fs.cpSync(mod, copy, { recursive: true });
@@ -47,7 +47,7 @@ test("demo-hook.mjs applies to the current mod and the result still parses", () 
 });
 
 test("demo-hook.mjs fails loudly when an anchor is missing", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "filerpro-hook-"));
+  const tmp = mkTmpSync("filerpro-hook-");
   try {
     const copy = path.join(tmp, "filer-pro");
     fs.cpSync(mod, copy, { recursive: true });
