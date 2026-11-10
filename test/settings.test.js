@@ -89,7 +89,7 @@ test("settings: extract_space_check (#57) is a File list switch, on by default, 
   const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
   assert.deepEqual([by.extract_space_check.kind, by.extract_space_check.default, by.extract_space_check.section], ["bool", true, "File list"]);
   assert.equal(by.extract_space_check.label, "Check free space before extracting");
-  assert.equal(by.extract_space_check.help, "Stops when the archive would not fit. Costs one extra look into the archive.");
+  assert.equal(by.extract_space_check.help, "Stops when the archive would not fit. A single compressed file is read once more.");
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(keys.indexOf("extract_space_check"), keys.indexOf("double_click_apps") + 1);
 });
