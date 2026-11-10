@@ -136,6 +136,41 @@ test("tick: a partial size of the temp still counts as progress; a timeout leave
   assert.ok(!j.stalled);
 });
 
+test("tick: timeouts of the temp poll do not reset the stall clock; the stall is seen once a number comes back", async () => {
+  const { f, jobs } = setup();
+  f.sizes[SRC] = 100;
+  await jobs.start(down());
+  const temp = `${DIR}/.a.txt.fs-id1.part`;
+  f.sizes[temp] = 10;
+  f.t += 1000;
+  await jobs.tick();
+  f.sizeFlags[temp] = "timeout";
+  for (let i = 0; i < 3; i++) {
+    f.t += 60_000;
+    await jobs.tick();
+  }
+  assert.ok(!f.jobs().id1.stalled);
+  delete f.sizeFlags[temp];
+  f.t += 1000;
+  await jobs.tick();
+  assert.equal(f.jobs().id1.stalled, true);
+  assert.deepEqual(f.hcCalls.filter((a) => a[0] === "kill"), [["kill", "term-fs-id1"]]);
+});
+
+test("tick: the temp poll runs without the 25 s start limit (10 min in the script) and one poll at a time", async () => {
+  const { f, jobs } = setup();
+  f.sizes[SRC] = 100;
+  await jobs.start(down());
+  const temp = `${DIR}/.a.txt.fs-id1.part`;
+  f.sizes[temp] = 10;
+  f.execCalls.length = 0;
+  await jobs.tick();
+  const polls = f.execCalls.filter((c) => c.args[1] === SIZE_SCRIPT && c.args[3] === temp);
+  assert.equal(polls.length, 1);
+  assert.equal(polls[0].args[4], "600");
+  assert.equal(polls[0].timeout, 605000);
+});
+
 test("tick updates bytes and percent from the temp file", async () => {
   const { f, jobs } = setup();
   f.sizes[SRC] = 200;
@@ -1356,7 +1391,7 @@ test("sourceSize: measured on the source machine (from for cross) with a short t
   f.sizes["/srv2/d"] = 4096;
   assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), 4096);
   const call = f.execsOf("sh").at(-1);
-  assert.deepEqual([call.args[3], call.args[4], call.on, call.timeout], ["/srv2/d", "5", "box2", 10000]);
+  assert.deepEqual([call.args[3], call.args[4], call.on, call.timeout], ["/srv2/d", "4", "box2", 5000]);
   f.sizeFlags["/srv2/d"] = "partial";
   assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), null);
   delete f.sizeFlags["/srv2/d"];

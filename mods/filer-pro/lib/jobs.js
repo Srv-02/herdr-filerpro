@@ -19,7 +19,12 @@ import {
 
 const KEY = "filer-pro.jobs";
 const SIZE_LIMIT_MS = 25_000;
-const SOURCE_SIZE_MS = 5_000;
+// Cross-copy dialog: watchdog limit 4 s plus 1 s of grace for exec, so one entry holds the dialog up for 5 s at most.
+const SOURCE_SIZE_MS = 4_000;
+const SOURCE_GRACE_MS = 1_000;
+// Temp poll of tick(): the watchdog still bounds find on the machine, but far above any sane size of a transfer temp, so the
+// poll yields a number (as before the watchdog existed). tick() waits for it, so polls never overlap.
+const TEMP_POLL_MS = 600_000;
 export const KEEP_DONE_MS = 10_000;
 
 // The SSH options for transfer.sh (FILER_PRO_SSH_*): an `env` prefix for the hc run argv, only when a value differs from
@@ -104,23 +109,33 @@ export function createJobs(deps) {
   }
 
   // Bytes of a COMPLETE sum, else null (a path the script could not read all of, or that it stopped after SIZE_LIMIT_MS, is unknown).
-  // partial: the temp poll of tick() also takes the lower bound of an incomplete sum, as progress; only a timeout or a failure is null.
-  async function measure(path, on, { partial = false } = {}) {
+  async function measure(path, on) {
     try {
-      const out = okOut(await exec("sh", sizeArgs(path, SIZE_LIMIT_MS), { on, timeout: SIZE_LIMIT_MS + SIZE_GRACE_MS }));
-      if (!partial) return parseSize(out);
-      const v = parseSizeOutput(out);
-      return v && !v.timedOut ? v.bytes : null;
+      return parseSize(okOut(await exec("sh", sizeArgs(path, SIZE_LIMIT_MS), { on, timeout: SIZE_LIMIT_MS + SIZE_GRACE_MS })));
     } catch {
       return null;
     }
   }
 
+  // State of the temp of a running job, for tick(): { bytes } (a complete sum, or the lower bound of an incomplete one),
+  // { gone } (no such path, or the probe failed: no progress, no stall), { unknown } (the watchdog stopped find: neither
+  // progress nor a stall, the clock stays where it was).
+  async function pollTemp(path, on) {
+    try {
+      const out = okOut(await exec("sh", sizeArgs(path, TEMP_POLL_MS), { on, timeout: TEMP_POLL_MS + SIZE_GRACE_MS }));
+      const v = parseSizeOutput(out);
+      if (!v) return { gone: true };
+      return v.timedOut ? { unknown: true } : { bytes: v.bytes };
+    } catch {
+      return { gone: true };
+    }
+  }
+
   // Size of a source for the warning before a copy between machines (requests.js): null when it is unknown or takes
-  // longer than timeoutMs, so a big folder never holds the dialog up.
+  // longer than timeoutMs plus one second, so a big folder holds the dialog up for 5 s per entry at most.
   async function sourceSize({ direction, machine, from, src }, timeoutMs = SOURCE_SIZE_MS) {
     try {
-      return parseSize(okOut(await exec("sh", sizeArgs(src, timeoutMs), { on: srcOn(direction, machine, from), timeout: timeoutMs + SIZE_GRACE_MS })));
+      return parseSize(okOut(await exec("sh", sizeArgs(src, timeoutMs), { on: srcOn(direction, machine, from), timeout: timeoutMs + SOURCE_GRACE_MS })));
     } catch {
       return null;
     }
@@ -528,7 +543,8 @@ export function createJobs(deps) {
   async function tick() {
     for (const snap of running()) {
       if (!snap.terminal) continue;
-      const size = await measure(snap.temp, destOn(snap.direction, snap.machine), { partial: true });
+      const poll = await pollTemp(snap.temp, destOn(snap.direction, snap.machine));
+      const size = poll.bytes ?? null;
       const cur = get(snap.id);
       if (cur?.state !== "running") continue;
       const p = progressOf({ bytes: cur.bytes, at: cur.at, lastGrowthAt: cur.lastGrowthAt, rate: cur.rate }, size ?? cur.bytes, cur.total, now(), limits().stall_seconds * 1000);
@@ -536,7 +552,7 @@ export function createJobs(deps) {
       // Finalizing an extract moves entries out of the temp, so for it any change of the size is progress (R8).
       const moved = cur.kind === "extract" && size !== null && size !== cur.bytes;
       const stalled = size !== null && !moved && p.stalled;
-      const lastGrowthAt = size === null ? p.at : moved ? now() : p.lastGrowthAt;
+      const lastGrowthAt = poll.unknown ? cur.lastGrowthAt : size === null ? p.at : moved ? now() : p.lastGrowthAt;
       const job = update(cur.id, { bytes: p.bytes, at: p.at, lastGrowthAt, percent: p.percent, rate: p.rate, stalled: cur.stalled || stalled });
       const info = await terminalInfo(job);
       if (info?.state === "finished") {
