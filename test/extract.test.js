@@ -294,3 +294,27 @@ test("usage: too few arguments or a bad tool exit 2 without a status file", () =
   assert.equal(fs.existsSync(a.status), false);
   assert.equal(spawnSync(SH, [SCRIPT, "-"], { encoding: "utf8" }).status, 2);
 });
+
+// Security review of #57: between the "does the target exist" check and mv, a symlink to a folder could appear at the
+// target, and a plain mv would move the entry INTO the link's target (outside the extraction's folder). An mv wrapper
+// plants exactly that link right before the real mv runs: the entry must stay out of the link's target.
+test("a symlink to a folder planted at the target right before mv: nothing lands in its target, the job fails", () => {
+  const d = setup();
+  const outside = path.join(d, "outside");
+  fs.mkdirSync(outside);
+  const bin = path.join(d, "mvbin");
+  fs.mkdirSync(bin);
+  const realMv = spawnSync("sh", ["-c", "command -v mv"], { encoding: "utf8" }).stdout.trim();
+  // The wrapper runs the real mv for everything but the move to RACE_TARGET, where it first creates the link.
+  fs.writeFileSync(path.join(bin, "mv"), `#!/bin/sh
+for last; do :; done
+if [ -n "$RACE_TARGET" ] && [ "$last" = "$RACE_TARGET" ] && [ ! -e "$RACE_TARGET" ]; then ln -s "$RACE_DIR" "$RACE_TARGET"; fi
+exec ${realMv} "$@"
+`, { mode: 0o755 });
+  const a = build(d, "x.tar", tarOf([{ name: "a.txt", data: "A" }]));
+  const r = run(a, { PATH: `${bin}:${process.env.PATH}`, RACE_TARGET: path.join(a.dest, "a.txt"), RACE_DIR: outside });
+  assert.equal(r.status, 1, r.stderr);
+  assert.deepEqual(names(outside), [], "nothing was moved into the link's target");
+  assert.match(status(a), /Destination already exists: .*a\.txt/);
+  assert.ok(fs.lstatSync(path.join(a.dest, "a.txt")).isSymbolicLink(), "the planted link is left alone");
+});

@@ -253,6 +253,13 @@ look() {
   done
 }
 bad=0
+# The check before mv leaves a window: a symlink to a folder created at <dest>/<name> in between would make mv put the
+# entry INTO the link's target. -n never replaces anything; GNU mv -T renames onto the path itself (never into it), BSD
+# and macOS mv -h do not follow a symlink there. A source that is still in place afterwards was not moved: the target
+# appeared in between. (Busybox and others get -n only.)
+if mv --version 2>/dev/null | grep -q GNU; then MV="-n -T"
+else case $(uname -s 2>/dev/null) in Darwin|*BSD) MV="-n -h" ;; *) MV=-n ;; esac
+fi
 # The three globs cover every name (dotfiles too); the existence check drops a pattern that matched nothing.
 for e in "$temp/d"/* "$temp/d"/.[!.]* "$temp/d"/..?*; do
   [ -e "$e" ] || [ -L "$e" ] || continue
@@ -263,7 +270,14 @@ for e in "$temp/d"/* "$temp/d"/.[!.]* "$temp/d"/..?*; do
     printf 'Destination already exists: %s\n' "$t" >&2
     bad=1
   else
-    mv -- "$e" "$t" || bad=1
+    # newer GNU mv exits 1 when -n skipped the move; its own message says why for any other failure
+    f=0
+    mv $MV -- "$e" "$t" 2>/dev/null || [ -e "$t" ] || [ -L "$t" ] || mv $MV -- "$e" "$t" || f=1
+    if [ -e "$e" ] || [ -L "$e" ]; then
+      [ "$f" -eq 1 ] || printf 'Destination already exists: %s\n' "$t" >&2
+      f=1
+    fi
+    [ "$f" -eq 0 ] || bad=1
   fi
 done
 i=0
