@@ -3,15 +3,15 @@
 // answered). checkListing (lib/archives.js) runs the parse in the job that receives the probe output and then each
 // memberCheck(...).step(CHECK_SLICE) in a job of its own; each scenario below is one such job, run as the top level of a
 // throwaway mod (`herdr-app check` runs no timers, so the jobs are measured one by one, like the lossy slices of #39).
-// Skipped where herdr-app is not installed (CI); `npm test` on the Mac runs it.
+// Skipped where herdr-app is not installed (CI); `npm run bench` on the Mac runs it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { mkTmpSync } from "./tmp-helper.js";
+import { mkTmpSync } from "../tmp-helper.js";
 
-const MOD = path.resolve(import.meta.dirname, "..", "mods", "filer-pro");
+const MOD = path.resolve(import.meta.dirname, "..", "..", "mods", "filer-pro");
 const HAS_HERDR = spawnSync("herdr-app", ["--version"], { encoding: "utf8" }).status === 0;
 
 // A probe output of N members (node_modules paths, one folder per ten), built from one block of 1,000 lines with

@@ -229,6 +229,7 @@ To remove only the preview, delete `mods/filer-pro/preview/` from the installed 
 ```sh
 npm test        # unit and integration tests (Node, no Herdr needed)
 npm run lint    # syntax check of all scripts
+npm run bench   # wall-clock benchmarks and the QuickJS budget tests (need herdr-app; timing-dependent, not part of npm test)
 ```
 
 Local side is macOS, remote side Linux or macOS. Platform specific code lives in `mods/filer-pro/lib/platform.js` and `mods/filer-pro/bin/transfer.sh`. [RECIPE.md](RECIPE.md) describes the mod as a brief to build it from scratch. [scripts/screenshots](scripts/screenshots/README.md) holds the pipeline and demo project behind the README images.
