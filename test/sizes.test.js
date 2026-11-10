@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { mkTmpSync } from "./tmp-helper.js";
 import path from "node:path";
-import { SIZE_SCRIPT, parseSize, formatBytes, formatRate, FOLDER_SIZE_MS, CLAIM_MS, TOO_LARGE, busy, sizeKey, parseSizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "../mods/filer-pro/lib/sizes.js";
+import { spawn, execFileSync } from "node:child_process";
+import { SIZE_SCRIPT, SIZE_GRACE_MS, INCOMPLETE, sizeArgs, sizeNote, parseSizeOutput, parseSize, formatBytes, formatRate, FOLDER_SIZE_MS, CLAIM_MS, TOO_LARGE, busy, sizeKey, parseSizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "../mods/filer-pro/lib/sizes.js";
 
 function size(p, cwd) {
   const r = spawnSync("sh", ["-c", SIZE_SCRIPT, "size", p], { encoding: "utf8", cwd });
@@ -69,6 +70,150 @@ test("parseSize", () => {
   assert.equal(parseSize("abc"), null);
   assert.equal(parseSize("12 junk"), null);
 });
+
+test("parseSizeOutput: bytes with the partial and timeout flags, null for a missing path and junk", () => {
+  assert.deepEqual(parseSizeOutput("8\n"), { bytes: 8, incomplete: false, timedOut: false });
+  assert.deepEqual(parseSizeOutput("8 partial\n"), { bytes: 8, incomplete: true, timedOut: false });
+  assert.deepEqual(parseSizeOutput("0 timeout\n"), { bytes: 0, incomplete: false, timedOut: true });
+  assert.equal(parseSizeOutput("-1\n"), null);
+  assert.equal(parseSizeOutput("12 junk"), null);
+  assert.equal(parseSizeOutput(""), null);
+});
+
+test("parseSize counts only complete sums", () => {
+  assert.equal(parseSize("8 partial\n"), null);
+  assert.equal(parseSize("8 timeout\n"), null);
+  assert.equal(parseSize("8\n"), 8);
+});
+
+test("sizeArgs: the script, the path and the limit in whole seconds", () => {
+  assert.deepEqual(sizeArgs("/a b", 120000), ["-c", SIZE_SCRIPT, "size", "/a b", "120"]);
+  assert.equal(sizeArgs("/a", 5000)[4], "5");
+  assert.equal(sizeArgs("/a", 25000)[4], "25");
+  assert.equal(sizeArgs("/a", 1)[4], "1");
+  assert.equal(SIZE_GRACE_MS, 5000);
+});
+
+test("sizeResult: a partial sum is done and incomplete, the script's timeout is too large", () => {
+  assert.deepEqual(sizeResult({ result: { code: 0, stdout: "2400000 partial\n" }, ms: 50 }), { state: "done", bytes: 2400000, incomplete: true });
+  assert.deepEqual(sizeResult({ result: { code: 0, stdout: "123 timeout\n" }, ms: 50 }), { state: "toolarge" });
+  assert.equal("incomplete" in sizeResult({ result: { code: 0, stdout: "5\n" }, ms: 50 }), false);
+});
+
+test("storeSize keeps the incomplete field", () => {
+  const key = sizeKey(null, "/r/a");
+  const run = { [key]: { state: "running", id: "i1", at: 1 } };
+  assert.deepEqual(storeSize(run, key, "i1", { state: "done", bytes: 9, incomplete: true }), { [key]: { state: "done", bytes: 9, incomplete: true, id: "i1" } });
+});
+
+test("sizeCell and sizeDetail: an incomplete sum shows the same size with the tooltip text", () => {
+  const r = { state: "done", bytes: 2_400_000, incomplete: true };
+  assert.deepEqual(sizeCell({ dir: true }, r), { text: "~2.4 MB", spin: false, title: "Some folders could not be read" });
+  assert.equal(INCOMPLETE, "Some folders could not be read");
+  assert.equal(sizeDetail(r), "~2.4 MB");
+  assert.equal(sizeNote(r, 0), INCOMPLETE);
+  assert.equal(sizeNote({ state: "done", bytes: 1 }, 0), null);
+  assert.equal(sizeNote({ state: "toolarge" }, 0), null);
+  assert.equal(sizeNote(undefined, 0), null);
+  assert.equal(sizeNote({ ...r, state: "running", at: 0 }, 1), null, "busy");
+});
+
+test("SIZE_SCRIPT marks the sum partial when a subfolder cannot be read", { skip: process.getuid?.() === 0 }, () =>
+  scratch((dir) => {
+    fs.mkdirSync(path.join(dir, "ok"));
+    fs.mkdirSync(path.join(dir, "deny"));
+    fs.writeFileSync(path.join(dir, "ok", "a"), "abc");
+    fs.writeFileSync(path.join(dir, "deny", "c"), "wxyz");
+    fs.chmodSync(path.join(dir, "deny"), 0);
+    try {
+      assert.equal(size(dir), "3 partial");
+    } finally {
+      fs.chmodSync(path.join(dir, "deny"), 0o755);
+    }
+  }));
+
+// Watchdog (issue #73): a fake find first in PATH records its PID and then sleeps; a wrapper sleep records the watchdog's.
+function alive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, ms) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { if (fn()) return true; await wait(50); }
+  return fn();
+}
+function which(cmd) {
+  try { return execFileSync("sh", ["-c", `command -v ${cmd}`], { encoding: "utf8" }).trim() || null; } catch { return null; }
+}
+function rig(dir) {
+  const findDir = path.join(dir, "fbin"), sleepDir = path.join(dir, "sbin");
+  fs.mkdirSync(findDir); fs.mkdirSync(sleepDir);
+  const realSleep = which("sleep");
+  fs.writeFileSync(path.join(findDir, "find"), `#!/bin/sh\necho $$ > "$FIND_PID"\nexec "${realSleep}" 30\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(sleepDir, "sleep"), `#!/bin/sh\necho $$ >> "$SLEEP_PIDS"\nexec "${realSleep}" "$@"\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${findDir}:${sleepDir}:${process.env.PATH}`, FIND_PID: path.join(dir, "find.pid"), SLEEP_PIDS: path.join(dir, "sleep.pids") };
+  return { env, findPid: () => Number(fs.readFileSync(env.FIND_PID, "utf8").trim()), sleepPids: () => (fs.existsSync(env.SLEEP_PIDS) ? fs.readFileSync(env.SLEEP_PIDS, "utf8").split("\n").filter(Boolean).map(Number) : []) };
+}
+const shells = ["sh", "dash", "bash"].filter((s) => which(s));
+
+for (const shell of shells) {
+  test(`SIZE_SCRIPT ends find at the limit and answers timeout (${shell})`, async () => {
+    const dir = mkTmpSync("fs-wd-");
+    try {
+      const { env, findPid } = rig(dir);
+      fs.writeFileSync(path.join(dir, "f"), "abc");
+      const t0 = Date.now();
+      const r = spawnSync(shell, ["-c", SIZE_SCRIPT, "size", path.join(dir, "f"), "1"], { encoding: "utf8", env });
+      assert.equal(r.status, 0);
+      assert.equal(r.stdout, "0 timeout\n");
+      assert.equal(r.stderr, "");
+      assert.ok(Date.now() - t0 < 8000, "back in time");
+      const pid = findPid();
+      assert.ok(await until(() => !alive(pid), 2000), "find is gone");
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test(`SIZE_SCRIPT answers at once under a long limit and leaves no watchdog (${shell})`, async () => {
+    const dir = mkTmpSync("fs-wd-");
+    try {
+      const real = path.join(dir, "real");
+      fs.mkdirSync(real);
+      fs.writeFileSync(path.join(real, "f"), "abc");
+      const { env, sleepPids } = rig(dir);
+      fs.rmSync(path.join(dir, "fbin"), { recursive: true }); // use the real find
+      const t0 = Date.now();
+      const r = spawnSync(shell, ["-c", SIZE_SCRIPT, "size", real, "60"], { encoding: "utf8", env });
+      assert.equal(r.stdout, "3\n");
+      assert.ok(Date.now() - t0 < 8000, "does not wait for the watchdog");
+      const pids = sleepPids();
+      for (const pid of pids) assert.ok(await until(() => !alive(pid), 5000), `watchdog sleep ${pid} is gone`);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
+test("SIZE_SCRIPT ends find at the limit although the calling sh was killed", async () => {
+  const dir = mkTmpSync("fs-wd-");
+  try {
+    const { env, findPid } = rig(dir);
+    fs.writeFileSync(path.join(dir, "f"), "abc");
+    const child = spawn("sh", ["-c", SIZE_SCRIPT, "size", path.join(dir, "f"), "2"], { env, stdio: "ignore" });
+    assert.ok(await until(() => fs.existsSync(env.FIND_PID) && fs.readFileSync(env.FIND_PID, "utf8").trim() !== "", 4000), "find started");
+    const pid = findPid();
+    child.kill("SIGKILL");
+    assert.ok(alive(pid), "find is still running right after the kill");
+    assert.ok(await until(() => !alive(pid), 6000), "find is gone at the limit");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("SIZE_SCRIPT without a limit argument, or with a broken one, uses its default", () =>
+  scratch((dir) => {
+    const f = path.join(dir, "f");
+    fs.writeFileSync(f, "abc");
+    for (const extra of [[], ["abc"]]) {
+      const r = spawnSync("sh", ["-c", SIZE_SCRIPT, "size", f, ...extra], { encoding: "utf8" });
+      assert.equal(r.stdout.trim(), "3");
+    }
+  }));
 
 test("formatBytes", () => {
   assert.equal(formatBytes(412_000_000), "412 MB");
@@ -180,13 +325,13 @@ test("sizeCell: files their size, folders a dash until calculated, packages noth
   assert.deepEqual(sizeCell({ dir: true }, undefined, 0, false), { text: "", spin: false }, "no dash where Calculate Size cannot run");
   assert.deepEqual(sizeCell({ dir: true }, { state: "running" }), { text: "", spin: true });
   assert.deepEqual(sizeCell({ dir: true }, { state: "requested" }), { text: "", spin: true });
-  assert.deepEqual(sizeCell({ dir: true, bundle: true }, { state: "done", bytes: 2_400_000 }), { text: "2.4 MB", spin: false });
+  assert.deepEqual(sizeCell({ dir: true, bundle: true }, { state: "done", bytes: 2_400_000 }), { text: "~2.4 MB", spin: false });
   assert.deepEqual(sizeCell({ dir: true }, { state: "toolarge" }), { text: "Too large", spin: false, title: TOO_LARGE });
 });
 
 test("sizeDetail: the text at the right of Calculate Size", () => {
   assert.equal(sizeDetail(undefined), null);
   assert.equal(sizeDetail({ state: "running" }), "\u2026");
-  assert.equal(sizeDetail({ state: "done", bytes: 2_400_000 }), "2.4 MB");
+  assert.equal(sizeDetail({ state: "done", bytes: 2_400_000 }), "~2.4 MB");
   assert.equal(sizeDetail({ state: "toolarge" }), "Too large");
 });

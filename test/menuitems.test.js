@@ -92,6 +92,9 @@ test("Calculate Size is in the first group for folders and packages only, with i
   const pkg = rowMenuItems({ ...on, isDir: true, bundle: true });
   assert.deepEqual(pkg.slice(5, 7).map((i) => i.action), ["package_contents", "calculate_size"]);
   assert.equal(rowMenuItems({ ...on, isDir: true, size: "2.4 MB" }).find((i) => i.action === "calculate_size").detail, "2.4 MB");
+  assert.equal(calc.title, null, "no tooltip without sizeTitle");
+  const inc = rowMenuItems({ ...on, isDir: true, size: "~2.4 MB", sizeTitle: "Some folders could not be read" }).find((i) => i.action === "calculate_size");
+  assert.deepEqual([inc.detail, inc.title], ["~2.4 MB", "Some folders could not be read"]);
   const running = rowMenuItems({ ...on, isDir: true, size: "…", sizing: true }).find((i) => i.action === "calculate_size");
   assert.deepEqual([running.enabled, running.detail], [false, "…"], "dimmed while it runs");
   assert.equal(rowMenuItems({ ...on, isDir: true, windows: true }).find((i) => i.action === "calculate_size").enabled, false, "no sh on local Windows");

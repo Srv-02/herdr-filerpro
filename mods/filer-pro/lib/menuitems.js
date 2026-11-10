@@ -12,7 +12,7 @@ const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action
 // bundle: a local macOS package (lib/bundles.js), a folder that Open starts like the Finder does, with the entry
 // Show Package Contents, or Hide Package Contents while contents is true; windows: this computer is Windows, where Permissions… is
 // dimmed because there is no chmod; on a machine it works; size: the text at the right of Calculate Size on a folder
-// (lib/sizes.js sizeDetail), sizing: that calculation runs, the entry is dimmed; dimmed on local Windows too, no sh there)
+// (lib/sizes.js sizeDetail), sizeTitle: its tooltip (lib/sizes.js sizeNote, set when the sum is incomplete), sizing: that calculation runs, the entry is dimmed; dimmed on local Windows too, no sh there)
 export function rowMenuItems(state) {
   const file = state.isDir !== true;
   const local = state.remote !== true;
@@ -25,7 +25,7 @@ export function rowMenuItems(state) {
     entry("edit_terminal", "Edit in Terminal", file),
     entry("reveal", "Show in Finder", local),
     ...(bundle ? [entry("package_contents", state.contents === true ? "Hide Package Contents" : "Show Package Contents")] : []),
-    ...(file ? [] : [{ ...entry("calculate_size", "Calculate Size", state.sizing !== true && (state.windows !== true || !local)), detail: state.size ?? null }]),
+    ...(file ? [] : [{ ...entry("calculate_size", "Calculate Size", state.sizing !== true && (state.windows !== true || !local)), detail: state.size ?? null, title: state.sizeTitle ?? null }]),
     SEPARATOR,
     entry("download", "Download"),
     entry("download_to", "Download to…"),
