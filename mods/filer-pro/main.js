@@ -32,6 +32,7 @@ import { bindZoomKeys } from "./lib/pdfkeys.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
+import { paneId, shownRoot, setRoot, upOf, topOf, carry, headerPath, frontTruncate, watchable } from "./lib/navigate.js";
 import { EDIT_MAX_BYTES, PROBE_SCRIPT, VERIFY_SCRIPT, parseProbe, parseVerify, verifiedEditable, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { equalBytes, bytesToBase64, base64ToBytes } from "./lib/textcodec.js";
 import { writeClipboard } from "./lib/pasteboard.js";
@@ -66,7 +67,6 @@ function location() {
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
-const key = () => JSON.stringify(location());
 // The settings before the config file was read (and in copies that never read it): today's defaults.
 const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true };
 const MB = 1024 * 1024;
@@ -180,6 +180,7 @@ export default class FilerPro extends View {
       if (cfg.perf) await this.startPerf(cx);
     });
     this.saved = new Map();
+    this.nav = new Map(); // the shown root per terminal while it differs from the terminal's folder (lib/navigate.js)
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.refresh(cx);
     // The optional periodic reload, every refresh_seconds (setting, 0 = off, the default: issue #31, no exec while idle):
@@ -646,7 +647,7 @@ export default class FilerPro extends View {
   // the git index, HEAD and refs), through the same gate as filer-pro.changed (at most one refresh per second, a
   // later change caught up by the 250 ms tick). The open file is read again only when the batch names it.
   watch(root, cx) {
-    if (this.on || this.watched === root) return;
+    if (this.on || this.watched === root || !watchable(root, home())) return;
     this.watched = root;
     const context = this.context;
     cx.spawn(async cx => {
@@ -730,7 +731,30 @@ export default class FilerPro extends View {
 
   // An overlay copy has a fixed context: the focused terminal may change while it is open.
   current(context) {
-    return this.context === context && (context.fixed || key() === context.key);
+    return this.context === context && (context.fixed || this.target().key === context.key);
+  }
+
+  // The focused terminal's location ({ cwd, on, space }) and the root shown for it: its folder, or the folder navigated
+  // to from there with Up or Go to / (issue #59), until Back to the terminal's folder (a cd there does not end it). key: the context key
+  // (the location, plus the root while it differs), so the tree state is kept per location and shown root (this.saved).
+  target() {
+    const loc = location(), pane = paneId(focused()), nav = this.nav ??= new Map();
+    const root = shownRoot(nav, pane, loc), away = Boolean(pane && nav.has(pane));
+    // While navigated the key leaves out the terminal's folder: a cd there does not move or reload the tree.
+    return { ...loc, root, away, key: JSON.stringify(away ? { on: loc.on, space: loc.space, root } : loc) };
+  }
+
+  // Shows root instead of the current one for the focused terminal (Up, Go to /; the terminal's own folder ends the
+  // override). Expanded folders, packages and the open file are carried over where they lie inside
+  // the new root (lib/navigate.js carry). Refused while the open file has unsaved changes.
+  navigate(root, cx) {
+    if (!root || !this.context || root === this.root) return;
+    if (this.edit?.dirty) { notify({ title: "Filer Pro", body: "Unsaved changes in the open file", level: "error" }); return; }
+    if (!setRoot(this.nav ??= new Map(), paneId(focused()), location(), root)) return;
+    const state = carry({ folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened }, this.root, root);
+    this.carried = { key: this.target().key, ...state };
+    this.refresh(cx);
+    cx.notify();
   }
 
   async loadFolder(path, context) {
@@ -759,11 +783,14 @@ export default class FilerPro extends View {
   // and runs once when it ends, so triggers never stack and none is lost (issue #31). All in cx.spawn: a slow machine
   // never blocks drawing.
   refresh(cx, { file = 0, force = false } = {}) {
-    const { cwd, on } = location(), next = key();
+    // cwd: the shown root (the terminal's folder or the one navigated to); listing, git and the watch use it.
+    const { root: cwd, on, key: next } = this.target();
     if (next !== this.context?.key) {
       if (this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened });
-      const saved = this.saved.get(next);
+      // A navigation carries the tree along (navigate); a switch of terminal or folder restores what was left there.
+      const saved = this.carried?.key === next ? this.carried : this.saved.get(next);
+      this.carried = null;
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.realFolders = new Map(); this.fileReal = null; this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.gitWatch = null; this.error = null; this.limited = false;
       this.loading = false; this.again = false; this.fileWanted = 0; this.fileForce = false; this.lastOpened = saved?.lastOpened ?? null;
@@ -871,12 +898,12 @@ export default class FilerPro extends View {
   }
 
   // Request actions open and mode (askPanel in lib/requests.js): this copy answers when it shows the machine
-  // and a folder above the file. It never changes what the panel follows (the focused terminal).
+  // and a folder above the file (the shown root, also one navigated to). It never changes what the panel follows.
   checkShow(cx) {
     const s = shared("filer-pro.show");
     if (!s?.id || s.id === this.showSeen) return;
     this.showSeen = s.id;
-    if (key() !== this.context?.key) this.refresh(cx);
+    if (this.target().key !== this.context?.key) this.refresh(cx);
     const bus = { getShared: shared, setShared };
     const plan = panelPlan({ on: this.on, root: this.root, file: this.file }, s);
     if (!plan.hit) { answerShow(bus, s.id, false, { ok: false, error: plan.error }); return; }
@@ -1805,10 +1832,55 @@ export default class FilerPro extends View {
   }
 
   // Icon and name of the open file: the panel's header (end: right-aligned before the buttons) and the dialog's title.
+  // In the panel without an open file: the shown folder's name, or while the tree is navigated away from the terminal's
+  // folder (issue #59) its path (from ~ on this computer), cut at the front to the measured width.
   fileTitle(t, dark, end) {
+    const nav = end && !this.file ? this.navState() : null;
+    const name = nav?.away ? frontTruncate(this.on ? this.root : headerPath(this.root, home()), Math.max(8, Math.floor(((this.titleWidth ?? 320) - 8) / 7))) : (this.file ?? this.root?.split(/[\\/]/).pop() ?? "");
     return h_flex().flex_1().min_w(0).overflow_hidden().gap(6).items_center().text_size(12).text_color(t.dim).when(end, el => el.justify_end())
+      .when(Boolean(nav), el => el.id("files-title").on_size_change((size, cx) => {
+        const w = Math.floor(size.width / 8) * 8;
+        if (w !== this.titleWidth) { this.titleWidth = w; cx.notify(); }
+      }))
       .when(Boolean(this.file), el => el.child(image(icon(this.file, false, false, dark)).size(14).flex_none()))
-      .child(div().min_w(0).truncate().child((this.edit?.dirty ? "● " : "") + (this.file ?? this.root?.split(/[\\/]/).pop() ?? "")));
+      .child(div().min_w(0).truncate().when(Boolean(nav?.away), el => el.tooltip(this.root)).child((this.edit?.dirty ? "● " : "") + name));
+  }
+
+  // The header's folder navigation right of the title, before Refresh (no file open): Go to /, Up one level, and while
+  // the tree is navigated away from the terminal's folder Back to it. Go to / and Up are dimmed at the top.
+  navButtons(t) {
+    const nav = this.navState();
+    if (!nav.root) return [];
+    return [
+      this.navButton("files-top", "slash", `Go to ${nav.top}`, t, nav.up ? (cx) => this.navigate(nav.top, cx) : null),
+      this.navButton("files-up", "corner-left-up", "Up one level", t, nav.up ? (cx) => this.navigate(nav.up, cx) : null),
+      nav.away ? this.backButton(t, (cx) => this.navigate(nav.here, cx)) : null,
+    ].filter(Boolean);
+  }
+
+  // The header's navigation state: the shown root, its parent and the top (up null at the top or without a terminal),
+  // the terminal's folder and whether the tree is navigated away from it.
+  navState() {
+    const here = location().cwd, pane = paneId(focused());
+    const away = Boolean(pane && this.nav?.has(pane) && this.root && here && this.root !== here);
+    return { root: this.root, up: pane ? upOf(this.root) : null, top: topOf(this.root), here, away };
+  }
+
+  // An icon button of the header's navigation (Up, Go to /) in the refresh button's style; without onClick dimmed.
+  navButton(id, glyph, label, t, onClick) {
+    return div().id(id).w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).tooltip(label).accessibility_label(label)
+      .when(Boolean(onClick), el => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)))
+      .child(svg(`${BASE}/${glyph}.svg`).size(14).text_color(onClick ? t.muted : t.dim));
+  }
+
+  // Back to the terminal's folder, only while the tree is navigated away from it: the accent of the settings switches at
+  // low alpha behind an accent icon (a theme color that is no #rrggbb gets the selected background instead).
+  backButton(t, onClick) {
+    const label = "Back to the terminal's folder", accent = t.accent ?? t.ansi4;
+    const bg = /^#[0-9a-f]{6}$/i.test(accent) ? `${accent}33` : t.selected;
+    return div().id("files-back-terminal").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).bg(bg)
+      .cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(label).accessibility_label(label).on_click((_e, cx) => onClick(cx))
+      .child(svg(`${BASE}/folder-tree.svg`).size(14).text_color(accent));
   }
 
   // A header button in the style of the preview's Source/Preview button; `child` is a text or an element.
@@ -1949,7 +2021,7 @@ export default class FilerPro extends View {
     if (props()?.overlay) return this.overlayView(cx);
     if (this.button) return this.toolbar(theme());
     const t0 = this.perf ? Date.now() : 0;
-    if (key() !== this.context?.key) this.refresh(cx);
+    if (this.target().key !== this.context?.key) this.refresh(cx);
     this.pollReload(cx);
     this.pollPackage(cx);
     const t = theme(), dark = Boolean(settings().dark);
@@ -1963,6 +2035,7 @@ export default class FilerPro extends View {
         .child(div().flex_none().font_semibold().child("Filer Pro"))
         .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
+        .when(!this.file, el => el.children(this.navButtons(t)))
         .child(this.refreshButton(t))
         .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
