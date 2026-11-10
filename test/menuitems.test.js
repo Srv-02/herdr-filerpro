@@ -96,6 +96,8 @@ test("Calculate Size is in the first group for folders and packages only, with i
   assert.deepEqual([running.enabled, running.detail], [false, "…"], "dimmed while it runs");
   assert.equal(rowMenuItems({ ...on, isDir: true, windows: true }).find((i) => i.action === "calculate_size").enabled, false, "no sh on local Windows");
   assert.equal(rowMenuItems({ ...on, isDir: true, windows: true, remote: true }).find((i) => i.action === "calculate_size").enabled, true);
+});
+
 // #57: Extract Here and Extract to "<name>/" for an archive file, their own group right after Download / Download to…
 const seq = (items) => items.map((i) => (i.separator ? "|" : i.action));
 const AFTER_DOWNLOAD = ["download", "download_to", "|", "extract_here", "extract_to", "|", "copy"];
