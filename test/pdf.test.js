@@ -5,6 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { mkTmp } from "./tmp-helper.js";
 import { isPdf, pageName, parseRender, createPdfs, RENDER_SCRIPT, MAX_PDF_LOCAL, MAX_PDF_REMOTE } from "../mods/filer-pro/preview/pdf.js";
+import { RENDER_TIERS } from "../mods/filer-pro/preview/zoom.js";
 import { evictPlan, cacheKey, DIR, LOADS, loadDir, PROBE_SCRIPT, FETCH_SSH, LIST_SCRIPT } from "../mods/filer-pro/preview/images.js";
 
 const ascii = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -182,6 +183,64 @@ test("remote PDF under 20 MB: a copy in loads/<key>/ is rastered without hc or s
   assert.equal(f.calls[1].args[4], loaded);
 });
 
+test("pageName with a size: its own cache name, still within the eviction name rule", () => {
+  assert.equal(pageName(KEY, 3, 4096), `${KEY}p3w4096.png`);
+  assert.equal(pageName(KEY, 3, null), pageName(KEY, 3), "no size: the old name, old cache entries stay valid");
+  assert.match(pageName(KEY, 3, 6144), /^[a-z0-9]+\.[a-z]+$/);
+});
+
+test("RENDER_SCRIPT takes an optional size as the 4th argument and caps it at 6144 itself", () => {
+  assert.ok(RENDER_SCRIPT.includes("[src, pageArg, out, sizeArg]"));
+  assert.ok(RENDER_SCRIPT.includes("6144"), "the cap is enforced inside the script");
+  assert.ok(RENDER_SCRIPT.includes("Math.min(2, 2048 / Math.max(w, h))"), "without a size the formula is unchanged");
+});
+
+test("a sized load: the tier travels as the 4th argv, the sized name is used, the base page is kept too", async () => {
+  const key = cacheKey({ on: null, path: LOCAL, size: 500, mtime: 7 }), name = pageName(key, 2, 3072), png = `${APP}/${DIR}/${name}`;
+  const f = fake((c) => c.args?.[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(500, 7, PDF), stderr: "" }
+    : c.cmd === "osascript" ? rendered(3, 2, 1224, 1584) : c.args?.[1] === 'wc -c < "$1"' ? { code: 0, stdout: "   1600000\n", stderr: "" }
+    : c.args?.[1] === LIST_SCRIPT ? { code: 0, stdout: row(10, name) + row(10, pageName(key, 2)) + row(10, pageName(key, 1)) + row(60e6, "old.png"), stderr: "" } : ok);
+  const doc = await f.make().load({ on: null, path: LOCAL, page: 2, size: 3072, keep: [pageName(key, 2), pageName(key, 1)] });
+  assert.deepEqual(doc, { kind: "pdf", path: `${DIR}/${name}`, page: 2, pages: 3, size: 3072, width: 612, height: 792 });
+  const render = f.calls.find((c) => c.cmd === "osascript");
+  assert.deepEqual(render.args, ["-l", "JavaScript", "-e", RENDER_SCRIPT, LOCAL, "2", png, "3072"]);
+  assert.deepEqual(f.calls.filter((c) => c.cmd === "rm").map((c) => c.args), [["-f", "--", `${APP}/${DIR}/old.png`]], "keep names survive eviction");
+  // a cached sized page: probe only
+  f.present.add(png); f.files[png] = PNG(3072, 2400); f.calls.length = 0;
+  const hit = await f.make().load({ on: null, path: LOCAL, page: 2, pages: 3, size: 3072 });
+  assert.deepEqual(hit, { kind: "pdf", path: `${DIR}/${name}`, page: 2, pages: 3, size: 3072, width: 1536, height: 1200 });
+  assert.deepEqual(f.kinds(), ["probe"]);
+});
+
+test("a size outside RENDER_TIERS is a base render (no free-form sizes)", async () => {
+  for (const size of [1234, 9999, "3072", 0, -1, NaN]) {
+    const f = local(500);
+    const doc = await f.make().load({ on: null, path: LOCAL, page: 1, size });
+    const render = f.calls.find((c) => c.cmd === "osascript");
+    assert.equal(render.args.length, 7, `size ${String(size)}: no 4th argv`);
+    assert.equal(doc.size, undefined);
+    assert.equal(doc.path.endsWith("p1.png"), true);
+  }
+  assert.deepEqual(RENDER_TIERS, [3072, 4096, 6144]);
+});
+
+test("a sized PNG above a quarter of the cache limit is removed and reported as tooLarge", async () => {
+  const MB = 1024 * 1024, key = cacheKey({ on: null, path: LOCAL, size: 500, mtime: 7 }), png = `${APP}/${DIR}/${pageName(key, 1, 6144)}`;
+  const f = fake((c) => c.args?.[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(500, 7, PDF), stderr: "" }
+    : c.cmd === "osascript" ? rendered(3, 1, 1224, 1584) : c.args?.[1] === 'wc -c < "$1"' ? { code: 0, stdout: `${13 * MB}\n`, stderr: "" } : ok);
+  const r = await f.make().load({ on: null, path: LOCAL, size: 6144, cacheLimit: 50 * MB });
+  assert.deepEqual(r, { error: "Page image too large for the cache", tooLarge: true });
+  assert.deepEqual(f.unlinks, [png]);
+  assert.ok(!f.kinds().includes("list"), "no eviction after the removal");
+  const wc = f.calls.find((c) => c.args?.[1] === 'wc -c < "$1"');
+  assert.deepEqual(wc.args, ["-c", 'wc -c < "$1"', "x", png]);
+  assert.equal(wc.options.on, null);
+  // exactly a quarter still fits
+  const g = fake((c) => c.args?.[1] === PROBE_SCRIPT ? { code: 0, stdout: probeOut(500, 7, PDF), stderr: "" }
+    : c.cmd === "osascript" ? rendered(3, 1, 1224, 1584) : c.args?.[1] === 'wc -c < "$1"' ? { code: 0, stdout: `${12.5 * MB}\n`, stderr: "" } : ok);
+  assert.equal((await g.make().load({ on: null, path: LOCAL, size: 6144, cacheLimit: 50 * MB })).kind, "pdf");
+});
+
 test("not macOS: a hint before any exec", async () => {
   const f = local(500, { platform: "linux" });
   assert.deepEqual(await f.make().load({ on: null, path: LOCAL }), { error: "PDF preview needs macOS", final: true });
@@ -239,6 +298,19 @@ test("osascript renders page 2 of a tiny PDF to a 600 x 300 PNG, turns a rotated
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test("osascript renders at size 3072: the longest edge is 3072 px, and a size above 6144 is capped inside the script", { skip: process.platform !== "darwin" && "macOS only" }, async () => {
+  const dir = await mkTmp("filer-pro-pdf-"), src = path.join(dir, "one.pdf"), out = path.join(dir, "big.png");
+  try {
+    await fs.writeFile(src, ["%PDF-1.4", "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj", "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+      "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj", "trailer << /Root 1 0 R >>", ""].join("\n"));
+    const render = async (size) => parseRender((await realExec("osascript", ["-l", "JavaScript", "-e", RENDER_SCRIPT, src, "1", out, size])).stdout);
+    assert.deepEqual(await render("3072"), { pages: 1, page: 1, width: 3072, height: 1536 });
+    const png = await fs.readFile(out);
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [3072, 1536]);
+    assert.equal((await render("9000")).width, 6144, "capped at 6144");
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test("index.js: the PDF view, the page buttons and largeNote (source guard)", async () => {
   const index = await fs.readFile(new URL("../mods/filer-pro/preview/index.js", import.meta.url), "utf8");
   assert.match(index, /export \{ createImages \} from "\.\/images\.js";/, "the line test/images.test.js checks stays as it is");
@@ -247,10 +319,11 @@ test("index.js: the PDF view, the page buttons and largeNote (source guard)", as
   assert.match(index, /if \(doc\.kind === "image" \|\| doc\.kind === "pdf"\) return picture\(doc, width, onWidth\);/);
   assert.match(index, /export function largeNote\(text, t, onLoad\)/);
   assert.ok(index.includes('button("files-load", "Load"'), "the Load button");
-  for (const s of ['"Previous"', '"Next"', "files-page-prev", "files-page-next", "${page} / ${pages}"]) assert.ok(index.includes(s), s);
+  for (const s of ['"Previous page"', '"Next page"', "chevron-left", "chevron-right", "files-page-prev", "files-page-next", "pageLabel("]) assert.ok(index.includes(s), s);
+  assert.ok(!index.includes("${page} / ${pages}"), "the counter text comes from pageLabel()");
   assert.match(index, /if \(doc\.kind === "image"\) return \[\];/, "no buttons for an image");
   const harness = await fs.readFile(new URL("../test/check-preview/main.js", import.meta.url), "utf8");
-  for (const s of ['kind: "pdf"', "largeNote(", "onPage"]) assert.ok(harness.includes(s), `check-preview draws ${s}`);
+  for (const s of ['kind: "pdf"', "largeNote(", "onPage", "full: true", "pdf: {"]) assert.ok(harness.includes(s), `check-preview draws ${s}`);
 });
 
 test("main.js: PDFs are decided before the text is read, Load starts a quiet job, pages and force reach the dialog (source guard)", async () => {
@@ -262,7 +335,7 @@ test("main.js: PDFs are decided before the text is read, Load starts a quiet job
   assert.ok(main.includes("previewer.createPdfs({") && main.includes("platform: window()?.platform"), "pdfs are created with the window's platform");
   assert.match(main, /loadLarge\(cx\) \{/, "the Load click has its own handler");
   const body = (name) => { const i = main.indexOf(`  ${name}(`); return main.slice(i, main.indexOf("\n  }\n", i)); };
-  for (const m of ["show", "showHint", "turnPage"]) assert.ok(!body(m).includes("clearLoads(") && !body(m).includes("jobs.start("), `${m}() never clears loads and never starts a job (review B1)`);
+  for (const m of ["show", "showHint", "turnPage", "showPages"]) assert.ok(!body(m).includes("clearLoads(") && !body(m).includes("jobs.start("), `${m}() never clears loads and never starts a job (review B1)`);
   assert.ok(body("loadLarge").includes("clearLoads({") && body("loadLarge").includes("fetchLoad(") && body("loadLarge").includes("force: true"), "Load clears, then fetches (job) or shows with force (local PDF)");
   assert.ok(body("fetchLoad").includes("previewJob(") && body("fetchLoad").includes("fs.exists(dest)"), "a running job is joined, a present file is shown, else a job starts (review B2)");
   assert.match(main, /jobs\.start\(\{[^}]*direction: on \? "down" : "local"[^}]*choice: "new"[^}]*preview: true, as: name/, "the Load is a quiet down (remote) or local job under the fixed name");
@@ -270,7 +343,7 @@ test("main.js: PDFs are decided before the text is read, Load starts a quiet job
   assert.ok(body("loadLarge").includes("viaJob(name)") && main.includes('extOf(name ?? "") !== "pdf"'), "local images go through the job, local PDFs stay with show(force)");
   assert.ok(body("showHint").includes("viaJob(doc.name)") && body("waitLoad").includes("viaJob(this.loadName)"), "the dialog points to the panel for a local image too, as for a machine");
   assert.ok(body("showHint").includes("previewJob(") && body("showHint").includes('" · Load it in the panel"'), "the dialog joins a running job or points to the panel");
-  assert.ok(body("turnPage").includes("showHint("), "a hint while turning pages gets the same treatment");
+  assert.ok(body("showPages").includes("showHint("), "a hint while turning pages gets the same treatment");
   assert.ok(!body("fileOverlay").includes("jobs") && !body("overlayView").includes("jobs"), "the dialog never starts jobs");
   assert.ok(main.includes('while (j?.state === "running" && this.waiting === wait && this.file === path && this.current(context))'), "the poll stops with the file and with a newer wait");
   assert.ok(main.includes("loadOutcome(j)") && main.includes('"Loading… · progress in the transfers bar"'));
