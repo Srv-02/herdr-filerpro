@@ -24,7 +24,7 @@ Then click `Filer Pro` in the tab bar. To install by hand, see [Manual install](
 
 ### Follows your terminal
 
-![File tree with git marks and the context menu open](screenshots/browse.png)
+![The file tree with sizes, a calculated folder size and the row menu of a file](screenshots/browse.png)
 
 The tree shows the folder of the focused terminal, locally or on its machine. Right click for open, edit, calculate size, download, extract (archives only, locally and on machines), copy, paste, rename, permissions and delete. Apps and other macOS packages show as files: a double click starts them, and Show Package Contents looks inside. System files like `.DS_Store` stay out of the way, and hidden files can go too. A folder you may not read or search shows the row "No permission to list this folder" below it instead of looking empty. Git marks (`M`, `A`, `U`, `D`) are shown for the folder you are looking at, also when it is reached through a symbolic link, and for a folder inside a repository; paths of the repository outside that folder are not shown. When the shown folder is a subfolder of a repository, the repository's `.git` above it is watched as well (locally), so marks follow `git add`, `git commit`, `git reset` and `git restore --staged` within about a second.
 
@@ -44,6 +44,8 @@ Drop files from the Finder to upload, right click to download. Every transfer sh
 
 ![Markdown with a Mermaid diagram next to a PDF](screenshots/preview.png)
 
+![A PDF in full screen as a two page spread, with the single and two page switch, the Page, Width and 100 % presets and the zoom buttons](screenshots/pdf-fullscreen.png)
+
 Markdown renders with Mermaid diagrams, PDF shows page by page (Previous and Next buttons in the header) and always fits the panel width. In full screen you choose Single page or Two pages (the cover alone) and Page, Width or 100 %, or zoom from 50 to 300 % (buttons, cmd-+ / cmd-- / cmd-0 or + / - / 0, cmd + scroll wheel). Remote content inside documents is never loaded. `←` goes back to the tree where you left it, with the file you just opened marked.
 
 ### Source, HTML and images
@@ -53,6 +55,8 @@ Markdown renders with Mermaid diagrams, PDF shows page by page (Previous and Nex
 Code opens with syntax colors and line wrap, HTML and images open in place. One click goes fullscreen.
 
 Files that are not text say why instead of a generic error: "File larger than 1 MiB (3.4 MB)", "UTF-16 file", "Binary file · no text preview", "No read permission", "This file is no longer available" or, when the file cannot be reached because a folder above it cannot be searched, "No search permission on its folder · cannot show this file". A text file in another encoding than UTF-8 (Latin-1 and the like) is shown anyway, with a replacement character (�) for each byte that is not UTF-8, and cannot be edited in the panel. On this computer a normal preview costs nothing extra: the reason is looked up only after the read failed. On an SSH machine one bounded command reads the file and its edit check together: a text file is transferred once, and a file above 1 MiB is not transferred at all. Archives (`zip`, `gz`, `tgz`, `bz2`, `xz`, `zst`, `7z`, `rar`, `tar`) and Office or OpenDocument files (`doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`, `odt`, `ods`, `odp`) are never read as text; the right-click menu extracts `zip`, `tar` (also `tar.gz`, `tgz`, `tar.bz2`, `tar.xz`, `tar.zst`) and single compressed files (`gz`, `bz2`, `xz`, `zst`) next to the archive with **Extract Here** or into a folder named like the archive with **Extract to "name/"** (`7z` and `rar` are not extracted). On this computer a click shows the message with an **Open** button, and a double click starts the default app (a single click starts it when **Open apps with a double click** is off). A file that only turns out to be binary after the read shows the same message and button. On an SSH machine a click never downloads or opens anything: the message shows at once without a read and without a button; **Open** and **Download** in the right-click menu stay available, and so does Cmd+click for other files (not for these types).
+
+![The row menu of an archive with Extract Here and Extract to "release/"](screenshots/extract.png)
 
 ### Edit plain text
 
@@ -85,7 +89,7 @@ Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, na
 
 ### Settings and updates
 
-![The settings dialog with Updates, Downloads, Editors, File list, Preview, Security and the closed Advanced part](screenshots/settings.png)
+![The settings dialog: Updates, Downloads and Editors on the left, the File list switches including Show file sizes on the right](screenshots/settings.png)
 
 The gear in the panel header opens every setting, and changes apply without a restart. Choose whether files and apps open with one click or two, and what the tree hides. Once a day Filer Pro asks GitHub for a new release and shows a small hint in the header when there is one; one switch turns that off.
 
