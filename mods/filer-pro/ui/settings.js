@@ -304,6 +304,7 @@ function body(t, state, handlers, stored) {
       list.forEach((s, i) => {
         const last = i === list.length - 1;
         if (s.kind === "int") { items.push(numberRow(t, state, s, last)); return; }
+        if (s.kind === "bool") { items.push(switchRow(t, state, s.key, { last })); return; }
         const fp = state.fields[s.key];
         items.push(row(t, `filer-pro-settings-${s.key}`, s.label, help(t, s.help), [input(t, fp, 182)], { last, error: fp.error }));
       });

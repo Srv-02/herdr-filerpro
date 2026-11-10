@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, ...numbers(null),
+    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, ...numbers(null), warn_cross_copy: true,
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -132,4 +132,9 @@ test("double_click_files is off and double_click_apps on by default; each change
   }
   const c = await loadConfig(reader('{"double_click_files":true,"double_click_apps":false}'), appHome, home);
   assert.deepEqual([c.double_click_files, c.double_click_apps], [true, false]);
+});
+
+test("warn_cross_copy: default on, a boolean in the file wins, other types fall back", async () => {
+  assert.equal((await loadConfig(reader('{"warn_cross_copy":false}'), appHome, home)).warn_cross_copy, false);
+  assert.equal((await loadConfig(reader('{"warn_cross_copy":"no"}'), appHome, home)).warn_cross_copy, true);
 });

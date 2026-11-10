@@ -1,9 +1,21 @@
 // Texts of the target conflict dialog. Pure, so tests can reach them without the UI kit.
 // item: { name, isDir, action?, destIsDir?, direction?, machine?, mergeError? } as the dialog gets it.
+import { formatBytes } from "./sizes.js";
 
-// Machine that holds the target: only an upload and a copy on one machine write there.
+// Texts of the warning before a copy between two machines (ui/conflict.js crossView). item: { from, machine, count?,
+// size? } with the herdr machine names; count is the number of pasted entries, size their bytes (null: unknown, left out).
+export const THIS_COMPUTER = "this computer";
+export const CROSS_DONT_SHOW = "Don't show again";
+export const crossTitle = (item) => `Copy from ${item.from} to ${item.machine}?`;
+export function crossText(item) {
+  const n = Number.isInteger(item.count) && item.count > 0 ? item.count : 1;
+  const amount = `${n} ${n === 1 ? "item" : "items"}${typeof item.size === "number" ? `, ${formatBytes(item.size)}` : ""}`;
+  return `${amount}. The data travels through ${THIS_COMPUTER}: ${item.from} → ${THIS_COMPUTER} → ${item.machine}. Slower than a direct copy, and it uses ${THIS_COMPUTER}'s connection twice.`;
+}
+
+// Machine that holds the target: an upload, a copy on one machine and a copy between machines write there.
 function targetMachine(item) {
-  return item.direction === "up" || item.direction === "remote" ? item.machine ?? null : null;
+  return item.direction === "up" || item.direction === "remote" || item.direction === "cross" ? item.machine ?? null : null;
 }
 
 // kind of the entry in the way: the dialog knows it as destIsDir (a move always, a copy since #54).

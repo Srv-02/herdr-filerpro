@@ -1261,3 +1261,138 @@ test("settings: SSH options reach transfer.sh through env, only when they differ
   assert.deepEqual(await run({ ssh_connect_timeout: "15 -o ProxyCommand=x", ssh_alive_interval: 1.5, ssh_alive_count: 4 }), plain);
   assert.deepEqual((await run({ ssh_connect_timeout: 9999, ssh_alive_interval: 15, ssh_alive_count: 4 })).slice(0, 2), ["env", "FILER_PRO_SSH_CONNECT_TIMEOUT=300"]);
 });
+
+// Copy between two machines (#60): the source is on `from`, the target on `machine`, scp -3 runs on this Mac.
+const TWO = { machines: [{ name: "box", target: "user@box", via: false }, { name: "box2", target: "user@box2", via: false }, { name: "viabox", via: true, target: "x" }] };
+const CROSS = { direction: "cross", from: "box2", machine: "box", src: "/srv2/data/a.txt", destDir: "/srv/in", choice: "new" };
+
+test("inspect cross: the source is probed on from, the target on machine", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  f.existing.add("/srv2/data/a.txt");
+  withDirs(f, "/srv/in");
+  const r = await jobs.inspect({ direction: "cross", machine: "box", from: "box2", src: "/srv2/data/a.txt", destDir: "/srv/in" });
+  assert.deepEqual(r, { name: "a.txt", isDir: false, exists: false, linkWarning: null, linkTitle: null });
+  assert.deepEqual(f.execsOf("sh").map((c) => [c.args[3], c.on]), [["/srv2/data/a.txt", "box2"], ["/srv/in", "box"], ["/srv/in/a.txt", "box"]]);
+});
+
+test("sourceSize: measured on the source machine (from for cross) with a short timeout; unknown or failing gives null", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  f.sizes["/srv2/d"] = 4096;
+  assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), 4096);
+  const call = f.execsOf("sh").at(-1);
+  assert.deepEqual([call.args[3], call.on, call.timeout], ["/srv2/d", "box2", 5000]);
+  assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/missing" }), null);
+  f.sizeError = new Error("timed out");
+  assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), null);
+});
+
+test("inspect cross of a folder: the link check runs on from, the Replace mount check on machine", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  withDirs(f, "/srv2/d", "/srv/in", "/srv/in/d");
+  f.links = "";
+  f.mounted["/srv/in/d"] = "Refusing to replace, a file system is mounted at: /srv/in/d/x";
+  const r = await jobs.inspect({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d", destDir: "/srv/in" });
+  assert.equal(r.isDir, true);
+  assert.equal(r.exists, true);
+  assert.equal(r.replaceError, "Refusing to replace, a file system is mounted at: /srv/in/d/x");
+  assert.equal(f.execsOf("sh").find((c) => c.args[2] === "links").on, "box2");
+  assert.equal(f.execsOf("sh").find((c) => c.args[1] === REPLACE_CHECK_SCRIPT).on, "box");
+  assert.equal(f.execsOf("sh").some((c) => c.args[1] === RESOLVE_SCRIPT), false, "no into-itself check");
+});
+
+test("inspect cross: a failing source probe is explained with from as the host", async () => {
+  const { f, jobs } = setup({ machines: TWO, execCode: (p) => (p === "/srv2/a" ? { code: 255, stderr: "Host key verification failed." } : null) });
+  const r = await jobs.inspect({ direction: "cross", machine: "box", from: "box2", src: "/srv2/a", destDir: "/srv/in" });
+  assert.equal(r.error, "Unknown host key. Connect once in a terminal: ssh box2");
+});
+
+test("start cross: both targets from one hc machine ls, a 9th argument, measure on from", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  f.sizes[CROSS.src] = 300;
+  const job = await jobs.start(CROSS);
+  assert.equal(f.hcCalls.filter((c) => c[0] === "machine").length, 1);
+  assert.deepEqual(f.hcRuns()[0].slice(10), ["cross", "new", "user@box", CROSS.src, "/srv/in/a.txt", "/srv/in/.a.txt.fs-id1.part", STATUS, "/Users/m/.Trash", "user@box2"]);
+  assert.deepEqual([job.direction, job.machine, job.from, job.target, job.srcTarget, job.total], ["cross", "box", "box2", "user@box", "user@box2", 300]);
+  const sizing = f.execsOf("sh").filter((c) => c.args[1] === SIZE_SCRIPT);
+  assert.ok(sizing.length > 0 && sizing.every((c) => c.on === "box2"), "the source is measured on from");
+});
+
+test("start: only a cross job has from and srcTarget, and every other argv keeps 8 arguments", async () => {
+  for (const [args, dir] of [[down(), "down"], [{ direction: "up", machine: "box", src: "/Users/m/a.txt", destDir: "/srv/in", choice: "new" }, "up"], [REMOTE, "remote"], [{ direction: "local", machine: null, src: "/Users/m/a.txt", destDir: DIR, choice: "new" }, "local"]]) {
+    const { f, jobs } = setup();
+    const job = await jobs.start(args);
+    assert.equal("from" in job || "srcTarget" in job, false, dir);
+    assert.equal(f.hcRuns()[0].slice(10).length, 9 - 1, dir);
+  }
+});
+
+test("start cross: a source machine connected via a command fails the job and names it", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  const job = await jobs.start({ ...CROSS, from: "viabox" });
+  assert.equal(job.state, "failed");
+  assert.equal(job.error, "viabox is connected via a command, not SSH; filer-pro needs SSH");
+  assert.equal(f.hcRuns().length, 0);
+  const t = setup({ machines: TWO });
+  assert.match((await t.jobs.start({ ...CROSS, machine: "viabox" })).error, /^viabox is connected/);
+});
+
+test("start cross with keep_both lists the target side and reserves against a running cross job", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  f.listings["/srv/in"] = ["a.txt"];
+  const [x, y] = await Promise.all([jobs.start({ ...CROSS, choice: "keep_both" }), jobs.start({ ...CROSS, choice: "keep_both" })]);
+  assert.deepEqual([x.dest, y.dest].sort(), ["/srv/in/a-1.txt", "/srv/in/a-2.txt"]);
+  assert.ok(f.execsOf("sh").filter((c) => c.args[1] === LIST_SCRIPT).every((c) => c.on === "box"));
+});
+
+test("cross tick measures the temp on machine; done: Copied toast without reveal or last_download; failed: Copy failed", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  const job = await jobs.start(CROSS);
+  f.sizes[job.temp] = 10;
+  f.t += 1000;
+  await jobs.tick();
+  assert.ok(f.execsOf("sh").filter((c) => c.args[3] === job.temp).every((c) => c.on === "box"));
+  f.files[STATUS] = "state=done\ncode=0\n";
+  f.terminals[job.terminal] = { state: "finished", reason: "exited" };
+  await jobs.tick();
+  assert.deepEqual(f.notifications, [{ title: "Copied", body: "a.txt", level: "success" }]);
+  assert.equal(f.store["filer-pro.last_download"], undefined);
+  const g = setup({ machines: TWO });
+  const j2 = await g.jobs.start(CROSS);
+  g.f.files[STATUS] = "state=failed\ncode=1\nboom\n";
+  g.f.terminals[j2.terminal] = { state: "finished", reason: "exited" };
+  await g.jobs.tick();
+  assert.equal(g.f.notifications[0].title, "Copy failed");
+});
+
+test("cross done with a left old copy: Copied with a warning", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  const job = await jobs.start(CROSS);
+  f.files[STATUS] = "state=done\ncode=0\nWarning: could not fully remove old copy: /srv/in/.a.old\n";
+  f.terminals[job.terminal] = { state: "finished", reason: "exited" };
+  await jobs.tick();
+  assert.equal(f.notifications[0].title, "Copied");
+  assert.equal(f.notifications[0].level, "warning");
+});
+
+test("recover: a gone cross job removes its temp on machine with a plain rm -rf", async () => {
+  const { f, jobs } = setup({ machines: TWO });
+  const job = await jobs.start(CROSS);
+  f.getFail = true;
+  await jobs.recover();
+  const rm = f.execsOf("rm").find((c) => c.args.includes(job.temp));
+  assert.deepEqual([rm.args, rm.on], [["-rf", "--", job.temp], "box"]);
+  assert.equal(f.jobs().id1.error, "Interrupted");
+});
+
+test("an older job snapshot without from still recovers, settles, removes its temp and ticks", async () => {
+  const { f, jobs } = setup();
+  const old = { id: "old1", direction: "up", machine: "box", target: "user@box", src: "/Users/m/a.txt", name: "a.txt", destDir: "/srv/in", dest: "/srv/in/a.txt", temp: "/srv/in/.a.txt.fs-old1.part", isDir: false, mode: "new", state: "running", total: null, bytes: 0, rate: 0, percent: null, error: null, terminal: "term-old1", startedAt: f.t, lastGrowthAt: f.t, at: f.t, statusFile: "/Users/m/.config/herdr-app/filer-pro/jobs/old1.status", stalled: false, finishedAt: null };
+  f.store["filer-pro.jobs"] = { old1: old };
+  f.terminals["term-old1"] = { state: "live" };
+  await jobs.tick();
+  assert.equal(f.jobs().old1.state, "running");
+  f.getFail = true;
+  await jobs.recover();
+  assert.equal(f.jobs().old1.error, "Interrupted");
+  assert.equal(f.execsOf("rm").find((c) => c.args.includes(old.temp)).on, "box");
+});

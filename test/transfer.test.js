@@ -38,7 +38,9 @@ function args(d, dir, mode, name, id = uid()) {
   const dest = path.join(d, "dst", name);
   const temp = path.join(d, "dst", `.${name}.fs-${id}.part`);
   const status = path.join(d, "status");
-  return { src, dest, temp, status, list: [dir, mode, "box", src, dest, temp, status, path.join(d, "trash")] };
+  const list = [dir, mode, "box", src, dest, temp, status, path.join(d, "trash")];
+  if (dir === "cross") list.push("box2"); // the SSH target of the source machine, cross only
+  return { src, dest, temp, status, list };
 }
 
 function run(a, env = {}) {
@@ -76,7 +78,7 @@ function mkTree(base) {
   fs.writeFileSync(path.join(base, "sub", "deep.txt"), "deep");
 }
 
-for (const dir of ["down", "up", "remote"]) {
+for (const dir of ["down", "up", "remote", "cross"]) {
   const nasty = "a b'c [1]*?.txt";
 
   test(`${dir} new: file with nasty name arrives exact`, () => {
@@ -415,9 +417,41 @@ test("unknown direction: usage, exit 2, no status file", () => {
   fs.writeFileSync(a.src, "x");
   const r = run(a);
   assert.equal(r.status, 2);
-  assert.match(r.stderr, /usage: transfer\.sh <down\|up\|local\|remote>/);
+  assert.match(r.stderr, /usage: transfer\.sh <down\|up\|local\|remote\|cross>/);
   assert.equal(fs.existsSync(a.status), false);
   assert.deepEqual(names(path.join(d, "dst")), []);
+});
+
+test("argument count: cross needs 9 arguments, every other direction exactly 8", () => {
+  const d = setup();
+  const c = args(d, "cross", "new", "a.txt");
+  fs.writeFileSync(c.src, "x");
+  const r8 = run({ ...c, list: c.list.slice(0, 8) });
+  assert.equal(r8.status, 2);
+  assert.match(r8.stderr, /usage: transfer\.sh/);
+  assert.equal(fs.existsSync(c.status), false);
+  const u = args(d, "up", "new", "a.txt");
+  const r9 = run({ ...u, list: [...u.list, "box2"] });
+  assert.equal(r9.status, 2);
+  assert.match(r9.stderr, /usage: transfer\.sh/);
+  assert.equal(fs.existsSync(u.status), false);
+  assert.deepEqual(names(path.join(d, "dst")), []);
+});
+
+test("cross: scp gets -3, the masked source on box2 and the temp on box", () => {
+  const d = setup();
+  const log = path.join(d, "scp.log"), wrap = path.join(d, "scp-wrap");
+  fs.writeFileSync(wrap, `#!/bin/sh\nfor a; do printf '%s\\n' "$a"; done >> '${log}'\nexec '${path.join(root, "test/fake/scp")}' "$@"\n`, { mode: 0o755 });
+  const a = args(d, "cross", "new", "a [1]*.txt");
+  fs.writeFileSync(a.src, "x");
+  const r = run(a, { FILER_PRO_SCP: wrap });
+  assert.equal(r.status, 0, r.stderr);
+  const argv = fs.readFileSync(log, "utf8").split("\n");
+  assert.ok(argv.includes("-3"), argv.join(" "));
+  assert.ok(argv.includes("-s"), argv.join(" "));
+  assert.equal(argv[argv.length - 3], `box2:${a.src.replace(/[[\]*?\\]/g, "\\$&")}`);
+  assert.equal(argv[argv.length - 2], `box:${a.temp}`);
+  assert.equal(fs.readFileSync(a.dest, "utf8"), "x");
 });
 
 // ---- remote: src, dest and temp all on the machine (one cp -R -P -p over ssh)
@@ -506,7 +540,7 @@ test("up replace: old copy that cannot be fully removed only warns, state stays 
 
 // The remote login shell may be csh: it refuses a newline inside quotes ("Unmatched '"), so the multi-line
 // finalization must not travel in the command line.
-for (const dir of ["up", "remote"]) {
+for (const dir of ["up", "remote", "cross"]) {
   for (const mode of ["new", "merge"]) {
     test(`${dir} ${mode}: finalization works with a csh login shell on the machine`, async (t) => {
       if (!fs.existsSync("/bin/csh")) return t.skip("no /bin/csh");
@@ -532,7 +566,7 @@ for (const dir of ["up", "remote"]) {
 }
 
 // csh also parses "!" (history, "Event not found") and newlines in the command line: names must not travel there.
-for (const dir of ["up", "remote"]) {
+for (const dir of ["up", "remote", "cross"]) {
   for (const name of ["bang!name", "!", "line\nbreak"]) {
     test(`${dir} new: name ${JSON.stringify(name)} survives a csh login shell on the machine`, async (t) => {
       if (!fs.existsSync("/bin/csh")) return t.skip("no /bin/csh");
@@ -569,7 +603,7 @@ function mountedDest(d, a) {
 const untouched = (a) => fs.readFileSync(path.join(a.dest, "mnt", "precious.txt"), "utf8") === "precious"
   && fs.readFileSync(path.join(a.dest, "old.txt"), "utf8") === "old";
 
-for (const dir of ["up", "remote"]) {
+for (const dir of ["up", "remote", "cross"]) {
   for (const mode of ["replace", "merge"]) {
     for (const table of ["mountinfo", "mount"]) {
       test(`${dir} ${mode === "merge" ? "merge of a file over a folder" : "replace"}: a mount below the old folder refuses (${table}), nothing is deleted`, () => {
@@ -645,7 +679,7 @@ async function caseSetup(dir) {
   mkTree(a.src);
   return { d, a, old: { ...a, dest: path.join(d, "dst", "folder") } };
 }
-for (const dir of ["up", "remote"]) {
+for (const dir of ["up", "remote", "cross"]) {
   for (const table of ["mountinfo", "mount"]) {
     test(`${dir} replace: "Folder" over the existing "folder" with a mount in it refuses on a case-insensitive target (${table})`, async (t) => {
       const { d, a, old } = await caseSetup(dir);
@@ -681,7 +715,7 @@ for (const dir of ["up", "remote"]) {
 // APFS and HFS+ take "café" in NFC for the stored NFD "café": the table spells the mount in the stored form, the
 // builtin pwd -P of bash (macOS sh) keeps the spelling of the call, so the guard asks the external pwd (#31).
 const NFD = "café", NFC = "café";
-for (const dir of ["up", "remote"]) {
+for (const dir of ["up", "remote", "cross"]) {
   for (const table of ["mountinfo", "mount"]) {
     test(`${dir} replace: an NFC name over the existing NFD folder with a mount in it refuses (${table})`, async (t) => {
       const d = await mkTmp("nfd-");

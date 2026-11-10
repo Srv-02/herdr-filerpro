@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { conflictText, conflictHint } from "../mods/filer-pro/lib/conflicttext.js";
+import { conflictText, conflictHint, crossTitle, crossText, CROSS_DONT_SHOW } from "../mods/filer-pro/lib/conflicttext.js";
 import { handleRequest } from "../mods/filer-pro/lib/requests.js";
 
 const f = (o = {}) => ({ name: "a.txt", isDir: false, ...o });
@@ -67,4 +67,20 @@ test("#54: a folder over a file offers no Merge in the hint", () => {
     "Replace deletes the existing file on box permanently.");
   assert.equal(conflictHint(d({ direction: "local", machine: null, destIsDir: true })),
     "Replace moves the existing folder to the Trash. Merge overwrites files with the same name.");
+});
+
+test("cross: the warning names both machines by their herdr names, the amount, and this computer (approved design)", () => {
+  assert.equal(crossTitle({ from: "build-box", machine: "web-01" }), "Copy from build-box to web-01?");
+  assert.equal(crossText({ from: "build-box", machine: "web-01", count: 3, size: 48_100_000 }),
+    "3 items, 48 MB. The data travels through this computer: build-box → this computer → web-01. Slower than a direct copy, and it uses this computer's connection twice.");
+  // One entry, size unknown (null or slow): no size, never "this Mac".
+  const one = crossText({ from: "a", machine: "b", count: 1, size: null });
+  assert.equal(one, "1 item. The data travels through this computer: a → this computer → b. Slower than a direct copy, and it uses this computer's connection twice.");
+  assert.equal(crossText({ from: "a", machine: "b" }), one);
+  assert.doesNotMatch(one, /Mac/);
+  assert.equal(CROSS_DONT_SHOW, "Don't show again");
+});
+
+test("cross: Replace deletes on the target machine", () => {
+  assert.equal(conflictHint(f({ direction: "cross", from: "a", machine: "b" })), "Replace deletes the existing file on b permanently.");
 });

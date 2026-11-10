@@ -19,7 +19,8 @@ export function pastePlan(clip, { on, folder }) {
     if (from !== to) return { error: CUT_ERROR };
     return { direction: from === null ? "local" : "remote", machine: from, src: clip.path, destDir: folder, move: true };
   }
-  if (from !== null && to !== null && from !== to) return { error: "Paste between two machines is not supported" };
+  // A copy from one machine to another runs through this computer (scp -3); machine is the one that holds the target.
+  if (from !== null && to !== null && from !== to) return { direction: "cross", from, machine: to, src: clip.path, destDir: folder };
   const direction = from === null ? (to === null ? "local" : "up") : to === null ? "down" : "remote";
   return { direction, machine: from ?? to, src: clip.path, destDir: folder };
 }

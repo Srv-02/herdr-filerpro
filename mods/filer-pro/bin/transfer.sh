@@ -1,24 +1,26 @@
 #!/bin/sh
-# filer-pro transfer: scp download/upload, local copy and copy on one machine with safe finalization.
-# Usage: transfer.sh <down|up|local|remote> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir>
+# filer-pro transfer: scp download/upload, copy between two machines, local copy and copy on one machine with safe finalization.
+# Usage: transfer.sh <down|up|local|remote|cross> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir> [<src_target>]
 #   down: src is remote, dest/temp are local.  up: src is local, dest/temp are remote.
 #   local: src, dest and temp are local (cp -R -P -p, never follows links); <target> is ignored ("-").
 #   remote: src, dest and temp are all on <target> (cp -R -P -p in one ssh call, never follows links).
+#   cross: src is on <src_target>, dest/temp are on <target> (scp -3: the data runs through this computer).
+#     Only cross takes the 9th argument <src_target> (and requires it); every other direction takes exactly 8.
 # Writes <status_file> (state=done|failed|cancelled, code=<n>, last 20 stderr lines).
 # Exit 0 only for done, 130 for cancelled.
 # Must stay POSIX sh (dash and macOS sh).
 
 usage() {
-  echo "usage: transfer.sh <down|up|local|remote> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir>" >&2
+  echo "usage: transfer.sh <down|up|local|remote|cross> <new|replace|merge> <target> <src> <dest> <temp> <status_file> <trash_dir> [<src_target>]" >&2
   exit 2
 }
-[ $# -eq 8 ] || usage
 case $1 in
-  down|up|local|remote) ;;
+  cross) [ $# -eq 9 ] || usage ;;
+  down|up|local|remote) [ $# -eq 8 ] || usage ;;
   *) usage ;;
 esac
 
-dir=$1 mode=$2 target=$3 src=$4 dest=$5 temp=$6 status=$7 trash=$8
+dir=$1 mode=$2 target=$3 src=$4 dest=$5 temp=$6 status=$7 trash=$8 srctarget=${9-}
 CP=${FILER_PRO_CP:-cp}
 SCP=${FILER_PRO_SCP:-scp}
 SSH=${FILER_PRO_SSH:-ssh}
@@ -98,7 +100,7 @@ cleanup_temp() {
            "$temp" "(^|/)cp -R -P -p -- .*fs-$id\\.part\$" ;;
     esac
     printf '%s\n' "$RS" | "$SSH" $SSH_OPTS "$target" "sh -s" >/dev/null 2>&1
-  elif [ "$dir" = up ]; then
+  elif [ "$dir" = up ] || [ "$dir" = cross ]; then
     rs 'rm -rf -- "$1"' "$temp"
     printf '%s\n' "$RS" | "$SSH" $SSH_OPTS "$target" "sh -s" >/dev/null 2>&1
   else
@@ -128,7 +130,8 @@ fail() { # code
 
 # scp -s forces SFTP mode (the legacy protocol would let the remote shell parse
 # paths). In SFTP mode only the remote download source is glob-expanded, so
-# only that one is masked with g(); an upload target is taken literally.
+# only that one is masked with g(); an upload target is taken literally. cross: -3 routes the data through this
+# computer (both ends remote); the source is masked like a download source.
 # Run scp in the background and wait, so signals are handled immediately.
 # local: cp -P never follows links, so links arrive as links.
 if [ "$dir" = local ]; then
@@ -141,11 +144,19 @@ else
     g "$src"
     from="$target:$G"
     to=$temp
+  elif [ "$dir" = cross ]; then
+    g "$src"
+    from="$srctarget:$G"
+    to="$target:$temp"
   else
     from=$src
     to="$target:$temp"
   fi
-  "$SCP" -s -r -p $SSH_OPTS "$from" "$to" </dev/null 2>>"$err" &
+  if [ "$dir" = cross ]; then
+    "$SCP" -3 -s -r -p $SSH_OPTS "$from" "$to" </dev/null 2>>"$err" &
+  else
+    "$SCP" -s -r -p $SSH_OPTS "$from" "$to" </dev/null 2>>"$err" &
+  fi
 fi
 pid=$!
 wait "$pid"
@@ -310,7 +321,7 @@ local_finalize() {
   esac
 }
 
-# Remote finalization (up, remote), one ssh call. Runs under the remote /bin/sh.
+# Remote finalization (up, remote, cross), one ssh call. Runs under the remote /bin/sh.
 REMOTE_BODY='
 mode=$1 temp=$2 dest=$3 id=$4 mi=$5 mt=$6 src=$7
 name=${dest##*/}

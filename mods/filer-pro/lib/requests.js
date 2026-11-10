@@ -193,11 +193,13 @@ export function resultText({ ok, job, jobs, path, trashed, trash_path, moved, no
 // A later entry with the name of an earlier one is started as keep_both without a question (R67),
 // unless the first one was cancelled: then it is cancelled too (R71).
 // deps: as handleRequest ({ jobs, ask, newBatchId }). reveal: true | "open" | "preview" (jobs.js end, open.js afterDownload).
-export async function runTransfers({ direction, machine, paths, destDir, conflict, links, reveal }, deps) {
+// from: the source machine of a copy between two machines (direction "cross"), else absent.
+// warn: { item } asks the cross-machine warning once, after inspect and before the conflict dialog; anything but Copy cancels.
+export async function runTransfers({ direction, machine, from, paths, destDir, conflict, links, reveal, warn }, deps) {
   const { jobs } = deps;
   const items = [], errors = [], seen = new Map(); // seen: nameKey of the name -> key of the first entry with it
   for (const path of paths) {
-    const info = await jobs.inspect({ direction, machine, src: path, destDir });
+    const info = await jobs.inspect({ direction, machine, ...(from ? { from } : {}), src: path, destDir });
     if (info.error) {
       errors.push({ path, error: info.error });
       continue;
@@ -212,7 +214,7 @@ export async function runTransfers({ direction, machine, paths, destDir, conflic
     const first = seen.get(nameKey(info.name));
     if (first === undefined) seen.set(nameKey(info.name), key);
     items.push({
-      key, path, first, name: info.name, isDir: info.isDir, direction, machine, exists: first === undefined ? info.exists : false,
+      key, path, first, name: info.name, isDir: info.isDir, direction, machine, ...(from ? { from } : {}), exists: first === undefined ? info.exists : false,
       linkWarning: info.linkWarning, linkTitle: info.linkTitle, linkBlocked: info.linkBlocked === true,
       ...(info.destIsDir !== undefined ? { destIsDir: info.destIsDir } : {}),
       ...(info.replaceError ? { replaceError: info.replaceError } : {}),
@@ -220,6 +222,19 @@ export async function runTransfers({ direction, machine, paths, destDir, conflic
     });
   }
   const started = [];
+  if (items.length > 0 && warn) {
+    // The dialog names how many entries and how many bytes travel; a size that is unknown or slow to get is left out.
+    let size = 0;
+    for (const item of items) {
+      const n = deps.jobs.sourceSize ? await deps.jobs.sourceSize({ direction, machine, ...(from ? { from } : {}), src: item.path }) : null;
+      size = size === null || typeof n !== "number" ? null : size + n;
+    }
+    const a = await deps.ask({ batch: `${deps.newBatchId()}#0`, item: { ...warn.item, count: items.length, size }, choices: ["copy", "cancel"], remaining: 1 });
+    if (a?.choice !== "copy") return { ok: false, error: "Cancelled", ...(errors.length > 0 ? { errors } : {}) };
+    // "Don't show again" (the dialog's checkbox, sent as apply_to_all) turns warn_cross_copy off, only together with Copy.
+    // A failed save only means the warning comes again next time.
+    if (a.apply_to_all === true && deps.saveConfig) await Promise.resolve(deps.saveConfig({ warn_cross_copy: false })).catch(() => {});
+  }
   if (items.length > 0) {
     const batch = createBatch(items);
     batch.preset({ links: links === "transfer_anyway" || links === "cancel" ? links : undefined, conflict });
@@ -246,7 +261,7 @@ export async function runTransfers({ direction, machine, paths, destDir, conflic
         continue;
       }
       started.push(await jobs.start({
-        direction, machine, src: item.path, destDir, choice, isDir: item.isDir, ...(reveal ? { reveal } : {}),
+        direction, machine, ...(from ? { from } : {}), src: item.path, destDir, choice, isDir: item.isDir, ...(reveal ? { reveal } : {}),
       }));
     }
   }
@@ -307,7 +322,7 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
   const reserved = [];
   for (const j of Object.values(getShared("filer-pro.jobs") || {})) {
     if (j.state !== "running" || typeof j.destDir !== "string" || normalizePath(j.destDir) !== normalizePath(plan.destDir)) continue;
-    const target = j.direction === "up" || j.direction === "remote" ? j.machine : null;
+    const target = j.direction === "up" || j.direction === "remote" || j.direction === "cross" ? j.machine : null;
     if ((target ?? null) === on && typeof j.dest === "string") reserved.push(baseName(j.dest));
   }
   const out = await deps.fileOps.move({ on, src: plan.src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
@@ -364,9 +379,12 @@ export async function handleRequest(req, deps) {
       const plan = pastePlan(clip, { on: req.machine ?? null, folder: req.folder });
       if (plan.error) return { ok: false, error: plan.error };
       if (plan.move) return runMove({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
+      // A copy between two machines runs through this computer: one warning per paste unless the setting is off.
+      const warn = plan.direction === "cross" && (await deps.loadConfig())?.warn_cross_copy !== false
+        ? { item: { name: baseName(plan.src), isDir: clip.isDir === true, path: plan.src, from: plan.from, machine: plan.machine, direction: "cross" } } : null;
       return runTransfers({
-        direction: plan.direction, machine: plan.machine, paths: [plan.src], destDir: plan.destDir,
-        conflict: req.conflict, links: req.links, reveal: req.reveal,
+        direction: plan.direction, machine: plan.machine, ...(plan.from ? { from: plan.from } : {}), paths: [plan.src], destDir: plan.destDir,
+        conflict: req.conflict, links: req.links, reveal: req.reveal, warn,
       }, deps);
     }
     case "rename": {
