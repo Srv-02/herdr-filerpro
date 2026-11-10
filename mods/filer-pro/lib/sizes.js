@@ -74,9 +74,10 @@ export function formatRate(bps) {
 }
 
 // Calculate Size on a folder (issue #58). The results live in the shared value filer-pro.sizes, an object of
-// sizeKey(machine, path) -> { state, id, bytes? }, so every panel copy and the row menu (a separate copy) see them:
-// requested (the menu asked), running (a panel copy claimed it and runs SIZE_SCRIPT), done (bytes), toolarge (no
-// answer within FOLDER_SIZE_MS). A failure removes the entry (a toast tells why). Results stay until Refresh or a new
+// sizeKey(machine, path) -> { state, id, bytes?, incomplete? }, so every panel copy and the row menu (a separate copy) see them:
+// requested (the menu asked), running (a panel copy claimed it and runs SIZE_SCRIPT), done (bytes, always shown with a ~;
+// incomplete: some folders could not be read, the number is a lower bound), toolarge (the script stopped find at the limit,
+// or no answer within FOLDER_SIZE_MS plus SIZE_GRACE_MS). A failure removes the entry (a toast tells why). Results stay until Refresh or a new
 // Calculate Size: a snapshot, not a watch. requested and running carry at (ms): a request nobody claimed within
 // CLAIM_MS (the panel moved on to another folder) or a run older than the limit plus a margin (the copy that ran it
 // was reloaded or closed) counts as gone, so a row never spins forever and the entry can be used again.
