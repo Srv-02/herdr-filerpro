@@ -161,7 +161,7 @@ export default class FilerPro extends View {
       return;
     }
     this.cfg = DEFAULTS;
-    // The jobs' timer (the sliced member check of an archive): an AsyncContext, since this cx answers only during init.
+    // The jobs' timer (the sliced member check of an archive) runs on the AsyncContext of a spawned task. The init cx is an AsyncContext too (gpui-kit.d.ts) and may be held across awaits until this build is reloaded or closed, so using it directly would be equivalent; this is kept as it is, not for a documented need.
     let timers = null;
     cx.spawn(async (acx) => { timers = acx; });
     this.jobs = createJobs({

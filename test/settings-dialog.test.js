@@ -341,7 +341,7 @@ test("view: Check free space before extracting is the last switch of File list; 
   assert.ok(sw > out.indexOf("Open apps with a double click"), "after double_click_apps");
   assert.ok(sw < out.indexOf("#filer-pro-settings-preview-switch"), "still in File list, above the Preview switches");
   assert.ok(out.includes("Check free space before extracting"));
-  assert.ok(out.includes("Stops when the archive would not fit. Costs one extra look into the archive."));
+  assert.ok(out.includes("Stops when the archive would not fit. A single compressed file is read once more."));
   const look = (e) => JSON.stringify(e.calls.filter(([k]) => k !== "id" && k !== "on_click"));
   assert.equal(look(byId(view(s), "filer-pro-settings-extract_space_check-switch")), look(byId(view(s), "filer-pro-settings-svg_check-switch")));
   const c = makeCx();
