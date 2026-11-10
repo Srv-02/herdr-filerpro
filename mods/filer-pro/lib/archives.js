@@ -55,6 +55,17 @@ export function extractToLabel(stem) {
   return `Extract to "${fit}/"`;
 }
 
+// The most members an archive may list: above it the probe stops before the long listing and the extract is refused, so
+// the listing that reaches the app stays bounded. The check runs in slices of CHECK_SLICE (memberCheck's cost: about one
+// unit per character), one QuickJS job each (checkListing): herdr interrupts a job after about 0.5 s.
+export const ARCHIVE_MAX_MEMBERS = 200000;
+export const CHECK_SLICE = 65536;
+const grouped = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+export const tooManyMembers = (n) => (Number.isFinite(n) && n > ARCHIVE_MAX_MEMBERS
+  ? `The archive lists ${grouped(n)} entries: more than ${grouped(ARCHIVE_MAX_MEMBERS)} cannot be checked`
+  : `The archive lists more than ${grouped(ARCHIVE_MAX_MEMBERS)} entries: too many to check`);
+export const CHECK_INTERRUPTED = "Could not check the archive in time: it lists too many entries";
+
 // Every script below starts with the same line: processes the app starts often have no LANG, and then tar prints
 // non-ASCII names as octal escapes or "?" (R2). A UTF-8 locale makes it print the names as they are; parseProbe decodes
 // the escapes that remain anyway.
@@ -67,13 +78,17 @@ const LOCALE = `L=$(locale -a 2>/dev/null | grep -i -m1 -E '^(C|en_US)\\.utf-?8$
 //     archive absolute path (a leading "-" is made safe)
 //   stdout  `tool=<t>` (tar | bsdtar | unzip | gzip | bzip2 | xz | zstd, the one extract.sh and ARCHIVE_SIZE_SCRIPT
 //           get as <tool>), `types=<c...>` (tar and zip: the first character of each member's line in the long listing,
-//           in member order: d folder, - file, l symlink, h hard link, ...), `encrypted=<0|1>` (1: a zip entry is
-//           encrypted, seen by unzip), a line `--`, then one member per line
+//           in member order: d folder, - file, l symlink, h hard link, ...), `size=<bytes>` (tar and bsdtar: the sum of
+//           the regular files' sizes read from the same long listing, empty when a line has an unknown layout),
+//           `encrypted=<0|1>` (1: a zip entry is encrypted, seen by unzip), a line `--`, then one member per line
 //           (nothing for single). Directory members usually end in "/".
 //           tar/bsdtar print a newline in a name as \n, a backslash as \\ and non-ASCII bytes maybe as \ooo (parseProbe decodes).
 //   exit 0  ok
 //   exit 3  a tool is missing: stdout `missing=<tool>`
 //   exit 4  the listing failed (not an archive, damaged, ...): the tool's messages on stderr
+//   exit 5  more than ARCHIVE_MAX_MEMBERS members: stdout `count=<n>`, nothing else is read
+//   A compressed tar is decompressed twice (the name listing and the long listing); the long listing gives the types
+//   and the size, so the space check needs no third pass (ARCHIVE_SIZE_SCRIPT gets "-" as its tool then).
 //   Tool choice: tar family -> tar. zip -> unzip when `unzip -Z1` lists it, else bsdtar when present, else missing unzip
 //   (no `tar --version` sniffing, R11). single -> its tool. A tar listing that fails while its `need` helper is missing
 //   reports the helper (bsdtar reads gzip/bzip2/xz itself, zstd and GNU tar's helpers are external).
@@ -83,18 +98,29 @@ case "$a" in -*) a=./$a;; esac
 miss() { printf 'missing=%s\\n' "$1"; exit 3; }
 has() { command -v "$1" >/dev/null 2>&1; }
 bad() { [ -n "$m" ] && printf '%s\\n' "$m" >&2; exit 4; }
-m= y= e=0
+big() { c=$(printf '%s\\n' "$m" | wc -l | tr -d ' '); [ "$c" -le ${ARCHIVE_MAX_MEMBERS} ] || { printf 'count=%s\\n' "$c"; exit 5; }; }
+# long <cmd>...: the type characters (y) and the regular files' byte sum (z) of a long listing. GNU and busybox tar print
+# "mode user/group size ...", bsdtar "mode links user group size ..."; any other layout leaves z empty.
+long() {
+  v=$("$@" 2>/dev/null)
+  y=$(printf '%s\\n' "$v" | cut -c1 | tr -d '\\n')
+  z=$(printf '%s\\n' "$v" | awk 'substr($0, 1, 1) != "-" { next }
+    $2 ~ /\\// && $3 ~ /^[0-9]+$/ { s += $3; next }
+    $2 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ { s += $5; next }
+    { u = 1 } END { if (!u) printf "%.0f", s }')
+}
+m= y= z= e=0
 case "$f" in
   single)
     t=$n; has "$t" || miss "$t"
     printf 'tool=%s\\n--\\n' "$t"; exit 0;;
   zip)
-    if has unzip && m=$(unzip -Z1 "$a" 2>/dev/null); then t=unzip
+    if has unzip && m=$(unzip -Z1 "$a" 2>/dev/null); then t=unzip; big
       y=$(unzip -Z -s "$a" 2>/dev/null | sed '1,2d;$d' | cut -c1 | tr -d '\\n')
       # zipinfo writes the t/b column in capitals for an encrypted entry
       e=$(unzip -Z -s "$a" 2>/dev/null | awk 'NR > 2 && $5 ~ /^[TB]/ { f = 1 } END { print f + 0 }')
     elif has bsdtar; then t=bsdtar; m=$(bsdtar -tf "$a") || bad
-      y=$(bsdtar -tvf "$a" 2>/dev/null | cut -c1 | tr -d '\\n')
+      big; long bsdtar -tvf "$a"
     elif has unzip; then m=$(unzip -Z1 "$a" 2>&1); bad
     else miss unzip; fi;;
   *)
@@ -103,18 +129,19 @@ case "$f" in
       [ "$n" != - ] && ! has "$n" && miss "$n"
       bad
     fi
-    y=$(tar -tvf "$a" 2>/dev/null | cut -c1 | tr -d '\\n');;
+    big; long tar -tvf "$a";;
 esac
-printf 'tool=%s\\ntypes=%s\\nencrypted=%s\\n--\\n%s\\n' "$t" "$y" "$e" "$m"
+printf 'tool=%s\\ntypes=%s\\nsize=%s\\nencrypted=%s\\n--\\n%s\\n' "$t" "$y" "$z" "$e" "$m"
 `;
 
 // ARCHIVE_SIZE_SCRIPT: how much room the extracted files need and how much the target folder has (R4). A separate exec
 // from the probe (timeout 120000 ms): unpacking to count bytes can take long on a big archive.
 //   sh -c SCRIPT x <tool> <archive> <dest_dir>
-//     tool      the one parseProbe returned
+//     tool      the one parseProbe returned, or "-" when the probe already gave the size (then only df runs)
 //     archive   absolute path
 //     dest_dir  the folder the files go to (must exist)
-//   stdout  `size=<bytes>` (empty when unknown: sum of the regular file sizes, measured with \`<tool> -xOf | wc -c\`,
+//   stdout  `size=<bytes>` (empty when unknown: sum of the regular file sizes, measured with \`<tool> -xOf | wc -c\` (a tar
+//           only gets here when its long listing had an unknown layout),
 //           \`unzip -l\` for zip, \`<tool> -dc | wc -c\` for single), then the lines of \`df -Pk <dest_dir>\` each prefixed
 //           \`df=\`. Always exit 0.
 export const ARCHIVE_SIZE_SCRIPT = `t=$1; a=$2; d=$3
@@ -155,64 +182,50 @@ exit 0
 
 // ---- parsing ----
 
-// Bytes -> string, strictly UTF-8 (no TextDecoder in QuickJS); null for an invalid sequence.
-function utf8Decode(bytes) {
-  let out = "";
-  for (let i = 0; i < bytes.length; ) {
-    const b = bytes[i];
-    let len = 0, cp = 0;
-    if (b < 0x80) { out += String.fromCharCode(b); i++; continue; }
-    if (b >= 0xc2 && b <= 0xdf) { len = 2; cp = b & 0x1f; } else if (b >= 0xe0 && b <= 0xef) { len = 3; cp = b & 0x0f; } else if (b >= 0xf0 && b <= 0xf4) { len = 4; cp = b & 0x07; } else return null;
-    if (i + len > bytes.length) return null;
-    for (let k = 1; k < len; k++) {
-      const c = bytes[i + k];
-      if ((c & 0xc0) !== 0x80) return null;
-      cp = (cp << 6) | (c & 0x3f);
-    }
-    if ((len === 3 && (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff))) || (len === 4 && (cp < 0x10000 || cp > 0x10ffff))) return null; // overlong, surrogate, too big
-    out += String.fromCodePoint(cp);
-    i += len;
-  }
-  return out;
-}
-
-function utf8Bytes(cp, into) {
-  if (cp < 0x80) into.push(cp);
-  else if (cp < 0x800) into.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
-  else if (cp < 0x10000) into.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
-  else into.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
-}
-
 // One line of a tar listing: \\ -> \, \n -> newline, \ooo -> that byte; the bytes are then read as UTF-8. A line with
-// an invalid sequence stays as printed.
-const SIMPLE = { "\\": 0x5c, n: 0x0a, t: 0x09, r: 0x0d };
+// an invalid sequence stays as printed. The line is rewritten as percent escapes and read with decodeURIComponent, which
+// is native and strict (it refuses overlong forms, surrogates and cut sequences, like a strict UTF-8 decoder): a
+// per-character decoder in QuickJS needed about 3 µs per character, too slow for a listing of escaped names.
+// The line is cut at each backslash (a native split; a regular expression over the line was too slow in QuickJS): each
+// piece after a cut starts with what followed the backslash.
+const BYTE = {}; // "000".."377" -> "%00".."%FF"
+for (let b = 0; b < 256; b++) BYTE[b.toString(8).padStart(3, "0")] = `%${b.toString(16).padStart(2, "0").toUpperCase()}`;
+const SIMPLE = { n: "%0A", t: "%09", r: "%0D" };
 export function unescapeName(line) {
   if (!line.includes("\\")) return line;
-  const bytes = [];
-  const chars = Array.from(line);
-  for (let i = 0; i < chars.length; i++) {
-    const c = chars[i];
-    if (c === "\\") {
-      const oct = chars.slice(i + 1, i + 4).join("");
-      if (/^[0-3][0-7][0-7]$/.test(oct)) { bytes.push(parseInt(oct, 8)); i += 3; continue; }
-      if (chars[i + 1] in SIMPLE) { bytes.push(SIMPLE[chars[i + 1]]); i++; continue; }
+  try {
+    const seg = line.split("\\");
+    let out = encodeURIComponent(seg[0]);
+    for (let i = 1; i < seg.length; i++) {
+      const s = seg[i];
+      const byte = BYTE[s.slice(0, 3)];
+      if (byte !== undefined) out += byte + encodeURIComponent(s.slice(3));
+      else if (s === "" && i + 1 < seg.length) out += `%5C${encodeURIComponent(seg[++i])}`; // "\\": the piece after it is plain
+      else if (Object.hasOwn(SIMPLE, s.charAt(0))) out += SIMPLE[s.charAt(0)] + encodeURIComponent(s.slice(1));
+      else out += `%5C${encodeURIComponent(s)}`; // a lone backslash
     }
-    utf8Bytes(c.codePointAt(0), bytes);
+    return decodeURIComponent(out);
+  } catch {
+    return line; // an invalid sequence, or a lone surrogate in the line
   }
-  return utf8Decode(bytes) ?? line;
 }
 
-// stdout of ARCHIVE_PROBE_SCRIPT -> { tool, names, types?, encrypted? }. names are the members (escapes of tar/bsdtar decoded; unzip -Z1
-// prints names as they are); types the type characters in member order (absent for an older output without the line).
-export function parseProbe(stdout) {
+// stdout of ARCHIVE_PROBE_SCRIPT -> { tool, names, types?, size?, encrypted? }. names are the members (escapes of tar/bsdtar
+// decoded; unzip -Z1 prints names as they are; raw: left as printed, checkListing decodes them slice by slice); types the
+// type characters in member order and size the byte sum of the long listing (each absent when its line is missing or empty).
+export function parseProbe(stdout, { raw: keep = false } = {}) {
   const lines = String(stdout ?? "").split("\n");
   const cut = lines.indexOf("--");
   const head = cut < 0 ? lines : lines.slice(0, cut);
   const tool = (head.find((l) => l.startsWith("tool=")) ?? "").slice(5) || null;
   const typeLine = head.find((l) => l.startsWith("types="));
-  const raw = cut < 0 ? [] : lines.slice(cut + 1).filter((l) => l !== "");
+  const size = (head.find((l) => l.startsWith("size=")) ?? "").slice(5);
+  let raw = cut < 0 ? [] : lines.slice(cut + 1);
+  while (raw.length && raw[raw.length - 1] === "") raw.pop();
+  if (raw.indexOf("") >= 0) raw = raw.filter((l) => l !== ""); // native search first: a long listing has no empty line
   return {
-    tool, names: tool === "tar" || tool === "bsdtar" ? raw.map(unescapeName) : raw, ...(typeLine !== undefined ? { types: typeLine.slice(6) } : {}),
+    tool, names: !keep && (tool === "tar" || tool === "bsdtar") ? raw.map(unescapeName) : raw, ...(typeLine !== undefined ? { types: typeLine.slice(6) } : {}),
+    ...(/^\d+$/.test(size) ? { size: Number(size) } : {}),
     ...(head.includes("encrypted=1") ? { encrypted: true } : {}),
   };
 }
@@ -244,38 +257,110 @@ export function parseSize(stdout) {
 // l symlink, h hard link, - file); without it (or when it does not match the list) a member counts as a folder only with a
 // trailing slash. Paths are compared with nameKey on every side: on APFS "Foo" and "foo/x" are the same path, and on a
 // case-sensitive machine a refusal of such an archive is only overly careful. zip names also treat "\\" as a separator.
-export function checkMembers(names, { zip = false, types } = {}) {
+export function checkMembers(names, opts) {
+  return memberCheck(names, opts).step(Infinity);
+}
+
+// The key of a member path: nameKey of each component, joined with "/". A pure ASCII path only needs toLowerCase (NFC
+// changes no ASCII), which keeps the check of a big listing cheap; a component key never contains "/", so the key of
+// every leading part of the path is the key up to one of its slashes.
+const ASCII = /^[\x00-\x7f]*$/;
+const MEMBER_COST = 16;
+const cost = (text) => MEMBER_COST + text.length;
+const pathKey = (parts) => {
+  const joined = parts.join("/");
+  return ASCII.test(joined) ? joined.toLowerCase() : parts.map(nameKey).join("/");
+};
+
+// checkMembers in steps: step(budget) works on members until their cost (MEMBER_COST plus the length of the line: a long
+// name, above all one of escapes, takes longer) reaches budget, and returns the result ({ tops } or { error }, the same
+// as checkMembers) once it is known, else null. decode (optional) turns each listed line into the member name first.
+// Two passes: every name (absolute, "..", the folder and non-folder sets, the tops), then every member against the sets
+// (both a folder and something else, written through a non-folder).
+export function memberCheck(names, { zip = false, types, decode = null } = {}) {
   const typed = typeof types === "string" && types.length === names.length;
-  if (typeof types === "string" && !typed) return { error: "Could not read the member types of the archive" };
-  const members = [];
-  names.forEach((raw, i) => {
-    if (members.error) return;
+  let result = null;
+  if (typeof types === "string" && !typed) result = { error: "Could not read the member types of the archive" };
+  else if (names.length > ARCHIVE_MAX_MEMBERS) result = { error: tooManyMembers(names.length) };
+  const members = [], dirs = new Set(), other = new Set(), tops = new Map(); // other: files, links and anything else that is no folder
+  let pass = 0, i = 0;
+  const first = (line, at) => {
+    const raw = decode ? decode(line) : line;
     const name = zip ? raw.replace(/\\/g, "/") : raw;
-    if (name.startsWith("/") || (zip && /^[A-Za-z]:/.test(name))) { members.error = `The archive contains an absolute path: ${raw}`; return; }
+    if (name.startsWith("/") || (zip && /^[A-Za-z]:/.test(name))) return { error: `The archive contains an absolute path: ${raw}` };
     const parts = name.split("/").filter((p) => p !== "" && p !== ".");
-    if (parts.includes("..")) { members.error = `The archive contains a path with "..": ${raw}`; return; }
-    if (parts.length) members.push({ raw, parts, dir: typed ? types[i] === "d" : name.endsWith("/") });
-  });
-  if (members.error) return { error: members.error };
-  if (!members.length) return { error: "The archive is empty" };
-  const key = (parts) => parts.map(nameKey).join("/");
-  const dirs = new Set(), other = new Set(); // other: files, links and anything else that is no folder
-  for (const m of members) (m.dir ? dirs : other).add(key(m.parts));
-  for (const m of members) {
-    if (dirs.has(key(m.parts)) && other.has(key(m.parts))) return { error: `The archive lists a path both as a folder and as a file or link: ${m.raw}` };
-    for (let i = 1; i < m.parts.length; i++) {
-      if (other.has(key(m.parts.slice(0, i)))) return { error: `The archive writes through a link: ${m.raw}` };
-    }
-  }
-  const tops = new Map();
-  for (const m of members) {
-    const k = nameKey(m.parts[0]);
-    const isDir = m.parts.length > 1 || m.dir;
-    const t = tops.get(k);
+    if (parts.includes("..")) return { error: `The archive contains a path with "..": ${raw}` };
+    if (!parts.length) return null;
+    const dir = typed ? types[at] === "d" : name.endsWith("/");
+    const key = pathKey(parts);
+    (dir ? dirs : other).add(key);
+    members.push({ raw, key });
+    const slash = key.indexOf("/");
+    const top = slash < 0 ? key : key.slice(0, slash);
+    const isDir = parts.length > 1 || dir;
+    const t = tops.get(top);
     if (t) t.isDir ||= isDir;
-    else tops.set(k, { name: m.parts[0], isDir });
-  }
-  return { tops: [...tops.values()] };
+    else tops.set(top, { name: parts[0], isDir });
+    return null;
+  };
+  const second = ({ raw, key }) => {
+    if (dirs.has(key) && other.has(key)) return { error: `The archive lists a path both as a folder and as a file or link: ${raw}` };
+    for (let j = key.indexOf("/"); j >= 0; j = key.indexOf("/", j + 1)) {
+      if (other.has(key.slice(0, j))) return { error: `The archive writes through a link: ${raw}` };
+    }
+    return null;
+  };
+  return {
+    step(budget) {
+      for (let left = budget; !result && left > 0;) {
+        if (pass === 0) {
+          if (i < names.length) { left -= cost(names[i]); result = first(names[i], i); i++; continue; }
+          if (!members.length) result = { error: "The archive is empty" };
+          pass = 1; i = 0;
+        } else if (i < members.length) { left -= cost(members[i].key); result = second(members[i++]); }
+        else result = { tops: [...tops.values()] };
+      }
+      return result;
+    },
+  };
+}
+
+// The member check of one probe output that never stalls the app: parseProbe in one QuickJS job, then memberCheck in
+// slices of `slice` cost units, each in its own job (after(0) between them). Before each part a zero timer is armed: when
+// herdr interrupts the job (uncatchable, the promise would never settle) that timer ends the check with
+// CHECK_INTERRUPTED. Without after (tests) everything runs at once. Always resolves, with { probe, tops } or { error }.
+// family and stem: archiveOf(); a single compressed file has no member list, its one entry is the stem. check is
+// replaceable for tests.
+export function checkListing(stdout, { family, stem, after = null, slice = CHECK_SLICE, check = memberCheck }) {
+  return new Promise((done) => {
+    let ended = false;
+    const end = (r) => {
+      if (ended) return;
+      ended = true;
+      done(r);
+    };
+    const step = (fn) => {
+      let finished = false;
+      if (after) after(0, () => { if (!finished) end({ error: CHECK_INTERRUPTED }); });
+      try { return fn(); } catch (e) { end({ error: `Could not check the archive: ${String(e?.message ?? e)}` }); return null; } finally { finished = true; }
+    };
+    const next = () => (after ? new Promise((resolve) => after(0, resolve)) : Promise.resolve());
+    (async () => {
+      const p = step(() => parseProbe(stdout, { raw: true }));
+      if (ended) return;
+      if (p.encrypted) return end({ error: "Encrypted archives are not supported" });
+      if (family === "single") return end({ probe: p, tops: [{ name: stem, isDir: false }] });
+      const decode = p.tool === "tar" || p.tool === "bsdtar" ? unescapeName : null;
+      const c = check(p.names, { zip: family === "zip" || p.tool === "unzip", types: p.types, decode });
+      for (;;) {
+        await next();
+        if (ended) return;
+        const r = step(() => c.step(slice));
+        if (ended) return;
+        if (r) return end(r.error ? { error: r.error } : { probe: p, tops: r.tops });
+      }
+    })();
+  });
 }
 
 // size and avail in bytes; null when either is unknown (no refusal then).

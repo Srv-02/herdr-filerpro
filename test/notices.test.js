@@ -46,7 +46,7 @@ test("the README names credits, preview, turning off and removing", () => {
 
 test("the settings and edit glyphs are small Lucide SVGs in currentColor, each named in the notices", () => {
   const root = read("THIRD_PARTY_NOTICES.md");
-  for (const name of ["settings", "check", "coffee", "external-link", "info", "loader-circle", "shield-exclamation-point", "github", "pencil", "undo-2", "redo-2", "circle-x", "save", "copy-plus", "refresh-cw", "chevron-left", "minus", "plus", "rectangle-vertical", "corner-left-up", "slash", "folder-tree"]) {
+  for (const name of ["settings", "check", "coffee", "external-link", "info", "loader-circle", "shield-exclamation-point", "github", "pencil", "undo-2", "redo-2", "circle-x", "save", "copy-plus", "refresh-cw", "chevron-left", "minus", "plus", "rectangle-vertical", "corner-left-up", "slash", "folder-tree", "two-pages"]) {
     const svg = read(`mods/filer-pro/${name}.svg`);
     assert.ok(svg.length < 2048, `${name}: small`);
     assert.match(svg, /viewBox="0 0 24 24"/, name);
@@ -55,4 +55,11 @@ test("the settings and edit glyphs are small Lucide SVGs in currentColor, each n
     assert.ok(root.includes(`mods/filer-pro/${name}.svg`), `${name} in the notices`);
   }
   assert.ok(root.includes("tag 0.544.0") && root.includes("Lucide Contributors 2025"), "the older tag of github.svg");
+});
+
+test("every glyph the notices call Feather-derived is in the list above the Feather MIT text", () => {
+  const root = read("THIRD_PARTY_NOTICES.md");
+  const named = /the glyphs derived from Feather \(here ([^)]*)\)/.exec(root)[1].match(/`[^`]+`/g);
+  const listed = /^Derived from Feather \(MIT\): (.*)$/m.exec(root)[1].match(/`[^`]+`/g);
+  assert.deepEqual(listed, named);
 });
