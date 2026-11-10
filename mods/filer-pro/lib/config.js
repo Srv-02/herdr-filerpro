@@ -61,7 +61,7 @@ export async function loadConfig(readTextFile, appHome, home) {
     node_path: validateField("node_path", typeof cfg?.node_path === "string" ? cfg.node_path : "").value ?? "", svg_check: flag("svg_check", true),
     hide_system_files: flag("hide_system_files", true), hide_dotfiles: flag("hide_dotfiles", false),
     double_click_files: flag("double_click_files", false), double_click_apps: flag("double_click_apps", true), extract_space_check: flag("extract_space_check", true), warn_cross_copy: flag("warn_cross_copy", true),
-    show_sizes: flag("show_sizes", false), ...numbers(cfg) };
+    show_sizes: flag("show_sizes", true), ...numbers(cfg) };
   if (folder == null) return { download_folder: fallback, ...flags };
   if (folder === "~" || folder.startsWith("~/")) folder = home() + folder.slice(1);
   return { download_folder: folder, ...flags };

@@ -105,6 +105,15 @@ test("show_sizes off: the listing gets no size argument and the rows have no siz
   assert.equal(self.entryAt("a.md").size, undefined);
 });
 
+test("show_sizes is on before the config was read (issue #73)", async () => {
+  Object.assign(host, { config: null, shared: {}, calls: [], notes: [], overlay: null, closed: 0, on: null });
+  const self = Object.create(FilerPro.prototype);
+  Object.assign(self, { cfg: null, context: null, saved: new Map(), nav: new Map(), reload: { signal: () => false, take: () => false }, jobs: {}, perf: null, entries: new Map(), folders: new Set(), pending: new Set(), marks: {} });
+  self.refresh(cx);
+  await settle();
+  assert.deepEqual(lists()[0][1].slice(1), ["/r", "500", "1", "0", "0", "1"]);
+});
+
 test("show_sizes on: one listing call per folder carries the sizes; files show them, folders a dash, a package nothing", async () => {
   const self = await panel();
   self.folders.add("src"); self.refresh(cx); await settle();

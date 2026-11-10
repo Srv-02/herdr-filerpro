@@ -69,7 +69,7 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 // The settings before the config file was read (and in copies that never read it): today's defaults.
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, show_sizes: false };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, show_sizes: true };
 const MB = 1024 * 1024;
 // How much of the open file a refresh flight reloads at its end (refresh opts.file, this.fileWanted): TEXT only reads and
 // compares text (a watch batch that did not name the file: no exec), ALL also probes an image or PDF again (a change
