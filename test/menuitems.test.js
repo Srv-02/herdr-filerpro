@@ -19,11 +19,29 @@ test("row menu lists sixteen entries in five groups, Open first and Delete last"
   assert.equal(items.find((i) => i.action === "edit_terminal").id, "filer-pro-menu-edit-terminal");
   assert.ok(items.filter((i) => !i.separator).every((i) => i.enabled === true));
 });
-test("root menu has New Folder and Paste, then Settings after a separator", () => {
-  assert.deepEqual(rootMenuItems(on).map((i) => (i.separator ? "|" : [i.id, i.label, i.action, i.enabled])), [
+test("root menu: Open in <editor> in its own group on top, then New Folder… and Paste, then Settings…", () => {
+  const map = (items) => items.map((i) => (i.separator ? "|" : [i.id, i.label, i.action, i.enabled]));
+  assert.deepEqual(map(rootMenuItems({ ...on, editor: "VS Code" })), [
+    ["filer-pro-menu-open-editor", "Open in VS Code", "open_editor", true], "|",
     ["filer-pro-menu-new-folder", "New Folder…", "new_folder", true], ["filer-pro-menu-paste", "Paste", "paste", true], "|",
     ["filer-pro-menu-settings", "Settings…", "settings", true],
   ]);
+  const dim = map(rootMenuItems({ ...on, editor: "VS Code", editorFolder: false }));
+  assert.equal(dim[0][3], false);
+  assert.deepEqual(dim.slice(1), map(rootMenuItems({ ...on, editor: "VS Code" })).slice(1));
+});
+test("the row entry names the configured editor", () => {
+  const e = (state) => rowMenuItems(state)[2];
+  assert.deepEqual([e({ ...on, editor: "VS Code" }).id, e({ ...on, editor: "VS Code" }).label], ["filer-pro-menu-open-editor", "Open in VS Code"]);
+  assert.equal(e({ ...on, editor: "Sublime Text Development Build" }).label, "Open in Sublime Text Development Build");
+  assert.equal(e(on).label, "Open in Editor");
+});
+test("Open in <editor> is dimmed when the editor cannot open the file there", () => {
+  const e = (state) => rowMenuItems(state)[2].enabled;
+  assert.equal(e({ ...on, editorFile: false }), false);
+  assert.equal(e({ ...on, editorFile: true }), true);
+  assert.equal(e(on), true);
+  for (const editorFile of [false, true, undefined]) assert.equal(e({ ...on, isDir: true, editorFile }), false);
 });
 test("paste in the root menu is dimmed without clipboard", () => {
   assert.equal(rootMenuItems(off).find((i) => i.action === "paste").enabled, false);
@@ -60,7 +78,9 @@ test("Show in Finder is dimmed on a machine for files and folders, Open and Open
 test("menu height matches the item count", () => {
   assert.equal(menuHeight(rowMenuItems(on)), 488);
   assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 516, "a folder has Calculate Size (issue #58)");
-  assert.equal(menuHeight(rootMenuItems(on)), 103);
+  assert.equal(menuHeight(rootMenuItems(on)), 138);
+  assert.equal(menuHeight(rootMenuItems({ ...on, editorFolder: false })), 138);
+  assert.equal(menuHeight(rowMenuItems({ ...on, editorFile: false })), 488);
   assert.equal(MENU_WIDTH, 200);
 });
 

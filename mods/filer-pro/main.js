@@ -7,7 +7,7 @@ import { createJobs } from "./lib/jobs.js";
 import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
 import { claim, processRequest, handleRequest, closeAnswer, panelPlan, answerShow, openResult, modeResult } from "./lib/requests.js";
 import { loadConfig } from "./lib/config.js";
-import { editInTerminal, openInEditor } from "./lib/editors.js";
+import { editInTerminal, openInEditor, editorMenu } from "./lib/editors.js";
 import { createUpdateGate, updateCheck, fetchLatest, fetchRelease, localVersion, updateHint } from "./lib/update.js";
 import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
@@ -445,7 +445,8 @@ export default class FilerPro extends View {
       };
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
-      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents }),
+      const ed = p.editor ?? editorMenu(null);
+      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents }),
         size: sizeDetail(sized, Date.now()), sizeTitle: sizeNote(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -458,16 +459,18 @@ export default class FilerPro extends View {
         close();
       };
       const toClipboard = (text, cx) => { writeClipboard(text, { cx, exec, notify, platform }).finally(close); };
-      // Open in Editor and Edit in Terminal (lib/editors.js): the popup closes once the lookup and the start returned.
+      // Open in <editor> and Edit in Terminal (lib/editors.js): the popup closes once the lookup and the start returned. The name
+      // comes with the props (an overlay copy never reads the config); the click loads the config itself, so the editor that
+      // starts is the configured one. The free-area entry opens the shown root (p.root) as a folder.
       const config = () => loadConfig(readTextFile, appHome, home);
-      const editor = (action, title, deps) => {
-        action({ machine: p.machine ?? null, path: p.path }, { loadConfig: config, notify, ...deps })
+      const editor = (action, title, deps, target = { path: p.path }) => {
+        action({ machine: p.machine ?? null, ...target }, { loadConfig: config, notify, ...deps })
           .catch((e) => notify({ title: `${title} failed`, body: String(e?.message ?? e), level: "error" })).finally(close);
       };
       return menuView(t, items, {
         open: () => openWith("default"),
         open_preview: () => openWith("preview"),
-        open_editor: () => editor(openInEditor, "Open in Editor", { hc, exec, home }),
+        open_editor: () => editor(openInEditor, `Open in ${ed.name}`, { hc, exec, home }, p.scope === "root" ? { path: p.root, folder: true } : { path: p.path }),
         edit_terminal: () => editor(editInTerminal, "Edit in Terminal", { focused, spaces, run }),
         // dimmed on a machine (rowMenuItems remote): Show in Finder would download first; Cmd+click still does
         reveal: () => {
@@ -2030,7 +2033,7 @@ export default class FilerPro extends View {
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))
         .child(dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
@@ -2101,7 +2104,7 @@ export default class FilerPro extends View {
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           if (!this.root) return;
-          openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
+          openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
         })
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.entries.get("")?.denied ? NO_LIST_MESSAGE : this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total)))))

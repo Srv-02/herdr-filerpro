@@ -98,20 +98,21 @@ export function terminalProblem(raw) {
   return null;
 }
 
-// Why an own GUI editor { local, remote? } cannot be used, or null. An empty remote is fine (no remote files then);
-// lib/config.js drops a broken remote alone, the dialog refuses it so nothing typed is lost silently.
+// Why an own GUI editor { local, remote?, remote_folder? } cannot be used, or null. An empty remote is fine (no remote
+// files then), an empty remote_folder too (no folder on a machine); lib/config.js drops a broken one alone, the dialog
+// refuses it so nothing typed is lost silently.
 export function guiProblem(raw) {
   if (!filled(raw?.local)) return "Local command is required";
   if (!splitCommand(raw.local)) return "Local command: Unbalanced quote";
   if (!hasPath(raw.local)) return "Local command needs {path} or {path_uri}";
   if (raw.local.includes("{target}")) return "Local command must not use {target}";
-  return remoteProblem(raw.remote);
+  return remoteProblem(raw.remote) ?? remoteProblem(raw.remote_folder, "Remote folder command");
 }
 
-export function remoteProblem(remote) {
+export function remoteProblem(remote, label = "Remote command") {
   if (!filled(remote)) return null;
-  if (!splitCommand(remote)) return "Remote command: Unbalanced quote";
-  return hasPath(remote) ? null : "Remote command needs {path} or {path_uri}";
+  if (!splitCommand(remote)) return `${label}: Unbalanced quote`;
+  return hasPath(remote) ? null : `${label} needs {path} or {path_uri}`;
 }
 
 // The keys whose value differs from the one shown when the dialog opened (deep, by JSON). Only these are written,

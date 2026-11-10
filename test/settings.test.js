@@ -131,6 +131,10 @@ test("terminalProblem and guiProblem name the reason", () => {
   assert.equal(guiProblem({ local: "ed {target} {path}" }), "Local command must not use {target}");
   assert.equal(guiProblem({ local: "ed {path}", remote: "ed 'x" }), "Remote command: Unbalanced quote");
   assert.equal(guiProblem({ local: "ed {path}", remote: "ed --ssh {target}" }), "Remote command needs {path} or {path_uri}");
+  assert.equal(guiProblem({ local: "ed {path}", remote_folder: "ed 'x" }), "Remote folder command: Unbalanced quote");
+  assert.equal(guiProblem({ local: "ed {path}", remote_folder: "ed --ssh {target}" }), "Remote folder command needs {path} or {path_uri}");
+  assert.equal(guiProblem({ local: "ed {path}", remote_folder: "ed --ssh {target} --dir {path}" }), null);
+  assert.equal(guiProblem({ local: "ed {path}", remote_folder: "" }), null);
 });
 
 test("changedEdits: only fields that differ from the values shown at open", () => {

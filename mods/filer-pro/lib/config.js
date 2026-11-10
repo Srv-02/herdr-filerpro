@@ -2,7 +2,7 @@ import { TERMINAL_EDITORS, GUI_EDITORS, DEFAULT_TERMINAL_EDITOR, DEFAULT_GUI_EDI
 import { numbers, terminalProblem, guiProblem, remoteProblem, validateField } from "./settings.js";
 
 // Config: appHome()/filer-pro.json. Keys: download_folder, preview, mermaid, perf, update_check, terminal_editor,
-// terminal_editors, gui_editor, gui_editors, node_path, svg_check, hide_system_files, hide_dotfiles,
+// terminal_editors, gui_editor, gui_editors ({ name, local, remote?, remote_folder? }), node_path, svg_check, hide_system_files, hide_dotfiles,
 // double_click_files, double_click_apps, extract_space_check, warn_cross_copy, show_sizes and the numbers of lib/settings.js (NUMBERS).
 // A missing or broken file, or a value of the wrong type, means the default; a number out of range is clamped.
 
@@ -24,12 +24,13 @@ function entries(list, check) {
 // The path is always appended as its own word, so a command with {path} is refused (it would get the file twice).
 const terminalEntry = (raw, name) => (terminalProblem(raw) == null ? { name, command: raw.command.trim() } : null);
 
-// gui_editors: [{ name, local, remote? }]; each template needs {path} or {path_uri}; local must not use {target}
-// (a local file has none); a missing or broken remote is null (this editor then cannot open files on a machine).
+// gui_editors: [{ name, local, remote?, remote_folder? }]; each template needs {path} or {path_uri}; local must not use
+// {target} (a local file has none); a missing or broken remote is null (this editor then cannot open files on a machine),
+// and so is remote_folder (it then cannot open a folder on a machine: the free-area menu entry is dimmed there).
 function guiEntry(raw, name) {
   if (guiProblem({ local: raw.local }) != null) return null;
-  const remote = typeof raw.remote === "string" && raw.remote.trim() !== "" && remoteProblem(raw.remote) == null ? raw.remote.trim() : null;
-  return { name, local: raw.local.trim(), remote };
+  const template = (v, label) => (typeof v === "string" && v.trim() !== "" && remoteProblem(v, label) == null ? v.trim() : null);
+  return { name, local: raw.local.trim(), remote: template(raw.remote), remote_folder: template(raw.remote_folder) };
 }
 
 // The chosen name if a shipped or own entry has it, else the default.

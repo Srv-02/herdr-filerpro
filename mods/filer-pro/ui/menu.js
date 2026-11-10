@@ -2,9 +2,10 @@
 import { div } from "gpui-kit";
 import { v_flex } from "gpui-base";
 
-// detail: a short text at the right of the entry (text 11, muted), e.g. the result of Calculate Size.
+// detail: a short text at the right of the entry (text 11, muted), e.g. the result of Calculate Size. Every label is cut with
+// an ellipsis at the popup width (a long editor name in "Open in <editor>").
 const withDetail = (el, id, label, detail, t) => (detail ? el.justify_between().gap(8).child(div().min_w(0).truncate().child(label))
-  .child(div().id(`${id}-detail`).flex_none().text_size(11).text_color(t.muted).child(detail)) : el.child(label));
+  .child(div().id(`${id}-detail`).flex_none().text_size(11).text_color(t.muted).child(detail)) : el.child(div().min_w(0).truncate().child(label)));
 
 const tip = (el, title) => (title ? el.tooltip(title) : el);
 
