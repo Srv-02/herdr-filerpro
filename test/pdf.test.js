@@ -335,7 +335,7 @@ test("main.js: PDFs are decided before the text is read, Load starts a quiet job
   assert.ok(main.includes("previewer.createPdfs({") && main.includes("platform: window()?.platform"), "pdfs are created with the window's platform");
   assert.match(main, /loadLarge\(cx\) \{/, "the Load click has its own handler");
   const body = (name) => { const i = main.indexOf(`  ${name}(`); return main.slice(i, main.indexOf("\n  }\n", i)); };
-  for (const m of ["show", "showHint", "turnPage"]) assert.ok(!body(m).includes("clearLoads(") && !body(m).includes("jobs.start("), `${m}() never clears loads and never starts a job (review B1)`);
+  for (const m of ["show", "showHint", "turnPage", "showPages"]) assert.ok(!body(m).includes("clearLoads(") && !body(m).includes("jobs.start("), `${m}() never clears loads and never starts a job (review B1)`);
   assert.ok(body("loadLarge").includes("clearLoads({") && body("loadLarge").includes("fetchLoad(") && body("loadLarge").includes("force: true"), "Load clears, then fetches (job) or shows with force (local PDF)");
   assert.ok(body("fetchLoad").includes("previewJob(") && body("fetchLoad").includes("fs.exists(dest)"), "a running job is joined, a present file is shown, else a job starts (review B2)");
   assert.match(main, /jobs\.start\(\{[^}]*direction: on \? "down" : "local"[^}]*choice: "new"[^}]*preview: true, as: name/, "the Load is a quiet down (remote) or local job under the fixed name");
@@ -343,7 +343,7 @@ test("main.js: PDFs are decided before the text is read, Load starts a quiet job
   assert.ok(body("loadLarge").includes("viaJob(name)") && main.includes('extOf(name ?? "") !== "pdf"'), "local images go through the job, local PDFs stay with show(force)");
   assert.ok(body("showHint").includes("viaJob(doc.name)") && body("waitLoad").includes("viaJob(this.loadName)"), "the dialog points to the panel for a local image too, as for a machine");
   assert.ok(body("showHint").includes("previewJob(") && body("showHint").includes('" · Load it in the panel"'), "the dialog joins a running job or points to the panel");
-  assert.ok(body("turnPage").includes("showHint("), "a hint while turning pages gets the same treatment");
+  assert.ok(body("showPages").includes("showHint("), "a hint while turning pages gets the same treatment");
   assert.ok(!body("fileOverlay").includes("jobs") && !body("overlayView").includes("jobs"), "the dialog never starts jobs");
   assert.ok(main.includes('while (j?.state === "running" && this.waiting === wait && this.file === path && this.current(context))'), "the poll stops with the file and with a newer wait");
   assert.ok(main.includes("loadOutcome(j)") && main.includes('"Loading… · progress in the transfers bar"'));

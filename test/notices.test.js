@@ -46,7 +46,7 @@ test("the README names credits, preview, turning off and removing", () => {
 
 test("the settings and edit glyphs are small Lucide SVGs in currentColor, each named in the notices", () => {
   const root = read("THIRD_PARTY_NOTICES.md");
-  for (const name of ["settings", "check", "coffee", "external-link", "info", "loader-circle", "shield-exclamation-point", "github", "pencil", "undo-2", "redo-2", "circle-x", "save", "copy-plus", "refresh-cw"]) {
+  for (const name of ["settings", "check", "coffee", "external-link", "info", "loader-circle", "shield-exclamation-point", "github", "pencil", "undo-2", "redo-2", "circle-x", "save", "copy-plus", "refresh-cw", "chevron-left", "zoom-in", "zoom-out", "move-horizontal", "book-open"]) {
     const svg = read(`mods/filer-pro/${name}.svg`);
     assert.ok(svg.length < 2048, `${name}: small`);
     assert.match(svg, /viewBox="0 0 24 24"/, name);

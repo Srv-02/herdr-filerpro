@@ -28,6 +28,7 @@ import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, limitText } from "./lib/tree.js";
 import { numbers } from "./lib/settings.js";
 import { GIT_PLACE_ARGS, gitPlace, gitPrefix, gitWatchDirs, gitWatchHit, rootRelative } from "./lib/gitmarks.js";
+import { bindZoomKeys } from "./lib/pdfkeys.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
@@ -136,6 +137,8 @@ export default class FilerPro extends View {
         // The fullscreen copy of one file: reads it itself with the panel's show(), under a fixed context.
         this.context = { key: null, cwd: props().root, on: props().machine ?? null, fixed: true };
         this.root = this.context.cwd; this.on = this.context.on;
+        this.fullView = true; this.pdfFocus = cx.focus_handle(); this.spread = shared("filer-pro.spread") === true;
+        bindZoomKeys(cx, shared, setShared, Date.now);
         this.show(props().path, cx, { mode: props().mode, page: props().page, pages: props().pages, force: props().force });
         this.startFullscreen(cx);
       }
@@ -888,6 +891,8 @@ export default class FilerPro extends View {
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
     this.leaveEdit(); this.editCheck = null; this.bigSaved = null;
+    if (path !== this.file) this.zoom = "fit"; // the zoom stays while the same file is shown again, a new file starts at Fit
+    this.doc2 = null; this.sharp = new Map();
     this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false; this.shownText = null; this.docText = null; this.waiting = null;
     if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null;
@@ -931,11 +936,16 @@ export default class FilerPro extends View {
           const loader = kind === "pdf"
             ? (this.pdfs ??= previewer.createPdfs({ exec, hc, exists: fs.exists, unlink: fs.unlink, mkdir: fs.mkdir, readFile: fs.readFile, appHome, platform: window()?.platform }))
             : (this.images ??= previewer.createImages({ exec, hc, exists: fs.exists, unlink: fs.unlink, appHome }));
+          if (kind === "pdf" && this.fullView && this.spread) this.page = previewer.spreadStart(this.page); // a spread starts at its first page
           const doc = await loader.load({ on, path: joinPath(root, path), page: this.page, pages: this.pages, force: opts.force, ...this.loadLimits(cfg) });
           if (this.file !== path || !this.current(context)) return;
           if (doc.load) { this.showHint(previewer, doc, path, cx); return; }
           if (doc.error && (doc.final || extOf(path) !== "svg")) { this.fileError = doc.error; return; }
-          if (!doc.error) { this.previewer = previewer; this.doc = doc; this.mode = "preview"; if (doc.pages) { this.page = doc.page; this.pages = doc.pages; } return; }
+          if (!doc.error) {
+            this.previewer = previewer; this.doc = doc; this.mode = "preview"; if (doc.pages) { this.page = doc.page; this.pages = doc.pages; }
+            if (this.fullView && doc.kind === "pdf") this.pdfReady(previewer, cx);
+            return;
+          }
           previewer = null; // an SVG without a size: its source in the editor
         }
         // r: { ok: true, text, edit } | { ok: false, message, binary }. On a machine one bounded exec (lib/readfile.js)
@@ -1229,7 +1239,7 @@ export default class FilerPro extends View {
           const fresh = await loader.load({ on, path: joinPath(root, path), page: this.page, pages: this.pages, force: this.force, ...this.loadLimits(cfg ?? undefined) });
           if (!still()) { retry(); return; }
           if (fresh.error || fresh.load) { this.show(path, cx, { page: this.page, pages: this.pages, force: this.force }); return; }
-          if (fresh.path !== doc.path) { this.doc = fresh; if (fresh.pages) { this.page = fresh.page; this.pages = fresh.pages; } }
+          if (fresh.path !== doc.path) { this.sharp = new Map(); this.doc2 = null; this.doc = fresh; if (fresh.pages) { this.page = fresh.page; this.pages = fresh.pages; } }
           return;
         }
         const big = this.bigSaved;
@@ -1618,19 +1628,113 @@ export default class FilerPro extends View {
     });
   }
 
+  // The dialog's PDF is on screen: focus for the zoom keys (again after 600 ms, as the permissions dialog does), then the
+  // second page of a spread or the sharper render for the zoom.
+  pdfReady(previewer, cx) {
+    this.pdfFocus?.focus();
+    cx.timer.after(600, () => this.pdfFocus?.focus());
+    if (this.spread) this.showPages(this.page, cx, true);
+    else this.sharpen(cx);
+  }
+
   // Previous/Next: the counter jumps at once, the old page stays until the new one is rastered or found in the cache.
-  turnPage(n, cx) {
+  turnPage(n, cx) { this.showPages(n, cx, false); }
+
+  // Shows page n (in the dialog's spread mode the spread holding it). again: also when n is the page already shown (spread
+  // toggled, the dialog just opened). A newer turn (turnGen) drops an older one. Both pages of a spread land together;
+  // when only the second fails, the first is shown alone.
+  showPages(n, cx, again) {
     const path = this.file, context = this.context, on = this.on, previewer = this.previewer;
-    if (!this.pdfs || !this.pages || n < 1 || n > this.pages || n === this.page) return;
+    if (!this.pdfs || !this.pages || n < 1 || n > this.pages) return;
+    const two = Boolean(this.fullView && this.spread);
+    if (two) n = previewer.spreadStart(n);
+    if (!again && n === this.page) return;
     this.page = n; cx.notify();
+    const gen = this.turnGen = (this.turnGen ?? 0) + 1;
+    const list = two ? previewer.spreadPages(n, this.pages) : [n];
     cx.spawn(async (cx) => {
-      const doc = await this.pdfs.load({ on, path: joinPath(this.root, path), page: n, pages: this.pages, force: this.force, ...this.loadLimits() });
-      if (this.file !== path || this.page !== n || !this.current(context)) return;
-      if (doc.load) this.showHint(previewer, doc, path, cx); // the loaded copy was cleared meanwhile
-      else if (doc.error) this.fileError = doc.error;
-      else { this.doc = doc; this.fileError = null; }
+      const docs = await Promise.all(list.map((page) => this.pdfs.load({ on, path: joinPath(this.root, path), page, pages: this.pages, force: this.force, ...this.loadLimits() })));
+      if (this.file !== path || this.page !== n || gen !== this.turnGen || !this.current(context)) return;
+      const bad = docs.find((d) => d.load) ?? (docs[0].error ? docs[0] : null);
+      if (bad?.load) this.showHint(previewer, bad, path, cx); // the loaded copy was cleared meanwhile
+      else if (bad) this.fileError = bad.error;
+      else {
+        const ok = docs.filter((d) => !d.error);
+        this.doc = ok[0]; this.doc2 = ok[1] ?? null; this.fileError = null;
+        const shown = new Set(ok.map((d) => d.page));
+        this.sharp = new Map([...(this.sharp ?? [])].filter(([page]) => shown.has(page)));
+        if (this.fullView) this.sharpen(cx);
+      }
       cx.notify();
     });
+  }
+
+  // The pages on screen: one, or two in the dialog's spread mode.
+  shownPdf() { return this.fullView && this.spread && this.doc2 ? [this.doc, this.doc2] : [this.doc]; }
+  pdfLayout() { return this.previewer.layout(this.shownPdf(), this.zoom, this.previewWidth); }
+
+  // A sharper render for the zoomed dialog, 250 ms after the first request of a burst (zoom steps, width changes, page
+  // turns); the timer reads the state when it fires. The old bitmap stays on screen until the new one is there.
+  sharpen(cx) {
+    if (!this.fullView || this.doc?.kind !== "pdf" || !this.previewer || this.sharpTimer) return;
+    this.sharpTimer = true;
+    cx.timer.after(250, () => { this.sharpTimer = false; this.sharpNow(cx); });
+  }
+
+  sharpNow(cx) {
+    const previewer = this.previewer, path = this.file, context = this.context, on = this.on, root = this.root;
+    if (!this.fullView || this.doc?.kind !== "pdf" || !previewer || !this.pdfs) return;
+    const docs = this.shownPdf(), lay = this.pdfLayout();
+    this.sharp ??= new Map(); this.sharpening ??= new Set();
+    const name = (p) => p.slice(p.lastIndexOf("/") + 1);
+    docs.forEach((doc, i) => {
+      const need = previewer.renderSize(lay.items[i], doc);
+      if (!need) return;
+      const cur = this.sharp.get(doc.page);
+      if (cur && cur.base === doc.path && cur.size >= need) return;
+      const key = `${doc.page}:${need}`;
+      if (this.sharpening.has(key)) return;
+      this.sharpening.add(key);
+      const keep = docs.flatMap((d) => [d.path, this.sharp.get(d.page)?.path]).filter(Boolean).map(name);
+      const tiers = previewer.RENDER_TIERS.filter((s) => s <= need).sort((a, b) => b - a);
+      cx.spawn(async (cx) => {
+        try {
+          let got = null, record = false;
+          for (const size of tiers) {
+            const r = await this.pdfs.load({ on, path: joinPath(root, path), page: doc.page, pages: this.pages, force: this.force, size, keep, ...this.loadLimits() });
+            if (r.error && r.tooLarge) { record = true; continue; } // the next lower tier; none fits: no retry (path null)
+            record = !r.error && !r.load;
+            if (record) got = r.path;
+            break; // another error: the base bitmap stays
+          }
+          if (!record || this.file !== path || !this.current(context)) return;
+          const shown = this.shownPdf().find((d) => d.page === doc.page);
+          if (!shown || shown.path !== doc.path) return;
+          const old = this.sharp.get(doc.page);
+          if (old && old.base === doc.path && old.size >= need) return;
+          this.sharp.set(doc.page, { size: need, path: got, base: doc.path });
+          cx.notify();
+        } finally { this.sharpening.delete(key); }
+      });
+    });
+  }
+
+  zoomBy(dir, cx) {
+    if (!this.fullView || this.doc?.kind !== "pdf" || !this.previewer) return;
+    const next = this.previewer.zoomStep(this.zoom, this.pdfLayout().percent, dir);
+    if (next === this.zoom) return;
+    this.zoom = next; cx.notify(); this.sharpen(cx);
+  }
+
+  toggleSpread(cx) {
+    this.spread = !this.spread; setShared("filer-pro.spread", this.spread);
+    this.showPages(this.page, cx, true);
+  }
+
+  onWheel(e, cx) {
+    const { acc, dir } = this.previewer.wheelZoom(this.wheel ?? 0, e);
+    this.wheel = acc;
+    if (dir) this.zoomBy(dir, cx);
   }
 
   // Draws the diagrams of the open preview one after the other (a Node child process, see preview/diagrams.js).
@@ -1649,19 +1753,35 @@ export default class FilerPro extends View {
   // Header buttons of the preview module: Preview/Source and Open in browser (local HTML).
   previewTools(t) {
     if (!this.previewer || !this.doc || !this.file || this.edit) return [];
-    return this.previewer.tools(this.doc, { mode: this.mode, canOpen: !this.on, page: this.page, pages: this.pages }, t, {
+    const full = Boolean(this.fullView), pdf = full && this.doc.kind === "pdf";
+    return this.previewer.tools(this.doc, { mode: this.mode, canOpen: !this.on, page: this.page, pages: this.pages, full, spread: Boolean(this.spread), percent: pdf ? this.pdfLayout().percent : 100, fit: this.zoom === "fit" }, t, {
       onToggle: (cx) => { this.mode = this.mode === "preview" ? "source" : "preview"; cx.notify(); },
       onOpen: (cx) => cx.spawn(async () => { await openRegularFile(joinPath(this.root, this.file), { exec, notify, platform }); }),
       onPage: (n, cx) => this.turnPage(n, cx),
+      onZoom: (dir, cx) => this.zoomBy(dir, cx),
+      onSpread: (cx) => this.toggleSpread(cx),
     });
   }
 
   viewer(t) {
     if (this.loader) return this.loader.largeNote(this.fileError, t, (cx) => this.loadLarge(cx));
     // An image or a PDF page has no EditorState: its view comes first and ignores mode (a "mode" request may set source).
-    if (!this.fileError && this.previewer && this.doc && (this.mode === "preview" || this.doc.kind === "image" || this.doc.kind === "pdf"))
-      return this.previewer.view(this.doc, { t, font: settings().font_family, file: this.file, width: this.previewWidth },
-        { onWidth: (w, cx) => { if (w !== this.previewWidth) { this.previewWidth = w; cx.notify(); } } });
+    if (!this.fileError && this.previewer && this.doc && (this.mode === "preview" || this.doc.kind === "image" || this.doc.kind === "pdf")) {
+      // The dialog's PDF gets its own pages view: items are the laid-out pages, each with the sharper bitmap once it exists.
+      const pdf = this.fullView && this.doc.kind === "pdf" ? {
+        items: this.pdfLayout().items.map((item, i) => {
+          const doc = this.shownPdf()[i], hit = this.sharp?.get(doc.page);
+          return { ...item, path: hit?.path && hit.base === doc.path ? hit.path : doc.path };
+        }),
+        focus: this.pdfFocus,
+      } : undefined;
+      return this.previewer.view(this.doc, { t, font: settings().font_family, file: this.file, width: this.previewWidth, pdf },
+        {
+          onWidth: (w, cx) => { if (w !== this.previewWidth) { this.previewWidth = w; if (this.fullView) this.sharpen(cx); cx.notify(); } },
+          onZoom: (dir, cx) => this.zoomBy(dir, cx),
+          onWheel: (e, cx) => this.onWheel(e, cx),
+        });
+    }
     if (!this.code && this.openable && this.fileError) return this.binaryView(t);
     if (!this.code) return div().p(12).text_color(t.dim).child(this.fileError || ({ image: "Loading image…", pdf: "Loading PDF…" }[previewKind(this.file)] ?? "Loading file…"));
     if (this.edit) return this.editView(t);
