@@ -58,7 +58,7 @@ globalThis.__impl = {
       const sizes = list.filter((n) => !n.endsWith("/")).map((n) => n.split(":")[1]).join("\n");
       return { code: 0, stdout: args[8] === "1" ? `${pairs}S\0${sizes}\0` : pairs, stderr: "" };
     }
-    if (cmd === "sh" && args[1] === SIZE_SCRIPT) return host.size(args[3], opts);
+    if (cmd === "sh" && args[1] === SIZE_SCRIPT) return host.size(args[3], opts, args.slice(2));
     return { code: 1, stdout: "", stderr: "" };
   },
 };
@@ -105,6 +105,15 @@ test("show_sizes off: the listing gets no size argument and the rows have no siz
   assert.equal(self.entryAt("a.md").size, undefined);
 });
 
+test("show_sizes is on before the config was read (issue #73)", async () => {
+  Object.assign(host, { config: null, shared: {}, calls: [], notes: [], overlay: null, closed: 0, on: null });
+  const self = Object.create(FilerPro.prototype);
+  Object.assign(self, { cfg: null, context: null, saved: new Map(), nav: new Map(), reload: { signal: () => false, take: () => false }, jobs: {}, perf: null, entries: new Map(), folders: new Set(), pending: new Set(), marks: {} });
+  self.refresh(cx);
+  await settle();
+  assert.deepEqual(lists()[0][1].slice(1), ["/r", "500", "1", "0", "0", "1"]);
+});
+
 test("show_sizes on: one listing call per folder carries the sizes; files show them, folders a dash, a package nothing", async () => {
   const self = await panel();
   self.folders.add("src"); self.refresh(cx); await settle();
@@ -128,7 +137,7 @@ test("show_sizes on: one listing call per folder carries the sizes; files show t
 test("Calculate Size: the menu asks, the panel runs SIZE_SCRIPT once with a 120 s limit, the size shows in the row and the menu", async () => {
   const self = await panel();
   const asked = [];
-  host.size = async (path, opts) => { asked.push([path, opts]); return { code: 0, stdout: "2400000\n", stderr: "" }; };
+  host.size = async (_path, opts, argv) => { asked.push([argv, opts]); return { code: 0, stdout: "2400000\n", stderr: "" }; };
   const before = menu("/r/src");
   const entry = findId(before, "filer-pro-menu-calculate-size");
   assert.equal(textOf(entry), "Calculate Size");
@@ -141,11 +150,11 @@ test("Calculate Size: the menu asks, the panel runs SIZE_SCRIPT once with a 120 
   assert.equal(host.shared["filer-pro.sizes"][key].state, "running");
   assert.ok(called(findId(self.render(cx), "file-src-size"), "child").some(([c]) => called(c, "spin").length), "a spinner while it runs");
   await settle();
-  assert.deepEqual(asked, [["/r/src", { on: null, timeout: 120000 }]]);
+  assert.deepEqual(asked, [[["size", "/r/src", "120"], { on: null, timeout: 125000 }]]);
   self.pollSizes(cx); await settle();
   assert.equal(asked.length, 1, "claimed once");
-  assert.equal(textOf(cell(self.render(cx), "src")), "2.4 MB");
-  assert.equal(textOf(findId(menu("/r/src"), "filer-pro-menu-calculate-size-detail")), "2.4 MB");
+  assert.equal(textOf(cell(self.render(cx), "src")), "~2.4 MB");
+  assert.equal(textOf(findId(menu("/r/src"), "filer-pro-menu-calculate-size-detail")), "~2.4 MB");
   assert.deepEqual(host.notes, []);
   // Refresh forgets it: the size is a snapshot.
   called(findId(self.render(cx), "files-refresh"), "on_click")[0][0]({}, cx); await settle();
@@ -159,12 +168,12 @@ test("Calculate Size on a package shows its size; on a machine it runs there", a
   called(findId(menu("/r/src"), "filer-pro-menu-calculate-size"), "on_click")[0][0]({}, cx);
   self.pollSizes(cx); await settle();
   assert.deepEqual(asked, [["/r/src", "box"]]);
-  assert.equal(textOf(cell(self.render(cx), "src")), "1.5 kB");
+  assert.equal(textOf(cell(self.render(cx), "src")), "~1.5 kB");
 
   const local = await panel();
   called(findId(menu("/r/Tool.app", { bundle: true }), "filer-pro-menu-calculate-size"), "on_click")[0][0]({}, cx);
   local.pollSizes(cx); await settle();
-  assert.equal(textOf(cell(local.render(cx), "Tool.app")), "2.4 MB");
+  assert.equal(textOf(cell(local.render(cx), "Tool.app")), "~2.4 MB");
 });
 
 test("Calculate Size that uses up the time limit shows Too large to calculate; a failure a toast and the dash again", async () => {
@@ -187,6 +196,38 @@ test("Calculate Size that uses up the time limit shows Too large to calculate; a
   self.pollSizes(cx); await settle();
   assert.equal(textOf(cell(self.render(cx), "src")), "—");
   assert.deepEqual([host.notes.at(-1).title, host.notes.at(-1).level], ["Calculate Size failed", "error"]);
+});
+
+test("Calculate Size with an unreadable subfolder: ~size and the tooltip in the column and on the menu entry, no toast", async () => {
+  const self = await panel();
+  host.size = async () => ({ code: 0, stdout: "2400000 partial\n", stderr: "" });
+  called(findId(menu("/r/src"), "filer-pro-menu-calculate-size"), "on_click")[0][0]({}, cx);
+  self.pollSizes(cx); await settle();
+  const c = cell(self.render(cx), "src");
+  assert.equal(textOf(c), "~2.4 MB");
+  assert.deepEqual(called(c, "tooltip"), [["Some folders could not be read"]]);
+  const entry = findId(menu("/r/src"), "filer-pro-menu-calculate-size");
+  assert.deepEqual(called(entry, "tooltip"), [["Some folders could not be read"]]);
+  assert.equal(textOf(findId(menu("/r/src"), "filer-pro-menu-calculate-size-detail")), "~2.4 MB");
+  assert.deepEqual(host.notes, []);
+  // a complete sum has no tooltip on either
+  host.size = async () => ({ code: 0, stdout: "2400000\n", stderr: "" });
+  called(findId(menu("/r/src"), "filer-pro-menu-calculate-size"), "on_click")[0][0]({}, cx);
+  self.pollSizes(cx); await settle();
+  assert.deepEqual(called(cell(self.render(cx), "src"), "tooltip"), []);
+  assert.deepEqual(called(findId(menu("/r/src"), "filer-pro-menu-calculate-size"), "tooltip"), []);
+});
+
+test("Calculate Size: the script's timeout answer shows Too large", async () => {
+  const self = await panel();
+  host.size = async () => ({ code: 0, stdout: "0 timeout\n", stderr: "" });
+  called(findId(menu("/r/src"), "filer-pro-menu-calculate-size"), "on_click")[0][0]({}, cx);
+  self.pollSizes(cx); await settle();
+  const c = cell(self.render(cx), "src");
+  assert.equal(textOf(c), "Too large");
+  assert.deepEqual(called(c, "tooltip"), [["Too large to calculate"]]);
+  assert.match(host.notes.at(-1).body, /^Too large to calculate/);
+  assert.equal(host.notes.at(-1).level, "info");
 });
 
 test("a panel that does not show the folder leaves the request to the one that does", async () => {

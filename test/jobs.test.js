@@ -96,6 +96,46 @@ test("total probe slower than 25 s: total is null", async () => {
   assert.equal((await jobs.start(down())).total, null);
 });
 
+test("total probe: the limit is 25 s in the script and 30 s for exec", async () => {
+  const { f, jobs } = setup();
+  f.sizes[SRC] = 100;
+  await jobs.start(down());
+  const call = f.execCalls.find((c) => c.args[1] === SIZE_SCRIPT);
+  assert.deepEqual(call.args.slice(2), ["size", SRC, "25"]);
+  assert.equal(call.timeout, 30000);
+});
+
+test("total probe incomplete or timed out: total and percent are null, the job still runs", async () => {
+  for (const flag of ["partial", "timeout"]) {
+    const { f, jobs } = setup();
+    f.sizes[SRC] = 100;
+    f.sizeFlags[SRC] = flag;
+    const job = await jobs.start(down());
+    assert.equal(job.total, null, flag);
+    assert.equal(job.percent, null, flag);
+    assert.equal(job.state, "running", flag);
+  }
+});
+
+test("tick: a partial size of the temp still counts as progress; a timeout leaves the bytes and no stall", async () => {
+  const { f, jobs } = setup();
+  f.sizes[SRC] = 200;
+  await jobs.start(down());
+  const temp = `${DIR}/.a.txt.fs-id1.part`;
+  f.sizes[temp] = 50;
+  f.sizeFlags[temp] = "partial";
+  f.t += 2000;
+  await jobs.tick();
+  assert.equal(f.jobs().id1.bytes, 50);
+  f.sizes[temp] = 80;
+  f.sizeFlags[temp] = "timeout";
+  f.t += 2000;
+  await jobs.tick();
+  const j = f.jobs().id1;
+  assert.equal(j.bytes, 50);
+  assert.ok(!j.stalled);
+});
+
 test("tick updates bytes and percent from the temp file", async () => {
   const { f, jobs } = setup();
   f.sizes[SRC] = 200;
@@ -1316,7 +1356,10 @@ test("sourceSize: measured on the source machine (from for cross) with a short t
   f.sizes["/srv2/d"] = 4096;
   assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), 4096);
   const call = f.execsOf("sh").at(-1);
-  assert.deepEqual([call.args[3], call.on, call.timeout], ["/srv2/d", "box2", 5000]);
+  assert.deepEqual([call.args[3], call.args[4], call.on, call.timeout], ["/srv2/d", "5", "box2", 10000]);
+  f.sizeFlags["/srv2/d"] = "partial";
+  assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), null);
+  delete f.sizeFlags["/srv2/d"];
   assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/missing" }), null);
   f.sizeError = new Error("timed out");
   assert.equal(await jobs.sourceSize({ direction: "cross", machine: "box", from: "box2", src: "/srv2/d" }), null);

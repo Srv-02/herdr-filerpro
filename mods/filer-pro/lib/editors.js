@@ -1,4 +1,4 @@
-// Editors for the row menu entries "Edit in Terminal" and "Open in Editor". Pure: main.js runs the result.
+// Editors for the row menu entries "Edit in Terminal" and "Open in <editor name>" (and the free-area entry for a folder). Pure: main.js runs the result.
 // Commands and templates are split into argv words here, without a shell, and the path is always one whole
 // argv element: it is never parsed by a shell, so spaces, quotes, $, backticks and newlines are just characters.
 
@@ -17,13 +17,14 @@ export const TERMINAL_EDITORS = Object.freeze([
 ].map((e) => Object.freeze(e)));
 export const DEFAULT_TERMINAL_EDITOR = "vi";
 
-// Shipped GUI editors (config `gui_editor`, `gui_editors`). `local` opens a file on this computer, `remote` a
-// file on an SSH machine through the editor's own remote mode. VS Code and Cursor get a vscode-remote file URI
-// (--file-uri opens a file; --remote with a path expects a folder), Zed an ssh:// URL. Both need the encoded path.
+// Shipped GUI editors (config `gui_editor`, `gui_editors`). `local` opens a file or folder on this computer, `remote` a
+// file and `remote_folder` a folder on an SSH machine through the editor's own remote mode. VS Code and Cursor get a
+// vscode-remote URI (--file-uri opens a file, --folder-uri a folder; --remote with a path expects a folder), Zed an
+// ssh:// URL for both. All need the encoded path.
 export const GUI_EDITORS = Object.freeze([
-  { name: "VS Code", local: "code {path}", remote: "code --file-uri vscode-remote://ssh-remote+{target}{path_uri}" },
-  { name: "Cursor", local: "cursor {path}", remote: "cursor --file-uri vscode-remote://ssh-remote+{target}{path_uri}" },
-  { name: "Zed", local: "zed {path}", remote: "zed ssh://{target}{path_uri}" },
+  { name: "VS Code", local: "code {path}", remote: "code --file-uri vscode-remote://ssh-remote+{target}{path_uri}", remote_folder: "code --folder-uri vscode-remote://ssh-remote+{target}{path_uri}" },
+  { name: "Cursor", local: "cursor {path}", remote: "cursor --file-uri vscode-remote://ssh-remote+{target}{path_uri}", remote_folder: "cursor --folder-uri vscode-remote://ssh-remote+{target}{path_uri}" },
+  { name: "Zed", local: "zed {path}", remote: "zed ssh://{target}{path_uri}", remote_folder: "zed ssh://{target}{path_uri}" },
 ].map((e) => Object.freeze(e)));
 export const DEFAULT_GUI_EDITOR = "VS Code";
 
@@ -66,12 +67,13 @@ export function terminalArgv(command, path) {
   return [...words, path.startsWith("-") ? `./${path}` : path];
 }
 
-// argv for a GUI editor entry: target null means a local file (template `local`), else `remote` with the SSH target.
+// argv for a GUI editor entry: target null means this computer (template `local`), else `remote` (a file) or, with
+// folder, `remote_folder` with the SSH target.
 // A target with whitespace or "/" (e.g. a whole "ssh ..." line) cannot stand in a URI authority: refused.
-export function guiArgv(entry, { path, target }) {
+export function guiArgv(entry, { path, target, folder = false }) {
   if (target != null && (target === "" || /[\s/]/.test(target))) return { error: `Unusable SSH target for ${entry.name}: ${JSON.stringify(target)}` };
-  const template = target == null ? entry.local : entry.remote;
-  if (typeof template !== "string") return { error: `${entry.name} has no remote template; set "remote" for it in filer-pro.json` };
+  const template = target == null ? entry.local : folder ? entry.remote_folder : entry.remote;
+  if (typeof template !== "string") return { error: folder && target != null ? `${entry.name} has no remote folder template; set "remote_folder" for it in filer-pro.json` : `${entry.name} has no remote template; set "remote" for it in filer-pro.json` };
   const words = splitCommand(template);
   if (!words) return { error: `${entry.name}: the command template is empty or has an unbalanced quote` };
   return { argv: expandTemplate(words, { path, path_uri: pathUri(path), target: target ?? "" }) };
@@ -82,6 +84,13 @@ export function guiArgv(entry, { path, target }) {
 export function pickEditor(name, own, shipped, fallback) {
   const all = [...(Array.isArray(own) ? own : []), ...shipped];
   return all.find((e) => e.name === name) ?? all.find((e) => e.name === fallback);
+}
+
+// What the menus need to know about the chosen GUI editor (plain data, fits into overlay props). cfg: the config of
+// lib/config.js, or null/DEFAULTS before it was read (then the default editor).
+export function editorMenu(cfg) {
+  const e = pickEditor(cfg?.gui_editor, cfg?.gui_editors, GUI_EDITORS, DEFAULT_GUI_EDITOR);
+  return { name: e.name, remote: typeof e.remote === "string", remoteFolder: typeof e.remote_folder === "string" };
 }
 
 const machineOf = (m) => (typeof m === "string" && m !== "" ? m : null);
@@ -125,13 +134,14 @@ export async function editInTerminal({ machine, path }, { loadConfig, focused, s
 // Folders a GUI app's PATH often lacks, where the editors install their command line tools.
 const cliDirs = (home) => ["/opt/homebrew/bin", "/usr/local/bin", `${home}/.local/bin`];
 
-// "Open in Editor": the GUI editor from the config, always started on this computer; a file on a machine opens
-// through the editor's remote mode with the SSH target from `hc machine ls --json`. No check whether the editor
-// exists: a failure shows the exec error. deps: loadConfig, hc, exec, notify, home.
-export async function openInEditor({ machine, path }, { loadConfig, hc, exec, notify, home }) {
-  const fail = (body) => notify({ title: "Open in Editor failed", body, level: "error" });
+// "Open in <editor name>": the GUI editor from the config, always started on this computer; a file (or with
+// folder: true a folder) on a machine opens through the editor's remote mode with the SSH target from
+// `hc machine ls --json`. No check whether the editor exists: a failure shows the exec error. deps: loadConfig, hc,
+// exec, notify, home.
+export async function openInEditor({ machine, path, folder }, { loadConfig, hc, exec, notify, home }) {
   const cfg = await loadConfig();
   const editor = pickEditor(cfg.gui_editor, cfg.gui_editors, GUI_EDITORS, DEFAULT_GUI_EDITOR);
+  const fail = (body) => notify({ title: `Open in ${editor.name} failed`, body, level: "error" });
   let target = null;
   if (machine) {
     let t;
@@ -142,7 +152,7 @@ export async function openInEditor({ machine, path }, { loadConfig, hc, exec, no
     if (t.error) { fail(t.error); return; }
     target = t.target;
   }
-  const built = guiArgv(editor, { path, target });
+  const built = guiArgv(editor, { path, target, folder: folder === true });
   if (built.error) { fail(built.error); return; }
   const [cmd, ...args] = built.argv;
   // A bare command that cannot be spawned is tried again in the usual CLI folders (only then: no pre-check).

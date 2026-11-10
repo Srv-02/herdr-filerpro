@@ -8,7 +8,7 @@ import { sshTarget } from "./machines.js";
 import { explainError as explainRaw, cleanText } from "./errors.js";
 import { platform } from "./platform.js";
 import { afterDownload } from "./open.js";
-import { SIZE_SCRIPT, parseSize } from "./sizes.js";
+import { sizeArgs, SIZE_GRACE_MS, parseSize, parseSizeOutput } from "./sizes.js";
 import { progressOf } from "./progress.js";
 import { LINKS_SCRIPT, parseLinks, linkWarning } from "./links.js";
 import { MOUNT_FN, normalizePath } from "./fileops.js";
@@ -103,9 +103,14 @@ export function createJobs(deps) {
     return r.stdout;
   }
 
-  async function measure(path, on) {
+  // Bytes of a COMPLETE sum, else null (a path the script could not read all of, or that it stopped after SIZE_LIMIT_MS, is unknown).
+  // partial: the temp poll of tick() also takes the lower bound of an incomplete sum, as progress; only a timeout or a failure is null.
+  async function measure(path, on, { partial = false } = {}) {
     try {
-      return parseSize(okOut(await exec("sh", ["-c", SIZE_SCRIPT, "size", path], { on })));
+      const out = okOut(await exec("sh", sizeArgs(path, SIZE_LIMIT_MS), { on, timeout: SIZE_LIMIT_MS + SIZE_GRACE_MS }));
+      if (!partial) return parseSize(out);
+      const v = parseSizeOutput(out);
+      return v && !v.timedOut ? v.bytes : null;
     } catch {
       return null;
     }
@@ -115,7 +120,7 @@ export function createJobs(deps) {
   // longer than timeoutMs, so a big folder never holds the dialog up.
   async function sourceSize({ direction, machine, from, src }, timeoutMs = SOURCE_SIZE_MS) {
     try {
-      return parseSize(okOut(await exec("sh", ["-c", SIZE_SCRIPT, "size", src], { on: srcOn(direction, machine, from), timeout: timeoutMs })));
+      return parseSize(okOut(await exec("sh", sizeArgs(src, timeoutMs), { on: srcOn(direction, machine, from), timeout: timeoutMs + SIZE_GRACE_MS })));
     } catch {
       return null;
     }
@@ -523,7 +528,7 @@ export function createJobs(deps) {
   async function tick() {
     for (const snap of running()) {
       if (!snap.terminal) continue;
-      const size = await measure(snap.temp, destOn(snap.direction, snap.machine));
+      const size = await measure(snap.temp, destOn(snap.direction, snap.machine), { partial: true });
       const cur = get(snap.id);
       if (cur?.state !== "running") continue;
       const p = progressOf({ bytes: cur.bytes, at: cur.at, lastGrowthAt: cur.lastGrowthAt, rate: cur.rate }, size ?? cur.bytes, cur.total, now(), limits().stall_seconds * 1000);

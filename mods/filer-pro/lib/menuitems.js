@@ -4,15 +4,18 @@ export const MENU_WIDTH = 200;
 const ITEM_H = 28, SEPARATOR_H = 7, PADDING = 8, RESERVE = 4;
 
 const SEPARATOR = { separator: true };
+const openIn = (editor) => `Open in ${editor || "Editor"}`;
 const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action.replace(/_/g, "-")}`, label, action, enabled });
 
-// state: { paste: { enabled, reason }, isDir?, name?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
-// Open in Editor and Edit in Terminal are dimmed; name: the file name, an archive (lib/archives.js) gets Extract Here and Extract to "<name>/"
+// state: { paste: { enabled, reason }, editor?, editorFile?, editorFolder?, isDir?, name?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
+// Open in <editor> and Edit in Terminal are dimmed; editor: the name of the configured GUI editor (label "Open in <editor>", "Open in Editor"
+// without a name; ui/menu.js cuts a long one), editorFile false: it has no remote template, the row entry is dimmed on a machine, editorFolder
+// false: no remote_folder, the free-area entry is dimmed on a machine; name: the file name, an archive (lib/archives.js) gets Extract Here and Extract to "<name>/"
 // below Download, not on a local Windows side; remote: the row is on a machine, Show in Finder is dimmed because it would download first;
 // bundle: a local macOS package (lib/bundles.js), a folder that Open starts like the Finder does, with the entry
 // Show Package Contents, or Hide Package Contents while contents is true; windows: this computer is Windows, where Permissions… is
 // dimmed because there is no chmod; on a machine it works; size: the text at the right of Calculate Size on a folder
-// (lib/sizes.js sizeDetail), sizing: that calculation runs, the entry is dimmed; dimmed on local Windows too, no sh there)
+// (lib/sizes.js sizeDetail), sizeTitle: its tooltip (lib/sizes.js sizeNote, set when the sum is incomplete), sizing: that calculation runs, the entry is dimmed; dimmed on local Windows too, no sh there)
 export function rowMenuItems(state) {
   const file = state.isDir !== true;
   const local = state.remote !== true;
@@ -21,11 +24,11 @@ export function rowMenuItems(state) {
   return [
     entry("open", "Open", file || bundle),
     entry("open_preview", "Open in Preview", file),
-    entry("open_editor", "Open in Editor", file),
+    entry("open_editor", openIn(state.editor), file && state.editorFile !== false),
     entry("edit_terminal", "Edit in Terminal", file),
     entry("reveal", "Show in Finder", local),
     ...(bundle ? [entry("package_contents", state.contents === true ? "Hide Package Contents" : "Show Package Contents")] : []),
-    ...(file ? [] : [{ ...entry("calculate_size", "Calculate Size", state.sizing !== true && (state.windows !== true || !local)), detail: state.size ?? null }]),
+    ...(file ? [] : [{ ...entry("calculate_size", "Calculate Size", state.sizing !== true && (state.windows !== true || !local)), detail: state.size ?? null, title: state.sizeTitle ?? null }]),
     SEPARATOR,
     entry("download", "Download"),
     entry("download_to", "Download to…"),
@@ -53,7 +56,7 @@ export function rowMenuState({ name, isDir, machine, platform, bundle, contents 
 }
 
 export function rootMenuItems(state) {
-  return [entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), SEPARATOR, entry("settings", "Settings…")];
+  return [entry("open_editor", openIn(state.editor), state.editorFolder !== false), SEPARATOR, entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), SEPARATOR, entry("settings", "Settings…")];
 }
 
 export function menuHeight(items) {

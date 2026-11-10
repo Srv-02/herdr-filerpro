@@ -222,7 +222,7 @@ test("menu: Show Package Contents asks the panel to expand the package, Hide col
   const cx = fakeCx();
   const menu = Object.create(FilerPro.prototype);
   const item = byId(menu.overlayView(cx), "filer-pro-menu-package-contents");
-  assert.equal(item.kids.at(-1), "Show Package Contents");
+  assert.equal(item.kids.at(-1).kids.at(-1), "Show Package Contents");
   handler(item, "on_click")({}, cx);
   const req = store["filer-pro.package"];
   assert.deepEqual({ ...req, id: undefined }, { id: undefined, machine: null, path: `${ROOT}/Example.app`, show: true });

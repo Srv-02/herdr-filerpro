@@ -1,21 +1,51 @@
-// Size probe and byte formatting. Pure; the script runs as `sh -c SIZE_SCRIPT size <path>`
+// Size probe and byte formatting. Pure; the script runs as `sh -c SIZE_SCRIPT size <path> [<seconds>]`
 // locally or on the remote (non-login sh, POSIX tools only, GNU and BSD/macOS).
 
-// Prints the summed size of all regular files under <path> (a file counts as itself),
-// never following symlinks, or -1 when the path does not exist.
-export const SIZE_SCRIPT = [
-  'p=$1',
-  'case $p in -*) p=./$p ;; esac',
-  'if [ ! -e "$p" ] && [ ! -L "$p" ]; then echo -1; exit 0; fi',
-  'if stat -c%s / >/dev/null 2>&1; then f=-c%s; else f=-f%z; fi',
-  'find -H "$p" -type f -exec stat -L "$f" {} + 2>/dev/null | awk \'{ s += $1 } END { printf "%.0f\\n", s }\'',
-].join("\n");
+// Prints one line, exit code always 0: the summed size of all regular files under <path> (a file counts as itself),
+// never following symlinks. `-1`: the path does not exist. `<bytes>`: a complete sum. `<bytes> partial`: find ended
+// with an error (unreadable folder, a file that vanished), the sum is a lower bound. `<bytes> timeout`: a watchdog
+// killed find (by its PID) after <seconds> (default 120), the number is not used. The watchdog is its own process, so
+// find ends on the machine at the limit even when the caller is gone. find's status travels through fd 3, like cnt()
+// in lib/archives.js, because the exit code of a pipeline is awk's. Every newline is written \\n for the template.
+export const SIZE_SCRIPT = `p=$1 n=$2
+case $p in -*) p=./$p ;; esac
+case $n in ""|*[!0-9]*) n=120 ;; esac
+if [ ! -e "$p" ] && [ ! -L "$p" ]; then echo -1; exit 0; fi
+if stat -c%s / >/dev/null 2>&1; then f=-c%s; else f=-f%z; fi
+r=$( { {
+  find -H "$p" -type f -exec stat -L "$f" {} + 2>/dev/null &
+  fp=$!
+  ( trap 'kill "$sp" 2>/dev/null; exit 0' TERM
+    sleep "$n" & sp=$!
+    wait "$sp" && kill "$fp" 2>/dev/null ) >/dev/null 2>&1 3>&- &
+  wp=$!
+  wait "$fp"; rc=$?
+  kill "$wp" 2>/dev/null
+  echo "rc=$rc" >&3
+} 2>/dev/null | awk '{ s += $1 } END { printf "n=%.0f\\n", s }'; } 3>&1 )
+s=$(printf '%s\\n' "$r" | sed -n 's/^n=//p')
+c=$(printf '%s\\n' "$r" | sed -n 's/^rc=//p')
+case $s in ""|*[!0-9]*) s=0 ;; esac
+case $c in ""|*[!0-9]*) c=1 ;; esac
+if [ "$c" -eq 0 ]; then echo "$s"; elif [ "$c" -gt 128 ]; then echo "$s timeout"; else echo "$s partial"; fi`;
 
-export function parseSize(stdout) {
-  const m = /^\s*(-?\d+)\s*$/.exec(String(stdout ?? ""));
+export const SIZE_GRACE_MS = 5000;
+export const INCOMPLETE = "Some folders could not be read";
+
+// argv after "sh" for one run with a limit in ms (rounded up to whole seconds, at least 1). The path stays at args[3].
+export const sizeArgs = (path, limitMs) => ["-c", SIZE_SCRIPT, "size", path, String(Math.max(1, Math.ceil(limitMs / 1000)))];
+
+// stdout -> { bytes, incomplete, timedOut }, or null (missing path, anything unexpected)
+export function parseSizeOutput(stdout) {
+  const m = /^\s*(\d+)(?: (partial|timeout))?\s*$/.exec(String(stdout ?? ""));
   if (!m) return null;
-  const n = Number(m[1]);
-  return n < 0 ? null : n;
+  return { bytes: Number(m[1]), incomplete: m[2] === "partial", timedOut: m[2] === "timeout" };
+}
+
+// stdout -> bytes of a COMPLETE sum, else null (missing, partial, timeout, junk)
+export function parseSize(stdout) {
+  const v = parseSizeOutput(stdout);
+  return v && !v.incomplete && !v.timedOut ? v.bytes : null;
 }
 
 const UNITS = ["B", "kB", "MB", "GB", "TB", "PB"];
@@ -44,9 +74,10 @@ export function formatRate(bps) {
 }
 
 // Calculate Size on a folder (issue #58). The results live in the shared value filer-pro.sizes, an object of
-// sizeKey(machine, path) -> { state, id, bytes? }, so every panel copy and the row menu (a separate copy) see them:
-// requested (the menu asked), running (a panel copy claimed it and runs SIZE_SCRIPT), done (bytes), toolarge (no
-// answer within FOLDER_SIZE_MS). A failure removes the entry (a toast tells why). Results stay until Refresh or a new
+// sizeKey(machine, path) -> { state, id, bytes?, incomplete? }, so every panel copy and the row menu (a separate copy) see them:
+// requested (the menu asked), running (a panel copy claimed it and runs SIZE_SCRIPT), done (bytes, always shown with a ~;
+// incomplete: some folders could not be read, the number is a lower bound), toolarge (the script stopped find at the limit,
+// or no answer within FOLDER_SIZE_MS plus SIZE_GRACE_MS). A failure removes the entry (a toast tells why). Results stay until Refresh or a new
 // Calculate Size: a snapshot, not a watch. requested and running carry at (ms): a request nobody claimed within
 // CLAIM_MS (the panel moved on to another folder) or a run older than the limit plus a margin (the copy that ran it
 // was reloaded or closed) counts as gone, so a row never spins forever and the entry can be used again.
@@ -95,8 +126,9 @@ export function claimSizes(map, shows, now) {
 // used up the timeout is too large (exec may answer with a code or reject when it kills the command); a path that
 // is gone (-1) or any other failure is an error with its message.
 export function sizeResult({ result, error, ms }, timeoutMs = FOLDER_SIZE_MS) {
-  const bytes = error === undefined && result?.code === 0 ? parseSize(result.stdout) : null;
-  if (bytes !== null) return { state: "done", bytes }; // an answer just before the limit still counts
+  const v = error === undefined && result?.code === 0 ? parseSizeOutput(result.stdout) : null;
+  if (v?.timedOut) return { state: "toolarge" };
+  if (v) return v.incomplete ? { state: "done", bytes: v.bytes, incomplete: true } : { state: "done", bytes: v.bytes }; // an answer just before the limit still counts
   if (ms >= timeoutMs - 1000) return { state: "toolarge" };
   if (error !== undefined) return { state: "failed", error: String(error?.message ?? error) || "Could not calculate the size" };
   if (result?.code !== 0) return { state: "failed", error: String(result?.stderr ?? "").trim() || "Could not calculate the size" };
@@ -131,7 +163,7 @@ export function dropSizes(map, machine, root, now) {
 export function sizeCell(entry, result, now, calc = true) {
   if (!entry.dir) return { text: Number.isFinite(entry.size) ? formatBytes(entry.size) : "", spin: false };
   if (busy(result, now)) return { text: "", spin: true };
-  if (result?.state === "done") return { text: formatBytes(result.bytes), spin: false };
+  if (result?.state === "done") return { text: `~${formatBytes(result.bytes)}`, spin: false, ...(result.incomplete ? { title: INCOMPLETE } : {}) };
   if (result?.state === "toolarge") return { text: "Too large", spin: false, title: TOO_LARGE };
   return { text: entry.bundle || !calc ? "" : "\u2014", spin: false };
 }
@@ -139,7 +171,12 @@ export function sizeCell(entry, result, now, calc = true) {
 // The detail at the right of the Calculate Size menu entry: the size once known, … while it runs, else nothing.
 export function sizeDetail(result, now) {
   if (busy(result, now)) return "\u2026";
-  if (result?.state === "done") return formatBytes(result.bytes);
+  if (result?.state === "done") return `~${formatBytes(result.bytes)}`;
   if (result?.state === "toolarge") return "Too large";
   return null;
+}
+
+// The tooltip of the Calculate Size entry: why the shown size is only a lower bound, else nothing.
+export function sizeNote(result, now) {
+  return result?.state === "done" && result.incomplete && !busy(result, now) ? INCOMPLETE : null;
 }

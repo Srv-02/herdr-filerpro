@@ -45,7 +45,7 @@ globalThis.__impl = {
   props: () => ({}), shared: () => undefined, settings: () => ({ dark: false, font_family: "mono" }),
   theme: () => new Proxy({}, { get: (_t, k) => String(k) }),
   spaces: () => [{ active: true, id: "s1", folder: where.folder, machine: null }], panes: () => [], focused: () => ({}),
-  exec: async () => ({ code: 1, stdout: "", stderr: "" }), readTextFile: async () => null, appHome: () => "/app", home: () => "/home/u",
+  window: () => ({ platform: "macos" }), exec: async () => ({ code: 1, stdout: "", stderr: "" }), readTextFile: async () => null, appHome: () => "/app", home: () => "/home/u",
 };
 const cx = { notify() {}, spawn() {}, sleep: async () => {} };
 const dir = (name) => ({ name, dir: true }), file = (name) => ({ name, dir: false });

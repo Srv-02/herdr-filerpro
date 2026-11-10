@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: false,
+    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: true,
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -74,9 +74,9 @@ test("custom GUI editors: local is required and must not use {target}, a broken 
     ],
   });
   assert.deepEqual(c.gui_editors, [
-    { name: "Mine", local: "myed {path}", remote: "myed --ssh {target} {path}" },
-    { name: "LocalOnly", local: "lo {path}", remote: null },
-    { name: "BadRemote", local: "br {path}", remote: null },
+    { name: "Mine", local: "myed {path}", remote: "myed --ssh {target} {path}", remote_folder: null },
+    { name: "LocalOnly", local: "lo {path}", remote: null, remote_folder: null },
+    { name: "BadRemote", local: "br {path}", remote: null, remote_folder: null },
   ]);
   assert.equal(c.gui_editor, "Mine");
   assert.equal((await load({ gui_editor: "NoLocal", gui_editors: [{ name: "NoLocal", remote: "x" }] })).gui_editor, "VS Code");
@@ -93,8 +93,23 @@ test("templates without the file are dropped: a GUI template needs {path} or {pa
   });
   assert.deepEqual(c.terminal_editors, [{ name: "ok", command: "nvim" }]);
   assert.deepEqual(c.gui_editors, [
-    { name: "RemoteNoPath", local: "r {path}", remote: null },
-    { name: "Uri", local: "u file://{path_uri}", remote: "u ssh://{target}{path_uri}" },
+    { name: "RemoteNoPath", local: "r {path}", remote: null, remote_folder: null },
+    { name: "Uri", local: "u file://{path_uri}", remote: "u ssh://{target}{path_uri}", remote_folder: null },
+  ]);
+});
+
+test("custom GUI editors: remote_folder is optional, trimmed, and a broken one becomes null alone", async () => {
+  const c = await load({
+    gui_editors: [
+      { name: "Ok", local: "o {path}", remote: "o --ssh {target} {path}", remote_folder: " myed --ssh {target} --dir {path} " },
+      { name: "Missing", local: "m {path}", remote: "m {target} {path}" },
+      { name: "WrongType", local: "w {path}", remote: "w {target} {path}", remote_folder: 5 },
+      { name: "Quote", local: "q {path}", remote: "q {target} {path}", remote_folder: "q 'x" },
+      { name: "NoPath", local: "n {path}", remote: "n {target} {path}", remote_folder: "n --ssh {target}" },
+    ],
+  });
+  assert.deepEqual(c.gui_editors.map((e) => [e.name, e.remote !== null, e.remote_folder]), [
+    ["Ok", true, "myed --ssh {target} --dir {path}"], ["Missing", true, null], ["WrongType", true, null], ["Quote", true, null], ["NoPath", true, null],
   ]);
 });
 
@@ -139,7 +154,7 @@ test("warn_cross_copy: default on, a boolean in the file wins, other types fall 
   assert.equal((await loadConfig(reader('{"warn_cross_copy":"no"}'), appHome, home)).warn_cross_copy, true);
 });
 
-test("show_sizes is off by default and changes only with a boolean (issue #58)", async () => {
-  for (const text of [null, "{nope", '{"show_sizes":"yes"}', '{"show_sizes":1}']) assert.equal((await loadConfig(reader(text), appHome, home)).show_sizes, false, String(text));
-  assert.equal((await loadConfig(reader('{"show_sizes":true}'), appHome, home)).show_sizes, true);
+test("show_sizes is on by default and changes only with a boolean (issue #58, #73)", async () => {
+  for (const text of [null, "{nope", '{"show_sizes":"yes"}', '{"show_sizes":1}']) assert.equal((await loadConfig(reader(text), appHome, home)).show_sizes, true, String(text));
+  assert.equal((await loadConfig(reader('{"show_sizes":false}'), appHome, home)).show_sizes, false);
 });

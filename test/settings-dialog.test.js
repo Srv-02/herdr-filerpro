@@ -378,7 +378,7 @@ test("view: Warn before copying between machines is a switch in Transfers & conn
 
 test("view: Show file sizes is a File list switch below the hide switches; it toggles and only then is written (issue #58)", async () => {
   const s = createSettingsDialog(await snapshot(undefined), cx);
-  assert.equal(s.flags.show_sizes, false);
+  assert.equal(s.flags.show_sizes, true);
   const out = texts(view(s));
   const at = (label) => out.indexOf(label);
   assert.ok(at("Hide hidden files") < at("Show file sizes") && at("Show file sizes") < at("Open files with a double click"));
@@ -386,8 +386,8 @@ test("view: Show file sizes is a File list switch below the hide switches; it to
   assert.deepEqual(texts(row.kids[0]), ["Show file sizes", "Sizes next to files. Folders show a size after Calculate Size."]);
   assert.deepEqual(collect(s), {});
   called(byId(view(s), "filer-pro-settings-show_sizes-switch"), "on_click")[0][0]({}, makeCx());
-  assert.equal(s.flags.show_sizes, true);
-  assert.deepEqual(collect(s), { show_sizes: true });
-  const on = createSettingsDialog(await snapshot({ show_sizes: true }), cx);
-  assert.equal(on.flags.show_sizes, true);
+  assert.equal(s.flags.show_sizes, false);
+  assert.deepEqual(collect(s), { show_sizes: false });
+  const off = createSettingsDialog(await snapshot({ show_sizes: false }), cx);
+  assert.equal(off.flags.show_sizes, false);
 });

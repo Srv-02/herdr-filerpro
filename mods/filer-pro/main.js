@@ -7,7 +7,7 @@ import { createJobs } from "./lib/jobs.js";
 import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
 import { claim, processRequest, handleRequest, closeAnswer, panelPlan, answerShow, openResult, modeResult } from "./lib/requests.js";
 import { loadConfig } from "./lib/config.js";
-import { editInTerminal, openInEditor } from "./lib/editors.js";
+import { editInTerminal, openInEditor, editorMenu } from "./lib/editors.js";
 import { createUpdateGate, updateCheck, fetchLatest, fetchRelease, localVersion, updateHint } from "./lib/update.js";
 import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
@@ -26,7 +26,7 @@ import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, parseListing, psEntries, limitText } from "./lib/tree.js";
-import { SIZE_SCRIPT, FOLDER_SIZE_MS, TOO_LARGE, busy, sizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail } from "./lib/sizes.js";
+import { sizeArgs, SIZE_GRACE_MS, FOLDER_SIZE_MS, TOO_LARGE, busy, sizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail, sizeNote } from "./lib/sizes.js";
 import { numbers, saveSettings } from "./lib/settings.js";
 import { GIT_PLACE_ARGS, gitPlace, gitPrefix, gitWatchDirs, gitWatchHit, rootRelative } from "./lib/gitmarks.js";
 import { bindZoomKeys } from "./lib/pdfkeys.js";
@@ -69,7 +69,7 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 // The settings before the config file was read (and in copies that never read it): today's defaults.
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, show_sizes: false };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, show_sizes: true };
 const MB = 1024 * 1024;
 // How much of the open file a refresh flight reloads at its end (refresh opts.file, this.fileWanted): TEXT only reads and
 // compares text (a watch batch that did not name the file: no exec), ALL also probes an image or PDF again (a change
@@ -445,8 +445,9 @@ export default class FilerPro extends View {
       };
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
-      const state = { paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents }),
-        size: sizeDetail(sized, Date.now()), sizing: busy(sized, Date.now()) };
+      const ed = p.editor ?? editorMenu(null);
+      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents }),
+        size: sizeDetail(sized, Date.now()), sizeTitle: sizeNote(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
       // remote the file is downloaded first (download_folder, conflict dialog) and opened by afterDownload.
@@ -458,16 +459,18 @@ export default class FilerPro extends View {
         close();
       };
       const toClipboard = (text, cx) => { writeClipboard(text, { cx, exec, notify, platform }).finally(close); };
-      // Open in Editor and Edit in Terminal (lib/editors.js): the popup closes once the lookup and the start returned.
+      // Open in <editor> and Edit in Terminal (lib/editors.js): the popup closes once the lookup and the start returned. The name
+      // comes with the props (an overlay copy never reads the config); the click loads the config itself, so the editor that
+      // starts is the configured one. The free-area entry opens the shown root (p.root) as a folder.
       const config = () => loadConfig(readTextFile, appHome, home);
-      const editor = (action, title, deps) => {
-        action({ machine: p.machine ?? null, path: p.path }, { loadConfig: config, notify, ...deps })
+      const editor = (action, title, deps, target = { path: p.path }) => {
+        action({ machine: p.machine ?? null, ...target }, { loadConfig: config, notify, ...deps })
           .catch((e) => notify({ title: `${title} failed`, body: String(e?.message ?? e), level: "error" })).finally(close);
       };
       return menuView(t, items, {
         open: () => openWith("default"),
         open_preview: () => openWith("preview"),
-        open_editor: () => editor(openInEditor, "Open in Editor", { hc, exec, home }),
+        open_editor: () => editor(openInEditor, `Open in ${ed.name}`, { hc, exec, home }, p.scope === "root" ? { path: p.root, folder: true } : { path: p.path }),
         edit_terminal: () => editor(editInTerminal, "Edit in Terminal", { focused, spaces, run }),
         // dimmed on a machine (rowMenuItems remote): Show in Finder would download first; Cmd+click still does
         reveal: () => {
@@ -901,7 +904,7 @@ export default class FilerPro extends View {
 
   // Calculate Size (issue #58): the menu copy asks through shared filer-pro.sizes (lib/sizes.js requestSize). The panel
   // copy that shows the folder claims the request and runs SIZE_SCRIPT there (one find, never following links), with
-  // FOLDER_SIZE_MS as the limit: a bigger tree is "Too large to calculate", a failure a toast. Called every 250 ms.
+  // FOLDER_SIZE_MS as the limit (the script stops find on the machine at that limit, lib/sizes.js; exec waits SIZE_GRACE_MS longer): a bigger tree is "Too large to calculate", a failure a toast. Called every 250 ms.
   // Another copy's claim or result redraws this one too (the value changed since the last tick).
   pollSizes(cx) {
     const map = shared("filer-pro.sizes");
@@ -913,7 +916,7 @@ export default class FilerPro extends View {
     for (const { key, machine, path, id } of got.claimed) cx.spawn(async (cx) => {
       const start = Date.now();
       let outcome;
-      try { outcome = sizeResult({ result: await exec("sh", ["-c", SIZE_SCRIPT, "size", path], { on: machine, timeout: FOLDER_SIZE_MS }), ms: Date.now() - start }); }
+      try { outcome = sizeResult({ result: await exec("sh", sizeArgs(path, FOLDER_SIZE_MS), { on: machine, timeout: FOLDER_SIZE_MS + SIZE_GRACE_MS }), ms: Date.now() - start }); }
       catch (e) { outcome = sizeResult({ error: e, ms: Date.now() - start }); }
       setShared("filer-pro.sizes", storeSize(shared("filer-pro.sizes"), key, id, outcome));
       if (outcome.state === "failed") notify({ title: "Calculate Size failed", body: outcome.error, level: "error" });
@@ -2030,7 +2033,7 @@ export default class FilerPro extends View {
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))
         .child(dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
@@ -2101,7 +2104,7 @@ export default class FilerPro extends View {
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           if (!this.root) return;
-          openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
+          openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
         })
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.entries.get("")?.denied ? NO_LIST_MESSAGE : this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total)))))

@@ -82,7 +82,7 @@ test("openInEditor: machine lookup problems become error notices and nothing run
     const { d, log } = deps(over);
     await openInEditor({ machine: "jump", path: "/x" }, d);
     assert.deepEqual(log.execs, []);
-    assert.deepEqual(log.notes, [{ title: "Open in Editor failed", body, level: "error" }]);
+    assert.deepEqual(log.notes, [{ title: "Open in VS Code failed", body, level: "error" }]);
   }
   const { d, log } = deps({ loadConfig: cfg({ gui_editor: "Mine", gui_editors: [{ name: "Mine", local: "m {path}", remote: null }] }) });
   await openInEditor({ machine: "box", path: "/x" }, d);
@@ -94,7 +94,7 @@ test("openInEditor: a spawn error retries the usual CLI folders, then shows the 
   const { d, log } = deps({ exec: async (cmd) => { tried.push(cmd); throw new Error(`spawn ${cmd} ENOENT`); } });
   await openInEditor({ machine: null, path: "/x" }, d);
   assert.deepEqual(tried, ["code", "/opt/homebrew/bin/code", "/usr/local/bin/code", "/Users/u/.local/bin/code"]);
-  assert.deepEqual(log.notes, [{ title: "Open in Editor failed", body: "spawn code ENOENT", level: "error" }]);
+  assert.deepEqual(log.notes, [{ title: "Open in VS Code failed", body: "spawn code ENOENT", level: "error" }]);
   const found = deps({ exec: async (cmd) => { tried.push(cmd); if (cmd !== "/usr/local/bin/code") throw new Error("ENOENT"); return { code: 0, stdout: "", stderr: "" }; } });
   tried.length = 0;
   await openInEditor({ machine: null, path: "/x" }, found.d);
@@ -121,8 +121,29 @@ test("openInEditor: a path command and a timeout are not retried", async () => {
 test("openInEditor: a non-zero exit shows stderr, or the exit code when stderr is empty", async () => {
   const a = deps({ exec: async () => ({ code: 1, stdout: "", stderr: "Unable to connect to VS Code server.\n" }) });
   await openInEditor({ machine: null, path: "/x" }, a.d);
-  assert.deepEqual(a.log.notes, [{ title: "Open in Editor failed", body: "Unable to connect to VS Code server.", level: "error" }]);
+  assert.deepEqual(a.log.notes, [{ title: "Open in VS Code failed", body: "Unable to connect to VS Code server.", level: "error" }]);
   const b = deps({ exec: async () => ({ code: 3, stdout: "", stderr: "" }) });
   await openInEditor({ machine: null, path: "/x" }, b.d);
   assert.equal(b.log.notes[0].body, "code exited with 3");
+});
+
+test("openInEditor: a folder on a machine runs remote_folder, a local folder the local template", async () => {
+  const a = deps();
+  await openInEditor({ machine: "box", path: "/srv/app", folder: true }, a.d);
+  assert.deepEqual(a.log.execs, [["code", ["--folder-uri", "vscode-remote://ssh-remote+me@box/srv/app"], { on: null }]]);
+  const b = deps();
+  await openInEditor({ machine: null, path: "/Users/u/app", folder: true }, b.d);
+  assert.deepEqual(b.log.execs, [["code", ["/Users/u/app"], { on: null }]]);
+  assert.deepEqual(b.log.hcs, []);
+});
+
+test("openInEditor: the error title names the configured editor", async () => {
+  const z = deps({ loadConfig: cfg({ gui_editor: "Zed" }), exec: async () => { throw new Error("spawn zed ENOENT"); } });
+  await openInEditor({ machine: null, path: "/x" }, z.d);
+  assert.equal(z.log.notes[0].title, "Open in Zed failed");
+  const m = deps({ loadConfig: cfg({ gui_editor: "Mine", gui_editors: [{ name: "Mine", local: "m {path}", remote: "m --ssh {target} {path}", remote_folder: null }] }) });
+  await openInEditor({ machine: "box", path: "/srv/app", folder: true }, m.d);
+  assert.equal(m.log.notes[0].title, "Open in Mine failed");
+  assert.match(m.log.notes[0].body, /remote_folder/);
+  assert.deepEqual(m.log.execs, []);
 });

@@ -20,6 +20,7 @@ export function createFake(over = {}) {
     readOuts: {}, // path -> stdout of READ_SCRIPT, or { code, stdout, stderr } (absent: "missing")
     sizes: {}, // path -> bytes; absent means -1 (missing)
     sizeError: null, // Error to throw from the size probe
+    sizeFlags: {}, // path -> "partial" | "timeout": the size probe appends it to the number, like SIZE_SCRIPT does
     sizeDelay: 0, // ms the clock jumps during a size probe
     existing: new Set(), // paths that exist (EXISTS_SCRIPT)
     dirs: new Set(), // paths that are directories
@@ -75,7 +76,7 @@ export function createFake(over = {}) {
         if (f.sizeError) throw f.sizeError;
         f.t += f.sizeDelay;
         f.onSize?.();
-        return ok(`${f.sizes[path] ?? -1}\n`);
+        return ok(`${f.sizes[path] ?? -1}${f.sizes[path] !== undefined && f.sizeFlags[path] ? ` ${f.sizeFlags[path]}` : ""}\n`);
       }
       if (script === ARCHIVE_PROBE_SCRIPT) return { stdout: "", stderr: "", ...(f.archives[args[5]] ?? { code: 4, stderr: "not an archive" }) };
       if (script === ARCHIVE_SIZE_SCRIPT) { const r = f.archiveSizes[args[4]] ?? ""; return typeof r === "string" ? ok(r) : { stdout: "", stderr: "", ...r }; }

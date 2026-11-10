@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  splitCommand, pathUri, expandTemplate, terminalArgv, guiArgv, TERMINAL_EDITORS, GUI_EDITORS,
+  splitCommand, pathUri, expandTemplate, terminalArgv, guiArgv, editorMenu, TERMINAL_EDITORS, GUI_EDITORS,
 } from "../mods/filer-pro/lib/editors.js";
 
 const NASTY = [
@@ -122,4 +122,30 @@ test("terminalPlan: an active space on another machine gives an empty plan, neve
 test("terminalPlan: a missing, undefined or empty machine all mean this computer", () => {
   assert.equal(terminalPlan({ focused: { pane: "p1" }, spaces: [{ id: "s8", active: true, machine: "" }], machine: undefined, argv, folder })[0][0], "terminal.open");
   assert.equal(terminalPlan({ focused: { pane: "p1" }, spaces: [{ id: "s8", active: true }], machine: null, argv, folder })[0][0], "terminal.open");
+});
+
+test("shipped editors open a folder on a machine with remote_folder", () => {
+  const byName = Object.fromEntries(GUI_EDITORS.map((e) => [e.name, e]));
+  const path = "/srv/my app";
+  assert.deepEqual(guiArgv(byName["VS Code"], { path, target: "me@box", folder: true }), { argv: ["code", "--folder-uri", "vscode-remote://ssh-remote+me@box/srv/my%20app"] });
+  assert.deepEqual(guiArgv(byName.Cursor, { path, target: "me@box", folder: true }), { argv: ["cursor", "--folder-uri", "vscode-remote://ssh-remote+me@box/srv/my%20app"] });
+  assert.deepEqual(guiArgv(byName.Zed, { path, target: "me@box", folder: true }), { argv: ["zed", "ssh://me@box/srv/my%20app"] });
+  assert.deepEqual(guiArgv(byName["VS Code"], { path: "/", target: "me@box", folder: true }), { argv: ["code", "--folder-uri", "vscode-remote://ssh-remote+me@box/"] });
+  assert.deepEqual(guiArgv(byName["VS Code"], { path, target: null, folder: true }), { argv: ["code", "/srv/my app"] });
+});
+
+test("guiArgv: a missing remote_folder is an error that names the key", () => {
+  const mine = { name: "Mine", local: "myed {path}", remote: "myed --ssh {target} {path}", remote_folder: null };
+  assert.match(guiArgv(mine, { path: "/x", target: "box", folder: true }).error, /Mine.*remote_folder/);
+  assert.deepEqual(guiArgv(mine, { path: "/x", target: "box", folder: false }), { argv: ["myed", "--ssh", "box", "/x"] });
+});
+
+test("editorMenu: the name and which remote templates the chosen editor has", () => {
+  const both = { name: "VS Code", remote: true, remoteFolder: true };
+  assert.deepEqual(editorMenu(null), both);
+  assert.deepEqual(editorMenu({}), both);
+  assert.deepEqual(editorMenu({ gui_editor: "Zed" }), { name: "Zed", remote: true, remoteFolder: true });
+  assert.deepEqual(editorMenu({ gui_editor: "Sublime Text", gui_editors: [{ name: "Sublime Text", local: "subl {path}", remote: null, remote_folder: null }] }), { name: "Sublime Text", remote: false, remoteFolder: false });
+  assert.deepEqual(editorMenu({ gui_editor: "Mine", gui_editors: [{ name: "Mine", local: "m {path}", remote: "m {target} {path}" }] }), { name: "Mine", remote: true, remoteFolder: false });
+  assert.deepEqual(editorMenu({ gui_editor: "Nope" }), both);
 });
