@@ -270,7 +270,7 @@ test("settings: preview limits travel per call (source guard and loadLimits)", a
   const body = (name) => { const i = main.indexOf(`  ${name}(`); return main.slice(i, main.indexOf("\n  }\n", i)); };
   assert.ok(body("show").includes("cfg.source_max_chars") && !main.includes("400000"), "source truncation from the settings");
   assert.ok(body("show").includes("this.fileCfg = cfg") && body("async preparePreview").includes("cfg = this.fileCfg ?? DEFAULTS") && body("async preparePreview").includes("maxChars: cfg.preview_max_chars, maxDiagrams: cfg.max_diagrams"), "the preview with the settings the file was read with");
-  assert.ok(body("show").includes("...this.loadLimits(cfg)") && body("turnPage").includes("...this.loadLimits()"), "images and PDFs, also when turning pages");
+  assert.ok(body("show").includes("...this.loadLimits(cfg)") && body("showPages").includes("...this.loadLimits()"), "images and PDFs, also when turning pages");
   assert.ok(body("renderDiagrams").includes("node: cfg.node_path") && body("renderDiagrams").includes("this.fileCfg"));
   const MB = 1024 * 1024;
   assert.deepEqual(panel({}).loadLimits({ ...DEFAULTS, image_max_mb: 3, image_cache_mb: 70, pdf_local_max_mb: 8, pdf_remote_max_mb: 9, svg_check: false, ssh_connect_timeout: 30, ssh_alive_interval: 5, ssh_alive_count: 9 }),
