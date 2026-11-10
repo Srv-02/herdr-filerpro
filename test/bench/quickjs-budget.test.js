@@ -1,15 +1,15 @@
 // The edit check and save of a 1 MiB file inside herdr's own QuickJS (`herdr-app check`), which interrupts a job after
 // about 0.5 s with an error JS cannot catch: a check that took longer left Edit on "Checking…" for good. Each scenario
 // is the synchronous work of one job in the app and runs as the top level of a throwaway mod. Skipped where herdr-app
-// is not installed (CI); `npm test` on the Mac runs it.
+// is not installed (CI); `npm run bench` on the Mac runs it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { mkTmpSync } from "./tmp-helper.js";
+import { mkTmpSync } from "../tmp-helper.js";
 
-const MOD = path.resolve(import.meta.dirname, "..", "mods", "filer-pro");
+const MOD = path.resolve(import.meta.dirname, "..", "..", "mods", "filer-pro");
 const HAS_HERDR = spawnSync("herdr-app", ["--version"], { encoding: "utf8" }).status === 0;
 
 // Exactly 1 MiB (EDIT_MAX_BYTES) of multibyte text with CRLF line ends, built with native string ops only, so the
