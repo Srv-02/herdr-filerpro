@@ -331,7 +331,8 @@ export function settingsView(t, state, handlers, stored = null) {
     .size_full().bg(t.popover).text_color(t.foreground)
     .child(h_flex().flex_none().items_center().px(24).pt(18).pb(10)
       .child(div().flex_1().text_size(15).font_semibold().child("Filer Pro Settings"))
-      .child(div().px(6).py(2).rounded(5).border_1().border_color(t.border).text_size(11).text_color(t.muted).child("Esc")))
+      .child(div().id("filer-pro-settings-esc").px(6).py(2).rounded(5).border_1().border_color(t.border).text_size(11).text_color(t.muted)
+        .cursor_pointer().hover((s) => s.bg(t.hover)).tooltip("Close").accessibility_label("Close").on_click(() => handlers.onCancel()).child("Esc")))
     // A bar that always shows, as in Herdr's settings: the body is taller than the dialog.
     .child(div().relative().flex_1().min_h(0)
       .child(div().id("filer-pro-settings-body").size_full().overflow_y_scroll()
