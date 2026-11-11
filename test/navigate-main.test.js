@@ -147,13 +147,13 @@ test("a folder above home and / are listed but not watched", async () => {
   assert.deepEqual(host.watched, []);
 });
 
-test("header: the ~ path, then Go to /, Up one level, Back (only while navigated) and Refresh; dimmed at /, none with a file open", async () => {
+test("header: the ~ path, then Go to /, Back, Up one level and Refresh; dimmed at /, none with a file open", async () => {
   const self = await panel();
   // The header row: the direct children in order, by id (the title has its own id only without an open file).
   const header = (root) => root.kids[0];
   const order = (root) => header(root).kids.map(idOf).filter((id) => ["files-title", "files-top", "files-up", "files-back-terminal", "files-refresh", "files-settings"].includes(id));
   let root = self.render(cx);
-  assert.deepEqual(order(root), ["files-title", "files-top", "files-up", "files-refresh", "files-settings"]);
+  assert.deepEqual(order(root), ["files-title", "files-top", "files-back-terminal", "files-up", "files-refresh", "files-settings"]);
   assert.deepEqual(called(findId(root, "files-top"), "tooltip"), [["Go to /"]]);
   assert.deepEqual(called(findId(root, "files-up"), "tooltip"), [["Up one level"]]);
   assert.deepEqual(called(findId(root, "files-up"), "accessibility_label"), [["Up one level"]]);
@@ -161,13 +161,14 @@ test("header: the ~ path, then Go to /, Up one level, Back (only while navigated
 
   self.navigate("/home/u/git", cx); await settle();
   root = self.render(cx);
-  assert.deepEqual(order(root), ["files-title", "files-top", "files-up", "files-back-terminal", "files-refresh", "files-settings"]);
+  assert.deepEqual(order(root), ["files-title", "files-top", "files-back-terminal", "files-up", "files-refresh", "files-settings"]);
   const title = findId(root, "files-title");
   assert.equal(textOf(title), "~/git");
   assert.ok(called(title, "on_size_change").length, "the title measures its width for the front cut");
   const back = findId(root, "files-back-terminal");
   assert.deepEqual(called(back, "tooltip"), [["Back to the terminal's folder"]]);
-  assert.deepEqual(called(back, "bg"), [["selected"]], "the test theme's accent is no #rrggbb: the selected background");
+  assert.deepEqual(called(back, "bg"), [], "no accent background");
+  assert.ok(called(back, "on_click").length, "enabled while navigated away");
   assert.equal(textOf(back), "", "icon only");
   called(back, "on_click")[0][0]({}, cx); await settle();
   assert.equal(self.root, "/home/u/git/one");
@@ -183,6 +184,8 @@ test("header: the ~ path, then Go to /, Up one level, Back (only while navigated
   root = self.render(cx);
   assert.deepEqual(called(findId(root, "files-up"), "on_click"), [], "Up dimmed at /");
   assert.deepEqual(called(findId(root, "files-top"), "on_click"), [], "Go to / dimmed at /");
+  assert.equal(textOf(findId(root, "files-title")), "", "no label at /");
+  assert.ok(called(findId(root, "files-back-terminal"), "on_click").length, "Back enabled at / when away from the terminal's folder");
 
   self.navigate("/home/u/git/one", cx); await settle();
   self.show("a.md", null);
@@ -199,4 +202,65 @@ test("Go to / from a terminal that reports no folder (the space's folder is the 
   self.navigate("/", cx); await settle();
   host.cwd.p1 = "/home/u/git/one"; self.render(cx); await settle();
   assert.equal(self.root, "/");
+});
+
+// Issue #85: the header buttons keep their place; the folder tree button is always there.
+const ORDER = ["files-top", "files-back-terminal", "files-up", "files-refresh", "files-settings"];
+const ids = (root) => root.kids[0].kids.map(idOf).filter((id) => ORDER.includes(id));
+const enabled = (root, id) => called(findId(root, id), "on_click").length > 0;
+const color = (root, id) => called(findId(root, id).kids[0], "text_color");
+
+test("header buttons: same set and order in the terminal's folder, navigated away and at /", async () => {
+  const self = await panel();
+  let root = self.render(cx);
+  assert.deepEqual(ids(root), ORDER);
+  self.navigate("/home/u/git", cx); await settle();
+  assert.deepEqual(ids(self.render(cx)), ORDER);
+  self.navigate("/", cx); await settle();
+  assert.deepEqual(ids(self.render(cx)), ORDER);
+});
+
+test("header: in the terminal's folder the folder tree is dimmed, Go to / and Up enabled, label is the folder name", async () => {
+  const self = await panel();
+  const root = self.render(cx);
+  assert.equal(enabled(root, "files-back-terminal"), false);
+  assert.equal(enabled(root, "files-top"), true);
+  assert.equal(enabled(root, "files-up"), true);
+  assert.equal(textOf(findId(root, "files-title")), "one");
+  assert.deepEqual(color(root, "files-back-terminal"), [["dim"]]);
+});
+
+test("header: navigated away the folder tree is enabled in the neutral color of the other icons", async () => {
+  const self = await panel();
+  self.navigate("/home/u/git", cx); await settle();
+  const root = self.render(cx);
+  assert.equal(enabled(root, "files-back-terminal"), true);
+  assert.deepEqual(color(root, "files-back-terminal"), color(root, "files-up"));
+  assert.deepEqual(color(root, "files-back-terminal"), [["muted"]]);
+  assert.deepEqual(called(findId(root, "files-back-terminal"), "bg"), []);
+  assert.equal(textOf(findId(root, "files-title")), "~/git");
+  assert.equal(enabled(root, "files-top"), true);
+  assert.equal(enabled(root, "files-up"), true);
+});
+
+test("header at /: no label, Go to / and Up dimmed", async () => {
+  const self = await panel();
+  self.navigate("/", cx); await settle();
+  const root = self.render(cx);
+  assert.equal(textOf(findId(root, "files-title")), "");
+  assert.deepEqual(called(findId(root, "files-title"), "tooltip").concat(called(findId(root, "files-title").kids[0], "tooltip")), [], "no path tooltip without a label");
+  assert.equal(enabled(root, "files-top"), false);
+  assert.equal(enabled(root, "files-up"), false);
+});
+
+test("header: the terminal's folder is /: no label, folder tree dimmed, Go to / and Up dimmed", async () => {
+  const self = await panel();
+  host.cwd.p1 = "/"; self.render(cx); await settle();
+  assert.equal(self.root, "/");
+  const root = self.render(cx);
+  assert.equal(textOf(findId(root, "files-title")), "");
+  assert.equal(enabled(root, "files-back-terminal"), false);
+  assert.equal(enabled(root, "files-top"), false);
+  assert.equal(enabled(root, "files-up"), false);
+  assert.deepEqual(ids(root), ORDER);
 });

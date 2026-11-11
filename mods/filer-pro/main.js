@@ -1871,26 +1871,26 @@ export default class FilerPro extends View {
   // folder (issue #59) its path (from ~ on this computer), cut at the front to the measured width.
   fileTitle(t, dark, end) {
     const nav = end && !this.file ? this.navState() : null;
-    const name = nav?.away ? frontTruncate(this.on ? this.root : headerPath(this.root, home()), Math.max(8, Math.floor(((this.titleWidth ?? 320) - 8) / 7))) : (this.file ?? this.root?.split(/[\\/]/).pop() ?? "");
+    const name = nav && upOf(this.root) === null ? "" : nav?.away ? frontTruncate(this.on ? this.root : headerPath(this.root, home()), Math.max(8, Math.floor(((this.titleWidth ?? 320) - 8) / 7))) : (this.file ?? this.root?.split(/[\\/]/).pop() ?? "");
     return h_flex().flex_1().min_w(0).overflow_hidden().gap(6).items_center().text_size(12).text_color(t.dim).when(end, el => el.justify_end())
       .when(Boolean(nav), el => el.id("files-title").on_size_change((size, cx) => {
         const w = Math.floor(size.width / 8) * 8;
         if (w !== this.titleWidth) { this.titleWidth = w; cx.notify(); }
       }))
       .when(Boolean(this.file), el => el.child(image(icon(this.file, false, false, dark)).size(14).flex_none()))
-      .child(div().min_w(0).truncate().when(Boolean(nav?.away), el => el.tooltip(this.root)).child((this.edit?.dirty ? "● " : "") + name));
+      .child(div().min_w(0).truncate().when(Boolean(nav?.away) && name !== "", el => el.tooltip(this.root)).child((this.edit?.dirty ? "● " : "") + name));
   }
 
-  // The header's folder navigation right of the title, before Refresh (no file open): Go to /, Up one level, and while
-  // the tree is navigated away from the terminal's folder Back to it. Go to / and Up are dimmed at the top.
+  // The header's folder navigation right of the title, before Refresh (no file open): Go to /, Back to the terminal's
+  // folder and Up one level, always all three so no icon moves (issue #85). Go to / and Up are dimmed at the top (and
+  // without a terminal to key the navigation to), Back unless the tree is navigated away from the terminal's folder.
   navButtons(t) {
     const nav = this.navState();
-    if (!nav.root) return [];
     return [
-      this.navButton("files-top", "slash", `Go to ${nav.top}`, t, nav.up ? (cx) => this.navigate(nav.top, cx) : null),
+      this.navButton("files-top", "slash", `Go to ${nav.top ?? "/"}`, t, nav.up ? (cx) => this.navigate(nav.top, cx) : null),
+      this.navButton("files-back-terminal", "folder-tree", "Back to the terminal's folder", t, nav.away ? (cx) => this.navigate(nav.here, cx) : null),
       this.navButton("files-up", "corner-left-up", "Up one level", t, nav.up ? (cx) => this.navigate(nav.up, cx) : null),
-      nav.away ? this.backButton(t, (cx) => this.navigate(nav.here, cx)) : null,
-    ].filter(Boolean);
+    ];
   }
 
   // The header's navigation state: the shown root, its parent and the top (up null at the top or without a terminal),
@@ -1906,16 +1906,6 @@ export default class FilerPro extends View {
     return div().id(id).w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).tooltip(label).accessibility_label(label)
       .when(Boolean(onClick), el => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)))
       .child(svg(`${BASE}/${glyph}.svg`).size(14).text_color(onClick ? t.muted : t.dim));
-  }
-
-  // Back to the terminal's folder, only while the tree is navigated away from it: the accent of the settings switches at
-  // low alpha behind an accent icon (a theme color that is no #rrggbb gets the selected background instead).
-  backButton(t, onClick) {
-    const label = "Back to the terminal's folder", accent = t.accent ?? t.ansi4;
-    const bg = /^#[0-9a-f]{6}$/i.test(accent) ? `${accent}33` : t.selected;
-    return div().id("files-back-terminal").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).bg(bg)
-      .cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(label).accessibility_label(label).on_click((_e, cx) => onClick(cx))
-      .child(svg(`${BASE}/folder-tree.svg`).size(14).text_color(accent));
   }
 
   // A header button in the style of the preview's Source/Preview button; `child` is a text or an element.
