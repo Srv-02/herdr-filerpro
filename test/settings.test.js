@@ -88,8 +88,8 @@ test("settings: the two double click switches of issue #21, in the visible File 
 test("settings: double_click_folders (#90) is a File list switch, on by default, right after double_click_apps", () => {
   const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
   assert.deepEqual([by.double_click_folders.kind, by.double_click_folders.default, by.double_click_folders.section], ["bool", true, "File list"]);
-  assert.equal(by.double_click_folders.label, "Double-click a folder to show it as root");
-  assert.equal(by.double_click_folders.help, "A single click still opens and closes it.");
+  assert.equal(by.double_click_folders.label, "Show folders as root with a double click");
+  assert.equal(by.double_click_folders.help, "A single click still opens and closes a folder. Show as Root in the right-click menu works either way.");
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(keys.indexOf("double_click_folders"), keys.indexOf("double_click_apps") + 1);
 });
