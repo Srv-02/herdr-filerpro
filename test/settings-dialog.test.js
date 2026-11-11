@@ -242,7 +242,7 @@ test("view: the footer links open GitHub and Buy me a coffee", async () => {
   const s = createSettingsDialog(await snapshot(undefined), cx);
   const opened = [], c = { open_url: (u) => opened.push(u) };
   for (const id of ["filer-pro-settings-github", "filer-pro-settings-coffee", "filer-pro-settings-editors-doc"]) called(byId(view(s), id), "on_click")[0][0]({}, c);
-  assert.deepEqual(opened, [GITHUB_URL, COFFEE_URL, `${GITHUB_URL}#editors`]);
+  assert.deepEqual(opened, [GITHUB_URL, COFFEE_URL, `${GITHUB_URL}/blob/main/docs/GUIDE.md#editors`]);
   assert.equal(GITHUB_URL, "https://github.com/Srv-02/herdr-filerpro");
   assert.equal(COFFEE_URL, "https://www.buymeacoffee.com/michaelmayer");
 });

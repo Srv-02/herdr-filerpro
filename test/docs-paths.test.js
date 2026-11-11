@@ -23,6 +23,7 @@ function markdownFiles(dir) {
 test("markdown files contain no personal home paths", () => {
   const files = markdownFiles(root);
   assert.ok(files.some((f) => relative(root, f) === "README.md"), "README.md is checked");
+  assert.ok(files.some((f) => relative(root, f) === join("docs", "GUIDE.md")), "docs/GUIDE.md is checked");
   const hits = [];
   for (const f of files) {
     readFileSync(f, "utf8").split("\n").forEach((line, i) => {

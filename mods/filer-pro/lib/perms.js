@@ -151,7 +151,7 @@ printf '%s\\0' "$T" "$M" "$U" "$G" "$UN" "$GN" "$(id -u)"`;
 // -depth changes the contents before the folder, so a folder that loses its execute bit is left last.
 // Residual race: between find's type check and chmod an entry could be swapped for a link by someone who can write in the
 // tree. BSD/macOS chmod -h then changes the link itself, never its target. GNU chmod has no such flag (and its own -R
-// would stop at a folder that lost its execute bit), so there the window stays; see the README.
+// would stop at a folder that lost its execute bit), so there the window stays; see docs/GUIDE.md.
 export const CHMOD_SCRIPT = `m=$1 p=$2 r=$3
 ${STAT_FN}
 case $m in [0-7][0-7][0-7][0-7][0-7]) ;; *) echo "invalid mode" >&2; exit 2 ;; esac
