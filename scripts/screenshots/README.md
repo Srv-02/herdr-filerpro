@@ -8,7 +8,7 @@ The README images in `screenshots/` are cards: crops of a running Herdr window, 
 scripts/screenshots/shoot.sh
 ```
 
-`scripts/screenshots/shoot.sh browse extract` shoots only the named cards (preview, formats, browse, editors, extract, edit-terminal, pdf-fullscreen, settings); `CROP_ONLY=1` re-crops and renders from the raw shots in `tmp/shots-raw` without launching anything.
+`scripts/screenshots/shoot.sh browse extract` shoots only the named cards (preview, formats, browse, editors, extract, edit-terminal, pdf-fullscreen, settings, show-as-root); `CROP_ONLY=1` re-crops and renders from the raw shots in `tmp/shots-raw` without launching anything.
 
 It prepares a separate Herdr instance, launches it once, sets every state without mouse or keyboard, takes the shots, quits the instance, crops them and renders all cards into `screenshots/`. Needs macOS, Herdr.app, Microsoft Edge (headless, no window), `node`, `zip` and `sips`. Look at every image before you commit it: no user name, no path outside `~/acme-app`.
 
