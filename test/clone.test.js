@@ -8,7 +8,7 @@ const read = (p) => fs.readFileSync(new URL(`../mods/filer-pro/${p}`, import.met
 test("mod.json keeps place none and its origin, and carries the mod's own version", () => {
   assert.deepEqual(JSON.parse(read("mod.json")), {
     place: "none",
-    version: "1.3.1",
+    version: "1.3.2",
     cloned_from: { name: "files", version: "0.1.12" },
   });
 });
