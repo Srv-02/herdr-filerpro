@@ -10,3 +10,13 @@ export function fileClick(event, double) {
   if (n <= 1) return double ? "select" : "open";
   return double && n === 2 ? "open" : null;
 }
+
+// What a click on a folder row does (issue #90). Pure. event: on_click's ClickEvent. double: the double_click_folders setting.
+// -> "toggle" (open or close the folder), "root" (show it as the tree's root) or null (nothing). With double on, the first press
+// toggles as ever and the second shows the folder as root; a later press of the same double or triple click does nothing.
+// With it off every press toggles. An event without a count is one click.
+export function folderClick(event, double) {
+  const n = typeof event?.click_count === "number" ? event.click_count : 1;
+  if (!double || n <= 1) return "toggle";
+  return n === 2 ? "root" : null;
+}

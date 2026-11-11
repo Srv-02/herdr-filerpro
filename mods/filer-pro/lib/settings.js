@@ -45,6 +45,7 @@ export const SETTINGS = Object.freeze([
   bool("show_sizes", true, "Show file sizes", "Sizes next to files. Folders show a size after Calculate Size.", "File list"),
   bool("double_click_files", false, "Open files with a double click", "A single click only marks a file. Folders still open with a single click.", "File list"),
   bool("double_click_apps", true, "Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident.", "File list"),
+  bool("double_click_folders", true, "Show folders as root with a double click", "A single click still opens and closes a folder. Show as Root in the right-click menu works either way.", "File list"),
   bool("extract_space_check", true, "Check free space before extracting", "Stops when the archive would not fit. A single compressed file is read once more.", "File list"),
   bool("preview", true, "Show previews", "Markdown, HTML, images and PDFs open formatted. Turn off to always see the raw text.", "Preview"),
   bool("mermaid", true, "Draw diagrams", "Turns Mermaid code in Markdown files into diagrams. Needs Node.js.", "Preview"),

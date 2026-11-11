@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: true,
+    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, double_click_folders: true, extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: true,
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -138,6 +138,14 @@ test("hide_system_files is on and hide_dotfiles off by default; each changes onl
   }
   const c = await loadConfig(reader('{"hide_system_files":false,"hide_dotfiles":true}'), appHome, home);
   assert.deepEqual([c.hide_system_files, c.hide_dotfiles], [false, true]);
+});
+
+test("double_click_folders is on by default and changes only with a boolean (issue #90)", async () => {
+  for (const text of [null, "{nope", '{"double_click_folders":"no"}', '{"double_click_folders":0}']) {
+    const c = await loadConfig(reader(text), appHome, home);
+    assert.equal(c.double_click_folders, true, String(text));
+  }
+  assert.equal((await loadConfig(reader('{"double_click_folders":false}'), appHome, home)).double_click_folders, false);
 });
 
 test("double_click_files is off and double_click_apps on by default; each changes only with a boolean (issue #21)", async () => {

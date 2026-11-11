@@ -4,7 +4,7 @@
 # instance, then crop and render the cards with headless Edge. No mouse, no keyboard, no focus change: the one focus the new
 # window takes on launch is macOS's own. Needs: macOS, Herdr.app, Microsoft Edge, node, zip, sips. Usage: scripts/screenshots/shoot.sh
 # CROP_ONLY=1 skips the instance and re-crops and renders from the raw shots in tmp/shots-raw.
-# Usage: shoot.sh [card ...]   (preview formats browse editors extract edit-terminal pdf-fullscreen settings; none = all)
+# Usage: shoot.sh [card ...]   (preview formats browse editors extract edit-terminal pdf-fullscreen settings show-as-root; none = all)
 # The crop boxes below are raw pixels of the default window (1280 x 820 points at 2x, panel 446 points wide, app zoom 1).
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -62,7 +62,7 @@ if w settings; then
 cmd '"op":"settings","from":0' 4; shot settings-top; closeall
 cmd '"op":"settings","from":9' 4; shot settings-bottom; closeall
 fi
-if w browse || w editors || w extract || w edit-terminal; then
+if w browse || w editors || w extract || w edit-terminal || w show-as-root; then
 # browse.png: the tree with sizes and a calculated folder, the row menu of a file
 cmd '"op":"back"' 1
 cmd '"op":"expand","paths":["assets","docs","src"]'
@@ -76,6 +76,10 @@ cmd '"op":"menu","path":".env.example","x":1000,"y":118,"hover":"filer-pro-menu-
 cmd '"op":"collapse","paths":["src"]'
 cmd '"op":"expand","paths":["assets"]' 1; shot extract-tree
 cmd '"op":"menu","path":"assets/release.zip","x":1000,"y":118,"hover":"filer-pro-menu-extract-to"' 1; shot extract-menu; closeall
+# show-as-root.png: a folder row, Show as Root hovered
+cmd '"op":"collapse","paths":["assets"]'
+cmd '"op":"expand","paths":["docs"]' 1; shot root-tree
+cmd '"op":"menu","path":"src","x":1000,"y":118,"hover":"filer-pro-menu-show-as-root"' 1; shot root-menu; closeall
 # edit-terminal.png: the vi split and the row menu with Edit in Terminal hovered
 cmd '"op":"collapse","paths":["assets","src"]'
 herdr-app do terminal.open '{"argv":["vi","-n","+3",".env.example"],"folder":"'"$DEMO"'","place":"right"}' > /dev/null
@@ -109,6 +113,10 @@ fi
 if w extract; then
   panel extract-tree extract-tree; box extract-menu 236 2000 400 1102 extract-menu
   "$R" "$C/extract.html" "$ROOT/screenshots/extract.png" 880 700 > /dev/null
+fi
+if w show-as-root; then
+  panel root-tree root-tree; box root-menu 236 2000 400 976 root-menu
+  "$R" "$C/show-as-root.html" "$ROOT/screenshots/show-as-root.png" 880 640 > /dev/null
 fi
 if w edit-terminal; then
   box edit-terminal 102 1105 1436 1292 edit-terminal-window
