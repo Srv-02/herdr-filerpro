@@ -46,8 +46,11 @@ prepare() {
     body.active = "filer-pro";
     body.children.unshift({ id: "filer-pro", type: "block", content: { mod: "filer-pro" } });
     fs.writeFileSync(home + "/layouts/demo.json", JSON.stringify(src, null, 2));
-    fs.writeFileSync(home + "/shared.json", JSON.stringify({ layout: "demo" }));
-  ' "${DEFAULT_LAYOUT:-$HOME/.config/herdr-app/layouts/main.json}"
+    // A new instance opens the welcome screen (shared "frame.welcomed" unset) and the what-is-new window (update-notes.json
+    // last_run older than the app): pre-seed both as done so no popup needs a click.
+    fs.writeFileSync(home + "/shared.json", JSON.stringify({ layout: "demo", "frame.welcomed": "finished" }));
+    fs.writeFileSync(home + "/update-notes.json", JSON.stringify({ last_run: process.argv[2], presented: [] }));
+  ' "${DEFAULT_LAYOUT:-$HOME/.config/herdr-app/layouts/main.json}" "$("${HERDR_APP_CLI:-herdr-app}" --version | awk '{print $NF}')"
 }
 
 case "${1:-}" in
