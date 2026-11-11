@@ -38,8 +38,8 @@ test("the bundle banner names the three licenses", () => {
   assert.match(read("mods/filer-pro/preview/mermaid.bundle.js").split("\n")[0], /beautiful-mermaid 1\.1\.3 \(MIT\) with elkjs \(EPL-2\.0\) and entities \(BSD-2-Clause\)/);
 });
 
-test("the README names credits, preview, turning off and removing", () => {
-  const r = read("README.md");
+test("the README and the guide name credits, preview, turning off and removing", () => {
+  const r = `${read("README.md")}\n${read("docs/GUIDE.md")}`;
   for (const s of ["herdr-files-plus", "jjongkwann", "## Preview", '"mermaid": false', '"preview": false', '"perf": true', "mods/filer-pro/preview/", "data/filer-pro/diagrams", "data/filer-pro/loads", "PDF", "osascript", "beautiful-mermaid", "elkjs", "entities"])
     assert.ok(r.includes(s), s);
 });

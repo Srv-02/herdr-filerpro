@@ -15,7 +15,7 @@ import { BASE } from "../lib/icons.js";
 export const CONFIG_PATH = "~/.config/herdr-app/filer-pro.json";
 export const GITHUB_URL = "https://github.com/Srv-02/herdr-filerpro";
 export const COFFEE_URL = "https://www.buymeacoffee.com/michaelmayer";
-export const EDITORS_DOC_URL = `${GITHUB_URL}#editors`;
+export const EDITORS_DOC_URL = `${GITHUB_URL}/blob/main/docs/GUIDE.md#editors`;
 export const SVG_WARNING = "A specially prepared SVG image can load content from the internet, slip in code, or grow so large that Filer Pro freezes. With the check off, you open SVG files at your own risk.";
 export const FIX_FIELDS = "Check the fields marked in red.";
 export const brokenText = (path = CONFIG_PATH) => `Settings can’t be saved: ${path} has a typo. Fix or delete the file, then reopen Settings.`;
@@ -64,7 +64,7 @@ export function createSettingsDialog(snapshot, cx) {
     state.fields[s.key] = field(state, s.key, shown, s.key === "node_path" ? "Automatic" : null);
     state.initial[s.key] = validateField(s.key, shown).value ?? shown;
   }
-  // Editors: only the choice is edited here; own entries come from the config file (see README, Editors).
+  // Editors: only the choice is edited here; own entries come from the config file (see docs/GUIDE.md, Editors).
   state.editors = {
     gui: { key: "gui_editor", names: editorNames(GUI_EDITORS, config.gui_editors), choice: config.gui_editor ?? "VS Code" },
     terminal: { key: "terminal_editor", names: editorNames(TERMINAL_EDITORS, config.terminal_editors), choice: config.terminal_editor ?? "vi" },
