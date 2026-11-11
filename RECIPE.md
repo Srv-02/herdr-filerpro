@@ -49,7 +49,7 @@ The mod shows no agent status (working, blocked, done, idle); it follows only th
 
 ## Built from
 
-Folder `mods/filer-pro/`, `mod.json` `{ "place": "none", "version": "1.3.2" }` (no `focusable`; `version` is the mod's own semver, read at runtime for the update check). No `keys.json`.
+Folder `mods/filer-pro/`, `mod.json` `{ "place": "none", "version": "1.3.3" }` (no `focusable`; `version` is the mod's own semver, read at runtime for the update check). No `keys.json`.
 
 - **One `View`, four roles by props:** no props: the panel; `{ button: true }`: the pill (it also adds `filer-pro` to shared `workspace.panels` with `setShared`, so the shipped `tabs` mod restores the panel per space, then only listens for `reveal`); `{ overlay, view: "menu" | "conflict" | "rename" | "mkdir" | "permissions" | "settings" | "file" }`: the overlays, opened with `openOverlay({ mod: "filer-pro", ... })`.
 - **Layout blocks it needs** (the person's own layout; shipped layouts are cloned first): in a row `tab-bar` (42px): `{ "id": "filer-pro-button", "type": "block", "content": { "mod": "filer-pro", "props": { "button": true } }, "size": { "px": 96 }, "window_drag": true }`; in `panel` > `panel-body`, first: `{ "id": "filer-pro", "type": "block", "content": { "mod": "filer-pro" }, "size": { "weight": 1 }, "min": 120 }`.
