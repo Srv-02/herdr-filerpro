@@ -44,7 +44,7 @@ test("settings: a wrong type or a fraction falls back to the default, an integer
 test("settings: every dialog key is listed once with a section, a label and a help line; perf and the editor lists are not", () => {
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
-  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "hide_system_files", "hide_dotfiles", "double_click_files", "double_click_apps", "extract_space_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
+  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "hide_system_files", "hide_dotfiles", "double_click_files", "double_click_apps", "double_click_folders", "extract_space_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
   for (const k of ["perf", "terminal_editors", "gui_editors"]) assert.ok(!keys.includes(k), k);
   const sections = ["Updates", "Downloads", "File list", "Preview", "Security", ...ADVANCED];
   for (const s of SETTINGS) assert.ok(s.label && s.help && sections.includes(s.section), s.key);
@@ -85,13 +85,22 @@ test("settings: the two double click switches of issue #21, in the visible File 
   assert.equal(by.list_per_folder.section, "File list limits");
 });
 
-test("settings: extract_space_check (#57) is a File list switch, on by default, right after double_click_apps", () => {
+test("settings: double_click_folders (#90) is a File list switch, on by default, right after double_click_apps", () => {
+  const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+  assert.deepEqual([by.double_click_folders.kind, by.double_click_folders.default, by.double_click_folders.section], ["bool", true, "File list"]);
+  assert.equal(by.double_click_folders.label, "Double-click a folder to show it as root");
+  assert.equal(by.double_click_folders.help, "A single click still opens and closes it.");
+  const keys = SETTINGS.map((s) => s.key);
+  assert.equal(keys.indexOf("double_click_folders"), keys.indexOf("double_click_apps") + 1);
+});
+
+test("settings: extract_space_check (#57) is a File list switch, on by default, right after double_click_folders", () => {
   const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
   assert.deepEqual([by.extract_space_check.kind, by.extract_space_check.default, by.extract_space_check.section], ["bool", true, "File list"]);
   assert.equal(by.extract_space_check.label, "Check free space before extracting");
   assert.equal(by.extract_space_check.help, "Stops when the archive would not fit. A single compressed file is read once more.");
   const keys = SETTINGS.map((s) => s.key);
-  assert.equal(keys.indexOf("extract_space_check"), keys.indexOf("double_click_apps") + 1);
+  assert.equal(keys.indexOf("extract_space_check"), keys.indexOf("double_click_folders") + 1);
 });
 
 test("group is the one from lib/numbers.js (settings re-exports it for the dialog)", () => {

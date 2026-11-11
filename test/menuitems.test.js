@@ -77,7 +77,7 @@ test("Show in Finder is dimmed on a machine for files and folders, Open and Open
 });
 test("menu height matches the item count", () => {
   assert.equal(menuHeight(rowMenuItems(on)), 488);
-  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 516, "a folder has Calculate Size (issue #58)");
+  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 544, "a folder has Calculate Size (issue #58) and Show as Root (issue #90)");
   assert.equal(menuHeight(rootMenuItems(on)), 138);
   assert.equal(menuHeight(rootMenuItems({ ...on, editorFolder: false })), 138);
   assert.equal(menuHeight(rowMenuItems({ ...on, editorFile: false })), 488);
@@ -105,7 +105,7 @@ test("Permissions… is dimmed on this computer when it is Windows (no chmod the
 // Issue #58: Calculate Size on folders (packages too), with the result at the right of the entry.
 test("Calculate Size is in the first group for folders and packages only, with its detail", () => {
   const folder = rowMenuItems({ ...on, isDir: true });
-  assert.deepEqual(folder.slice(0, 7).map((i) => (i.separator ? "|" : i.action)), ["open", "open_preview", "open_editor", "edit_terminal", "reveal", "calculate_size", "|"]);
+  assert.deepEqual(folder.slice(0, 8).map((i) => (i.separator ? "|" : i.action)), ["open", "open_preview", "open_editor", "edit_terminal", "reveal", "show_as_root", "calculate_size", "|"]);
   const calc = folder.find((i) => i.action === "calculate_size");
   assert.deepEqual([calc.id, calc.label, calc.enabled, calc.detail], ["filer-pro-menu-calculate-size", "Calculate Size", true, null]);
   assert.equal(rowMenuItems(on).some((i) => i.action === "calculate_size"), false, "not on a file");

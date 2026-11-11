@@ -332,6 +332,20 @@ test("view: the two double click switches start at their defaults, flip on their
   assert.deepEqual(texts(row.kids[0]), ["Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident."]);
 });
 
+test("view: Double-click a folder to show it as root (#90) sits below the apps switch, starts on, flips and is written only when flipped", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  assert.equal(s.flags.double_click_folders, true);
+  assert.deepEqual(collect(s), {});
+  const out = texts(view(s));
+  assert.ok(out.indexOf("Double-click a folder to show it as root") > out.indexOf("Open apps with a double click"));
+  assert.ok(out.indexOf("#filer-pro-settings-double_click_folders-switch") < out.indexOf("#filer-pro-settings-extract_space_check-switch"));
+  assert.ok(out.includes("A single click still opens and closes it."));
+  assert.equal(called(byId(view(s), "filer-pro-settings-double_click_folders"), "opacity").length, 0, "never dimmed");
+  called(byId(view(s), "filer-pro-settings-double_click_folders-switch"), "on_click")[0][0]({}, makeCx());
+  assert.equal(s.flags.double_click_folders, false);
+  assert.deepEqual(collect(s), { double_click_folders: false });
+});
+
 test("view: Check free space before extracting is the last switch of File list; it toggles and is collected", async () => {
   const id = "#filer-pro-settings-extract_space_check-switch";
   const s = createSettingsDialog(await snapshot(undefined), cx);

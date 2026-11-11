@@ -13,7 +13,7 @@ const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action
 // false: no remote_folder, the free-area entry is dimmed on a machine; name: the file name, an archive (lib/archives.js) gets Extract Here and Extract to "<name>/"
 // below Download, not on a local Windows side; remote: the row is on a machine, Show in Finder is dimmed because it would download first;
 // bundle: a local macOS package (lib/bundles.js), a folder that Open starts like the Finder does, with the entry
-// Show Package Contents, or Hide Package Contents while contents is true; windows: this computer is Windows, where Permissions… is
+// Show Package Contents, or Hide Package Contents while contents is true; a folder that is not a package gets Show as Root (issue #90) in its place; windows: this computer is Windows, where Permissions… is
 // dimmed because there is no chmod; on a machine it works; size: the text at the right of Calculate Size on a folder
 // (lib/sizes.js sizeDetail), sizeTitle: its tooltip (lib/sizes.js sizeNote, set when the sum is incomplete), sizing: that calculation runs, the entry is dimmed; dimmed on local Windows too, no sh there)
 export function rowMenuItems(state) {
@@ -28,6 +28,7 @@ export function rowMenuItems(state) {
     entry("edit_terminal", "Edit in Terminal", file),
     entry("reveal", "Show in Finder", local),
     ...(bundle ? [entry("package_contents", state.contents === true ? "Hide Package Contents" : "Show Package Contents")] : []),
+    ...(file || bundle ? [] : [entry("show_as_root", "Show as Root")]),
     ...(file ? [] : [{ ...entry("calculate_size", "Calculate Size", state.sizing !== true && (state.windows !== true || !local)), detail: state.size ?? null, title: state.sizeTitle ?? null }]),
     SEPARATOR,
     entry("download", "Download"),

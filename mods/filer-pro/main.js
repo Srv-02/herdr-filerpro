@@ -15,7 +15,7 @@ import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
 import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
-import { fileClick } from "./lib/clicks.js";
+import { fileClick, folderClick } from "./lib/clicks.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
@@ -69,7 +69,7 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 // The settings before the config file was read (and in copies that never read it): today's defaults.
-const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, show_sizes: true };
+const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, double_click_folders: true, show_sizes: true };
 const MB = 1024 * 1024;
 // How much of the open file a refresh flight reloads at its end (refresh opts.file, this.fileWanted): TEXT only reads and
 // compares text (a watch batch that did not name the file: no exec), ALL also probes an image or PDF again (a change
@@ -173,6 +173,7 @@ export default class FilerPro extends View {
     this.reload = createReloadGate({ now: Date.now, at: shared("filer-pro.changed")?.at ?? null });
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null; this.perf = null; this.diagrams = null;
     this.configSeen = shared("filer-pro.config")?.at ?? null;
+    this.gotoSeen = shared("filer-pro.goto")?.id ?? null; // an old Show as Root request is not applied again
     this.packageSeen = shared("filer-pro.package")?.id ?? null; // an old Show Package Contents request is not applied again
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
@@ -481,6 +482,8 @@ export default class FilerPro extends View {
         // The panel that shows the package expands or collapses it (pollPackage).
         // The panel that shows the folder runs it (pollSizes); the result shows in the size column and here.
         calculate_size: () => { setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), p.machine, p.path, this.newId(), Date.now())); close(); },
+        // The panel that shows the folder makes it the root (pollGoto).
+        show_as_root: () => { setShared("filer-pro.goto", { id: this.newId(), machine: p.machine ?? null, path: p.path }); close(); },
         package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
@@ -857,6 +860,14 @@ export default class FilerPro extends View {
     });
   }
 
+  // A click on a folder row (issue #90): it toggles; with double_click_folders the second press of a double click shows the
+  // folder as root instead (lib/clicks.js folderClick). A package whose contents are shown keeps the plain toggle.
+  clickFolder(path, bundle, e, cx) {
+    const action = folderClick(e, this.conf.double_click_folders === true && !bundle);
+    if (action === "toggle") this.toggle(path, cx);
+    else if (action === "root") this.navigate(joinPath(this.root, path), cx);
+  }
+
   toggle(path, cx) {
     if (this.folders.has(path)) {
       for (const folder of [...this.folders]) if (folder === path || folder.startsWith(path + "/")) {
@@ -900,6 +911,15 @@ export default class FilerPro extends View {
     this.packageSeen = r.id;
     const rel = expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on);
     if (rel) cx.spawn(async (cx) => this.showPackage(rel, r.show === true, cx));
+  }
+
+  // Show as Root (issue #90): the menu copy asks through shared("filer-pro.goto") = { id, machine, path }; the panel that shows
+  // that machine and a folder above the path makes it the root (navigate), once. Called from render, so it runs in a task.
+  pollGoto(cx) {
+    const r = shared("filer-pro.goto");
+    if (!r?.id || r.id === this.gotoSeen) return;
+    this.gotoSeen = r.id;
+    if (expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on)) cx.spawn(async (cx) => this.navigate(r.path, cx));
   }
 
   // Calculate Size (issue #58): the menu copy asks through shared filer-pro.sizes (lib/sizes.js requestSize). The panel
@@ -2019,7 +2039,7 @@ export default class FilerPro extends View {
       const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
-        .on_click((e, cx) => e.modifiers.platform && !(this.on && !dir && isBinaryName(path)) ? this.reveal(path) : dir ? this.toggle(path, cx) : this.clickFile(path, bundle, e, cx))
+        .on_click((e, cx) => e.modifiers.platform && !(this.on && !dir && isBinaryName(path)) ? this.reveal(path) : dir ? this.clickFolder(path, bundle, e, cx) : this.clickFile(path, bundle, e, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
@@ -2067,6 +2087,7 @@ export default class FilerPro extends View {
     if (this.target().key !== this.context?.key) this.refresh(cx);
     this.pollReload(cx);
     this.pollPackage(cx);
+    this.pollGoto(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
     // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
