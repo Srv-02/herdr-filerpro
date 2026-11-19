@@ -53,6 +53,7 @@ Then click `Filer Pro` in the tab bar.
 - **Markdown** with Mermaid diagrams.
 - **PDF** page by page, in full screen also as a two page spread, zoom 50–300 %.
 - **Safe:** remote content inside documents is never loaded.
+- **Cmd-click** an image, PDF or Markdown path in a terminal, also on a remote machine, to see it here (Herdr app 0.1.17 or later).
 
 ![Markdown with a Mermaid diagram next to a PDF](screenshots/preview.png)
 

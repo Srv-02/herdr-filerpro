@@ -7,7 +7,7 @@ Everything Filer Pro does, in detail. For the overview, see the [README](../READ
 - [Requirements](#requirements)
 - [Install](#install): [Manual install](#manual-install)
 - [The file tree](#the-file-tree): [Git marks](#git-marks), [File sizes](#file-sizes), [Navigating above the terminal's folder](#navigating-above-the-terminals-folder), [Show as Root](#show-as-root), [Staying current](#staying-current)
-- [Preview](#preview): [Markdown, Mermaid and PDF](#markdown-mermaid-and-pdf), [Source, HTML and images](#source-html-and-images), [Files that are not text](#files-that-are-not-text), [Archives and Office files](#archives-and-office-files)
+- [Preview](#preview): [Markdown, Mermaid and PDF](#markdown-mermaid-and-pdf), [Source, HTML and images](#source-html-and-images), [Files that are not text](#files-that-are-not-text), [Archives and Office files](#archives-and-office-files), [Links in terminals](#links-in-terminals)
 - [Extracting archives](#extracting-archives)
 - [Editing plain text](#editing-plain-text): [Edit mode](#edit-mode), [Which files can be edited](#which-files-can-be-edited), [Saving](#saving), [Files that grow past 1 MiB](#files-that-grow-past-1-mib)
 - [Editors](#editors): [Choosing and adding editors](#choosing-and-adding-editors), [How editor commands run](#how-editor-commands-run), [Remote files](#remote-files)
@@ -183,6 +183,17 @@ Archives (`zip`, `gz`, `tgz`, `bz2`, `xz`, `zst`, `7z`, `rar`, `tar`) and Office
 - **On this computer** a click shows the message with an **Open** button, and a double click starts the default app (a single click starts it when **Open apps with a double click** is off).
 - A file that only turns out to be binary after the read shows the same message and button.
 - **On an SSH machine** a click never downloads or opens anything: the message shows at once without a read and without a button. **Open** and **Download** in the right-click menu stay available, and so does Cmd+click for other files (not for these types).
+
+### Links in terminals
+
+Needs Herdr app 0.1.17 or later (terminal link handlers). Older versions ignore it.
+
+- Cmd-click (Ctrl-click on other systems) on a path to an image, PDF, Markdown or HTML file in a terminal shows it in the Filer Pro panel instead of the system app. The panel opens if it is hidden.
+- Paths a coding agent prints work as they are: absolute, relative to the terminal's folder, `~/…`, `file://` links, and with a `:line:column` suffix.
+- It works for terminals on your machines too: the file opens from that machine, where the system app could not reach it.
+- A file below the folder the panel shows opens there; any other file opens with its folder as the root, as with [Show as Root](#show-as-root).
+- Unsaved changes in the open file keep it open; a toast says so.
+- Other files, folders and URLs keep the usual Cmd-click. To give these files back to the system app, remove `filer-pro` from `link_handlers` in your layout (Herdr adds it there the first time).
 
 ## Extracting archives
 

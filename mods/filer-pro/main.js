@@ -76,6 +76,8 @@ const MB = 1024 * 1024;
 // signal), NAMED also reads a file in an error state again (Refresh, a watch batch that names it, the opt-in timer): a
 // change signal names no path, so it never re-reads a file that could not be shown (one more read over SSH each time).
 const FILE_TEXT = 1, FILE_ALL = 2, FILE_NAMED = 3;
+// How long a clicked file link (link.js, shared filer-pro.link) waits for a panel copy that shows its machine.
+const LINK_WAIT_MS = 5000;
 const lf = (text) => String(text ?? "").replace(/\r\n?/g, "\n");
 // The save baseline of a file saved above 1 MiB (bigSaved: { path, size, hash, text, eol, mode }), as enterEdit and
 // saveFile use it: the bytes are the text in the file's line ends. null when the text cannot be encoded.
@@ -196,7 +198,7 @@ export default class FilerPro extends View {
       this.refreshedAt = Date.now();
       this.reloadConfig(cx, { file: FILE_NAMED });
     });
-    cx.timer.every(250, cx => { this.checkShow(cx); this.pollReload(cx); this.pollSizes(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
+    cx.timer.every(250, cx => { this.checkShow(cx); this.pollLink(cx); this.pollReload(cx); this.pollSizes(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
     this.drive(cx);
   }
 
@@ -950,6 +952,26 @@ export default class FilerPro extends View {
   entryAt(path) {
     const name = baseName(path);
     return this.entries?.get(parentOf(path) ?? "")?.find((e) => e.name === name);
+  }
+
+  // A Ctrl/Cmd-click on a file link in a terminal (link.js): the copy that shows the clicked terminal's machine shows the
+  // file, below the shown root when it lies there, else from its own folder (navigate, as Show as Root). Once, and only
+  // while the click is fresh: a copy that shows another machine leaves it to the others.
+  pollLink(cx) {
+    const r = shared("filer-pro.link");
+    if (!r?.id || r.id === this.linkSeen || !(Date.now() - (r.at ?? 0) <= LINK_WAIT_MS)) return;
+    const t = this.target();
+    if ((r.machine ?? null) !== (t.on ?? null)) return;
+    this.linkSeen = r.id;
+    if (t.key !== this.context?.key) this.refresh(cx);
+    if (this.edit?.dirty) { notify({ title: "Filer Pro", body: "Unsaved changes in the open file", level: "error" }); return; }
+    const rel = expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on);
+    if (rel === null) {
+      this.navigate(parentOf(r.path), cx);
+      if (this.root !== parentOf(r.path)) { notify({ title: "Filer Pro", body: `Cannot show ${r.path}`, level: "error" }); return; }
+    }
+    this.show(rel ?? baseName(r.path), cx);
+    cx.notify();
   }
 
   // Request actions open and mode (askPanel in lib/requests.js): this copy answers when it shows the machine
