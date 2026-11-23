@@ -351,14 +351,23 @@ test("settings dialog: with the daily check off, Check now answers in the dialog
 test("settings dialog: Choose… puts the picked folder into the field, with ~/ inside the home folder", async () => {
   const { cx, self } = await dialog();
   globalThis.__impl.pickFolder = async () => "/home/u/Inbox";
-  self.chooseDownloadFolder(cx);
+  self.chooseFolder(cx);
   await settle();
   assert.equal(self.settings.fields.download_folder.value, "~/Inbox");
   assert.equal(self.settings.fields.download_folder.input.value(), "~/Inbox");
   globalThis.__impl.pickFolder = async () => null;
-  self.chooseDownloadFolder(cx);
+  self.chooseFolder(cx);
   await settle();
   assert.equal(self.settings.fields.download_folder.value, "~/Inbox", "cancel keeps the field");
+});
+
+test("settings dialog: Choose… of the lower tree's row writes only local_tree_folder", async () => {
+  const { cx, self } = await dialog();
+  globalThis.__impl.pickFolder = async () => "/home/u/Inbox";
+  self.chooseFolder(cx, "local_tree_folder");
+  await settle();
+  assert.equal(self.settings.fields.local_tree_folder.value, "~/Inbox");
+  assert.equal(self.settings.fields.download_folder.value, "~/Downloads");
 });
 
 // Issue #17: the hide switches reach the listing (this Mac, an SSH machine, Windows), apply live, and an open folder

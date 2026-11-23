@@ -44,7 +44,7 @@ test("settings: a wrong type or a fraction falls back to the default, an integer
 test("settings: every dialog key is listed once with a section, a label and a help line; perf and the editor lists are not", () => {
   const keys = SETTINGS.map((s) => s.key);
   assert.equal(new Set(keys).size, keys.length);
-  for (const k of ["download_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "hide_system_files", "hide_dotfiles", "double_click_files", "double_click_apps", "double_click_folders", "extract_space_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
+  for (const k of ["download_folder", "local_tree_folder", "preview", "mermaid", "update_check", "node_path", "svg_check", "hide_system_files", "hide_dotfiles", "double_click_files", "double_click_apps", "double_click_folders", "extract_space_check", ...NUMBERS.map((s) => s.key)]) assert.ok(keys.includes(k), k);
   for (const k of ["perf", "terminal_editors", "gui_editors"]) assert.ok(!keys.includes(k), k);
   const sections = ["Updates", "Downloads", "File list", "Preview", "Security", ...ADVANCED];
   for (const s of SETTINGS) assert.ok(s.label && s.help && sections.includes(s.section), s.key);
@@ -247,4 +247,12 @@ test("settings: Show file sizes of issue #58 is a File list switch, on by defaul
   assert.deepEqual([by.show_sizes.kind, by.show_sizes.default, by.show_sizes.section], ["bool", true, "File list"]);
   assert.equal(by.show_sizes.label, "Show file sizes");
   assert.equal(by.show_sizes.help, "Sizes next to files. Folders show a size after Calculate Size.");
+});
+
+test("local_tree_folder may be empty and follows download_folder", () => {
+  const keys = SETTINGS.map((s) => s.key);
+  assert.equal(keys.indexOf("local_tree_folder"), keys.indexOf("download_folder") + 1);
+  assert.deepEqual(validateField("local_tree_folder", "  "), { value: "" });
+  assert.deepEqual(validateField("local_tree_folder", " ~/Inbox "), { value: "~/Inbox" });
+  assert.deepEqual(validateField("download_folder", "   "), { error: "Enter a folder." });
 });

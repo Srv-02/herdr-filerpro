@@ -407,6 +407,7 @@ All settings live in `~/.config/herdr-app/filer-pro.json`:
 |---|---|---|---|---|
 | `update_check` | Updates: Check for updates automatically | `true` | `true` / `false` | Daily update check |
 | `download_folder` | Downloads: Download folder | `~/Downloads` | not empty | Where downloads go |
+| `local_tree_folder` | Downloads: Start folder for This Mac | empty | empty or a folder | Where the lower tree opens; empty uses the download folder |
 | `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | Editors: Open in Editor, Edit in Terminal (the lists: config file only) | see [Editors](#editors) | | Edit in Terminal, Open in &lt;editor&gt; |
 | `hide_system_files` | File list: Hide system files | `true` | `true` / `false` | Hide OS clutter: `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`, `.apdisk`, `Icon\r`, `Thumbs.db`, `desktop.ini` (the last two in any case). Hidden entries do not count against the list limits; copy, move and delete of a folder still include them |
 | `hide_dotfiles` | File list: Hide hidden files | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot; while on, system files are hidden too, whatever `hide_system_files` says |

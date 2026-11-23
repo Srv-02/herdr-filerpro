@@ -535,7 +535,7 @@ export default class FilerPro extends View {
           close();
         }),
         onCheck: (cx) => this.checkNow(cx),
-        onChoose: (cx) => this.chooseDownloadFolder(cx),
+        onChoose: (cx, key) => this.chooseFolder(cx, key),
       }, shared("filer-pro.update"));
     }
     if (p.view === "rename" || p.view === "mkdir") return nameView(t, this.dialog, { onCancel: close, onSubmit: (name, cx) => this.submitName(name, cx) });
@@ -576,8 +576,8 @@ export default class FilerPro extends View {
   }
 
   // Settings dialog, Choose…: the system folder picker; a folder in the home folder is written with ~/.
-  chooseDownloadFolder(cx) {
-    const f = this.settings?.fields.download_folder;
+  chooseFolder(cx, key = "download_folder") {
+    const f = this.settings?.fields[key];
     if (!f) return;
     cx.spawn(async (cx) => {
       const dir = await pickFolder({ prompt: "Choose" }).catch(() => null);
