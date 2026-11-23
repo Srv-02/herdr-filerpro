@@ -230,14 +230,26 @@ export function resultText({ ok, job, jobs, path, removed, trashed, trash_path, 
 // deps: as handleRequest ({ jobs, ask, newBatchId }). reveal: true | "open" | "preview" (jobs.js end, open.js afterDownload).
 // from: the source machine of a copy between two machines (direction "cross"), else absent.
 // warn: { item } asks the cross-machine warning once, after inspect and before the conflict dialog; anything but Copy cancels.
-export async function runTransfers({ direction, machine, from, paths, destDir, conflict, links, reveal, warn }, deps) {
+// move: { root, clipAt } (#100): a Cut across sides. Copy first, then each job verifies and deletes its original. Every item gets
+// the delete guard before the question, the Move question replaces the warning, a marker probe refuses the original's own folder
+// after it, and the conflict dialog has no Merge.
+export async function runTransfers({ direction, machine, from, paths, destDir, conflict, links, reveal, warn, move }, deps) {
   const { jobs } = deps;
+  const srcSide = direction === "down" || direction === "remote" ? machine ?? null : direction === "cross" ? from ?? null : null;
+  const destSide = direction === "up" || direction === "remote" || direction === "cross" ? machine ?? null : null;
   const items = [], errors = [], seen = new Map(); // seen: nameKey of the name -> key of the first entry with it
   for (const path of paths) {
     const info = await jobs.inspect({ direction, machine, ...(from ? { from } : {}), src: path, destDir });
     if (info.error) {
       errors.push({ path, error: info.error });
       continue;
+    }
+    if (move) {
+      const c = await deps.fileOps.check({ on: srcSide, path, root: move.root });
+      if (!c.ok) {
+        errors.push({ path, error: c.error });
+        continue;
+      }
     }
     // A folder with a symlink loop is never transferred; links: "transfer_anyway" cannot override that.
     if (info.linkBlocked && links === "transfer_anyway") {
@@ -257,7 +269,28 @@ export async function runTransfers({ direction, machine, from, paths, destDir, c
     });
   }
   const started = [];
-  if (items.length > 0 && warn) {
+  if (items.length > 0 && move) {
+    let size = 0;
+    for (const item of items) {
+      const n = jobs.sourceSize ? await jobs.sourceSize({ direction, machine, ...(from ? { from } : {}), src: item.path }) : null;
+      size = size === null || typeof n !== "number" ? null : size + n;
+    }
+    const first = items[0];
+    const a = await deps.ask({
+      batch: `${deps.newBatchId()}#0`,
+      item: { name: first.name, isDir: first.isDir, path: first.path, from: srcSide, machine: destSide, direction, trash: srcSide === null, count: items.length, size },
+      choices: ["move", "cancel"], remaining: 1,
+    });
+    // Only Move moves: Cancel, a closed dialog and anything else start nothing. "Don't show again" does not exist here.
+    if (a?.choice !== "move") return { ok: false, error: "Cancelled", ...(errors.length > 0 ? { errors } : {}) };
+    for (let k = items.length - 1; k >= 0; k--) {
+      const o = await jobs.overlap({ direction, machine, ...(from ? { from } : {}), src: items[k].path, destDir });
+      if (o.error) {
+        errors.push({ path: items[k].path, error: o.error });
+        items.splice(k, 1);
+      }
+    }
+  } else if (items.length > 0 && warn) {
     // The dialog names how many entries and how many bytes travel; a size that is unknown or slow to get is left out.
     let size = 0;
     for (const item of items) {
@@ -271,7 +304,7 @@ export async function runTransfers({ direction, machine, from, paths, destDir, c
     if (a.apply_to_all === true && deps.saveConfig) await Promise.resolve(deps.saveConfig({ warn_cross_copy: false })).catch(() => {});
   }
   if (items.length > 0) {
-    const batch = createBatch(items);
+    const batch = createBatch(items, { merge: !move });
     batch.preset({ links: links === "transfer_anyway" || links === "cancel" ? links : undefined, conflict });
     const id = deps.newBatchId();
     let n = 0;
@@ -297,6 +330,7 @@ export async function runTransfers({ direction, machine, from, paths, destDir, c
       }
       started.push(await jobs.start({
         direction, machine, ...(from ? { from } : {}), src: item.path, destDir, choice, isDir: item.isDir, ...(reveal ? { reveal } : {}),
+        ...(move ? { move: { root: move.root, clipAt: move.clipAt } } : {}),
       }));
     }
   }
@@ -610,7 +644,22 @@ export async function handleRequest(req, deps) {
       const clip = getShared("filer-pro.clipboard");
       const plan = pastePlan(clip, { on: req.machine ?? null, folder: req.folder });
       if (plan.error) return { ok: false, error: plan.error };
-      if (plan.move) return (plan.srcs.length === 1 ? runMove : runMoves)({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
+      if (plan.move && (plan.direction === "local" || plan.direction === "remote")) return (plan.srcs.length === 1 ? runMove : runMoves)({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
+      if (plan.move) { // a Cut on another side (#100): copy, verify, delete
+        // Two machine names for one SSH host are one tree: a plain move there (a copy over itself would delete both files).
+        if (plan.direction === "cross") {
+          const same = await jobs.sameMachine(plan.from, plan.machine);
+          if (same === null) return { ok: false, error: "Could not tell whether both machines are the same" };
+          if (same) {
+            const here = { ...plan, direction: "remote", machine: plan.from };
+            return (plan.srcs.length === 1 ? runMove : runMoves)({ on: plan.from, plan: here, clip, root: clip.root, conflict: req.conflict, reveal: req.reveal }, deps);
+          }
+        }
+        return runTransfers({
+          direction: plan.direction, machine: plan.machine, ...(plan.from ? { from: plan.from } : {}), paths: plan.srcs, destDir: plan.destDir,
+          conflict: req.conflict, links: req.links, reveal: req.reveal, move: { root: plan.root, clipAt: clip.at },
+        }, deps);
+      }
       // A copy between two machines runs through this computer: one warning per paste unless the setting is off.
       const warn = plan.direction === "cross" && (await deps.loadConfig())?.warn_cross_copy !== false
         ? { item: { name: baseName(plan.srcs[0]), isDir: clipItems(clip)[0].isDir, path: plan.srcs[0], from: plan.from, machine: plan.machine, direction: "cross" } } : null;
