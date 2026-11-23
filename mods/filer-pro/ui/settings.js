@@ -61,8 +61,8 @@ export function createSettingsDialog(snapshot, cx) {
     if (s.kind === "bool") { state.flags[s.key] = config[s.key] ?? s.default; state.initial[s.key] = state.flags[s.key]; continue; }
     if (s.kind === "choice") continue; // the click pickers have their own state (state.choices)
     // The download folder as written in the file (~/ stays ~/), everything else as loadConfig read it.
-    const shown = s.key === "download_folder" ? (str(raw.download_folder).trim() || s.default) : String(config[s.key] ?? s.default);
-    state.fields[s.key] = field(state, s.key, shown, s.key === "node_path" ? "Automatic" : null);
+    const shown = s.key === "download_folder" ? (str(raw.download_folder).trim() || s.default) : s.key === "local_tree_folder" ? str(raw.local_tree_folder).trim() : String(config[s.key] ?? s.default);
+    state.fields[s.key] = field(state, s.key, shown, s.key === "node_path" ? "Automatic" : s.key === "local_tree_folder" ? "Download folder" : null);
     state.initial[s.key] = validateField(s.key, shown).value ?? shown;
   }
   // The two selection clicks (#98): the picked values, and the message when both are the same.
@@ -278,6 +278,7 @@ function link(t, id, text, iconName, url) {
 
 function body(t, state, handlers, stored) {
   const f = state.fields.download_folder, dl = SETTINGS.find((s) => s.key === "download_folder");
+  const lf = state.fields.local_tree_folder, lt = SETTINGS.find((s) => s.key === "local_tree_folder");
   const svgOn = state.flags.svg_check === true, warn = svgOn ? t.ansi3 : t.ansi1;
   const items = [
     heading(t, "Updates", true),
@@ -286,7 +287,9 @@ function body(t, state, handlers, stored) {
 
     heading(t, "Downloads"),
     row(t, "filer-pro-settings-download_folder", dl.label, help(t, dl.help),
-      [input(t, f, 190), button(t, "filer-pro-settings-choose", "Choose…", handlers.onChoose)], { last: true, error: f.error }),
+      [input(t, f, 190), button(t, "filer-pro-settings-choose", "Choose…", (cx) => handlers.onChoose(cx, "download_folder"))], { error: f.error }),
+    row(t, "filer-pro-settings-local_tree_folder", lt.label, help(t, lt.help),
+      [input(t, lf, 190), button(t, "filer-pro-settings-choose-local", "Choose…", (cx) => handlers.onChoose(cx, "local_tree_folder"))], { last: true, error: lf.error }),
 
     heading(t, "Editors"),
     editorBlock(t, state, "gui", "Open in Editor", "The app the Open in … menu entries use. Works for files on this Mac and on your SSH machines.", false),

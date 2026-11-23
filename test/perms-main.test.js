@@ -29,7 +29,7 @@ const make = (names) => names.map((n) => `export const ${n} = (...a) => { const 
 const STUBS = {
   herdr: stub(["spaces", "panes", "focused", "exec", "hc", "readTextFile", "writeTextFile", "watchFolder", "theme", "settings", "window", "shared", "setShared", "notify", "props", "appHome", "home", "nextCommand", "openOverlay", "closeOverlay", "pickFolder", "run", "layout"]),
   "gpui-kit": `export class View {}; ${make(["div", "svg", "image"])}`,
-  "gpui-base": `${make(["v_flex", "h_flex", "TextView"])} export const Input = { new: () => globalThis.__make("input") }, Scrollbar = { vertical: () => globalThis.__make("scrollbar") };
+  "gpui-base": `${make(["v_flex", "h_flex", "v_resizable", "resizable_panel", "TextView"])} export const Input = { new: () => globalThis.__make("input") }, Scrollbar = { vertical: () => globalThis.__make("scrollbar") };
 export class Editor { static new() { return globalThis.__make("editor"); } } export class EditorState { static new() { return { release() {} }; } }
 export class InputState { static new(o) { const s = new InputState(); s.v = o.value; s.h = {}; return s; } on(e, f) { this.h[e] = f; } value() { return this.v; } set_value(v) { this.v = v; } set_selected_range() {} focus() {} }`,
   "fs/promises": `${stub(["exists"])} export const readFile = async () => "", writeFile = async () => {}, mkdir = readFile, unlink = readFile, stat = readFile;`,

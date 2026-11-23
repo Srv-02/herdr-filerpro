@@ -30,7 +30,7 @@ const make = (names) => names.map((n) => `export const ${n} = () => globalThis._
 const STUBS = {
   herdr: stub(["spaces", "panes", "focused", "exec", "hc", "readTextFile", "writeTextFile", "watchFolder", "theme", "settings", "window", "shared", "setShared", "notify", "props", "appHome", "home", "nextCommand", "openOverlay", "closeOverlay", "pickFolder", "run", "layout"]),
   "gpui-kit": `export class View {}; ${make(["div", "svg", "image"])}`,
-  "gpui-base": `${make(["v_flex", "h_flex", "TextView"])} export const Input = { new: () => globalThis.__make("input") }, Scrollbar = { vertical: () => globalThis.__make("scrollbar") };
+  "gpui-base": `${make(["v_flex", "h_flex", "v_resizable", "resizable_panel", "TextView"])} export const Input = { new: () => globalThis.__make("input") }, Scrollbar = { vertical: () => globalThis.__make("scrollbar") };
 export class Editor { static new() { return globalThis.__make("editor"); } } export class EditorState {}
 export class InputState { static new(o) { const s = new InputState(); s.v = o.value; s.handlers = {}; return s; }
   on(ev, fn) { this.handlers[ev] = fn; } value() { return this.v; } set_value(v) { this.v = v; } focus() {} type(v, cx) { this.v = v; this.handlers.change?.({}, cx); } }`,
@@ -351,14 +351,23 @@ test("settings dialog: with the daily check off, Check now answers in the dialog
 test("settings dialog: Choose… puts the picked folder into the field, with ~/ inside the home folder", async () => {
   const { cx, self } = await dialog();
   globalThis.__impl.pickFolder = async () => "/home/u/Inbox";
-  self.chooseDownloadFolder(cx);
+  self.chooseFolder(cx);
   await settle();
   assert.equal(self.settings.fields.download_folder.value, "~/Inbox");
   assert.equal(self.settings.fields.download_folder.input.value(), "~/Inbox");
   globalThis.__impl.pickFolder = async () => null;
-  self.chooseDownloadFolder(cx);
+  self.chooseFolder(cx);
   await settle();
   assert.equal(self.settings.fields.download_folder.value, "~/Inbox", "cancel keeps the field");
+});
+
+test("settings dialog: Choose… of the lower tree's row writes only local_tree_folder", async () => {
+  const { cx, self } = await dialog();
+  globalThis.__impl.pickFolder = async () => "/home/u/Inbox";
+  self.chooseFolder(cx, "local_tree_folder");
+  await settle();
+  assert.equal(self.settings.fields.local_tree_folder.value, "~/Inbox");
+  assert.equal(self.settings.fields.download_folder.value, "~/Downloads");
 });
 
 // Issue #17: the hide switches reach the listing (this Mac, an SSH machine, Windows), apply live, and an open folder

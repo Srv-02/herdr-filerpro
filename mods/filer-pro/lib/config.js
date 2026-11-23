@@ -67,7 +67,9 @@ export async function loadConfig(readTextFile, appHome, home) {
     hide_system_files: flag("hide_system_files", true), hide_dotfiles: flag("hide_dotfiles", false),
     double_click_files: flag("double_click_files", false), double_click_apps: flag("double_click_apps", true), double_click_folders: flag("double_click_folders", true), multi_select: flag("multi_select", false), select_toggle_click: toggleClick, select_range_click: rangeClick, extract_space_check: flag("extract_space_check", true), warn_cross_copy: flag("warn_cross_copy", true),
     show_sizes: flag("show_sizes", true), ...numbers(cfg) };
+  const expand = (p) => (p === "~" || p.startsWith("~/") ? home() + p.slice(1) : p);
+  const local = typeof cfg?.local_tree_folder === "string" ? expand(cfg.local_tree_folder.trim()) : "";
+  flags.local_tree_folder = local;
   if (folder == null) return { download_folder: fallback, ...flags };
-  if (folder === "~" || folder.startsWith("~/")) folder = home() + folder.slice(1);
-  return { download_folder: folder, ...flags };
+  return { download_folder: expand(folder), ...flags };
 }

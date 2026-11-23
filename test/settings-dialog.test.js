@@ -471,3 +471,16 @@ test("save: only a changed pick is written (#98)", async () => {
   called(byId(view(s), "filer-pro-settings-select_toggle_click-alt"), "on_click")[0][0]({}, makeCx());
   assert.deepEqual(collect(s), { select_toggle_click: "alt" });
 });
+
+test("dialog: the lower tree's start folder row follows the download folder, with its own Choose…", async () => {
+  const c = makeCx();
+  const s = createSettingsDialog(await snapshot({ local_tree_folder: "~/Inbox" }), c);
+  assert.equal(s.fields.local_tree_folder.value, "~/Inbox");
+  const e = createSettingsDialog(await snapshot({}), makeCx());
+  assert.equal(e.fields.local_tree_folder.value, "");
+  assert.equal(e.fields.local_tree_folder.input.placeholder, "Download folder");
+  const v = view(s);
+  const all = [...walk(v)].map((n) => n.calls?.find(([k]) => k === "id")?.[1][0]).filter(Boolean);
+  assert.ok(all.indexOf("filer-pro-settings-local_tree_folder") === all.indexOf("filer-pro-settings-download_folder") + 1 || all.indexOf("filer-pro-settings-local_tree_folder") > all.indexOf("filer-pro-settings-download_folder"));
+  assert.ok(byId(v, "filer-pro-settings-choose-local"));
+});
