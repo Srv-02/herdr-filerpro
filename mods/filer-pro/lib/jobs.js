@@ -76,8 +76,8 @@ rm -rf -- "$1"`;
 // A move across sides must never delete the folder it copies into (#100). Two names can reach one folder (an alias, a
 // localhost machine, another spelling of one SSH host, a shared mount): so a marker file goes into the source's parent folder
 // on the source side, and the target folder and its parents are searched for it on the target side.
-// `x <dir> <id>`: creates <dir>/.filer-pro-mark-<id> and never overwrites a file (set -C); exit 0 on success, 1 otherwise.
-export const MARK_SCRIPT = 'set -C; : > "$1/.filer-pro-mark-$2" 2>/dev/null || exit 1; exit 0';
+// `x <dir> <id>`: creates <dir>/.filer-pro-mark-<id> and never overwrites a file (set -C); exit 0 on success, 1 otherwise (`true`, not `:`: a failed redirection of a special builtin ends dash with 2).
+export const MARK_SCRIPT = 'set -C; true > "$1/.filer-pro-mark-$2" 2>/dev/null || exit 1; exit 0';
 // `x <dir> <id>`: removes the marker, always exit 0.
 export const UNMARK_SCRIPT = 'rm -f -- "$1/.filer-pro-mark-$2" 2>/dev/null; exit 0';
 // `x <destDir> <id> <srcName>`: from the physical <destDir> up to /, the first folder F that holds the marker decides:
