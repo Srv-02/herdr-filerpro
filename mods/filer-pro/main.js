@@ -170,11 +170,11 @@ export default class FilerPro extends View {
     // The jobs' timer (the sliced member check of an archive) runs on the AsyncContext of a spawned task. The init cx is an AsyncContext too (gpui-kit.d.ts) and may be held across awaits until this build is reloaded or closed, so using it directly would be equivalent; this is kept as it is, not for a documented need.
     let timers = null;
     cx.spawn(async (acx) => { timers = acx; });
+    const base = createFileOps({ exec, localPlatform: () => window()?.platform });
     this.jobs = createJobs({
-      exec, hc, readTextFile, localPlatform: () => window()?.platform, getShared: shared, setShared, notify, now: Date.now, appHome, home, settings: () => this.cfg,
+      fileOps: base, exec, hc, readTextFile, localPlatform: () => window()?.platform, getShared: shared, setShared, notify, now: Date.now, appHome, home, settings: () => this.cfg,
       newId: () => (Math.random().toString(36).slice(2) + "00000000").slice(0, 8), after: (ms, fn) => (timers ?? cx).timer.after(ms, () => fn()),
     });
-    const base = createFileOps({ exec, localPlatform: () => window()?.platform });
     this.fileOps = { ...base, ...createMoveOps({ exec, localPlatform: () => window()?.platform, check: base.check, trashDir: platform.trashDir(home()) }) };
     this.reload = createReloadGate({ now: Date.now, at: shared("filer-pro.changed")?.at ?? null });
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.colorKey = null; this.perf = null; this.diagrams = null;

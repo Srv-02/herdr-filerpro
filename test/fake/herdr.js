@@ -141,7 +141,27 @@ export function createFake(over = {}) {
     return ok(); // rm
   };
 
+  // A recording stand-in for the file ops a move job deletes with: check({ on, path, root, timeout }), remove({ ..., expect }).
+  // checkOut / removeOut: a result, or a function (args, call number of that kind) returning one.
+  f.fileOpsCalls = [];
+  const answer = (o, a, n, dflt) => (typeof o === "function" ? o(a, n) : o) ?? dflt;
+  f.fileOps = {
+    check: async (a) => {
+      f.fileOpsCalls.push(["check", a]);
+      const n = f.fileOpsCalls.filter((c) => c[0] === "check").length;
+      return answer(f.checkOut, a, n, { ok: true, path: a.path, name: a.path.split("/").pop(), isDir: false });
+    },
+    remove: async (a) => {
+      f.fileOpsCalls.push(["remove", a]);
+      const n = f.fileOpsCalls.filter((c) => c[0] === "remove").length;
+      await f.onRemove?.(a);
+      return answer(f.removeOut, a, n, { ok: true, trashed: a.on === null });
+    },
+  };
+  f.removes = () => f.fileOpsCalls.filter((c) => c[0] === "remove").map((c) => c[1]);
+
   f.deps = () => ({
+    fileOps: f.fileOps,
     exec: f.exec,
     hc: f.hc,
     readTextFile: f.readTextFile,

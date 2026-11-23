@@ -11,6 +11,7 @@ import { platform } from "./platform.js";
 import { afterDownload } from "./open.js";
 import { sizeArgs, SIZE_GRACE_MS, parseSize, parseSizeOutput } from "./sizes.js";
 import { progressOf } from "./progress.js";
+import { verifyArgs, parseVerify, verdict, VERIFY_MS, KEPT_UNKNOWN, KEPT_CHANGED, KEPT_CANCELLED, KEPT_RESTART, KEPT_RESTART_DELETE, KEPT_NO_ROOT } from "./verify.js";
 import { LINKS_SCRIPT, parseLinks, linkWarning } from "./links.js";
 import { MOUNT_FN, normalizePath } from "./fileops.js";
 import { numbers } from "./settings.js";
@@ -169,6 +170,15 @@ export function createJobs(deps) {
     }
   }
 
+  function notifyMove(job) {
+    if (job.moved) {
+      notify({ title: "Moved", body: job.name, level: "success", ...(job.direction === "down" ? { action: { name: "filer-pro.reveal" } } : {}) });
+      if (job.direction === "down") setShared("filer-pro.last_download", job.dest);
+    } else if (typeof job.kept === "string") {
+      notify({ title: "Copied, source kept", body: [job.kept, job.warning].filter(Boolean).join(" "), level: "warning" });
+    }
+  }
+
   function notifyEnd(job) {
     if (job.preview) return;
     if (job.kind === "extract") { // never last_download, Finder or the clipboard: the archive stays where it was
@@ -180,6 +190,8 @@ export function createJobs(deps) {
     if (job.state === "failed") {
       const title = { down: "Download failed", up: "Upload failed", local: "Copy failed", remote: "Copy failed", cross: "Copy failed" }[job.direction];
       notify({ title, body: job.error, level: "error" });
+    } else if (job.state === "done" && job.move) { // a move job (#100): Moved, or the copy with its original kept
+      notifyMove(job);
     } else if (job.state === "done" && job.warning) { // done, but something stayed behind (#46): one warning toast
       const title = { down: "Downloaded", up: "Uploaded", local: "Copied", remote: "Copied", cross: "Copied" }[job.direction];
       notify({ title, body: job.warning, level: "warning" });
@@ -199,7 +211,15 @@ export function createJobs(deps) {
     // The tree reloads at once, also after a failed or cancelled job: it may have written part of a folder (issue #31,
     // no timer catches up on a machine).
     if (!job.preview) setShared("filer-pro.changed", { at: now() });
-    if (job.state === "done") { // a Cut waiting on this copy ("Copy instead", requests.js runMove) is complete now
+    if (job.state === "done" && job.moved && job.move) { // only a job that moved leaves the Cut: its item goes, a kept job never touches it
+      const clip = getShared("filer-pro.clipboard");
+      if (clip?.cut === true && clip.at === job.move.clipAt && (clip.machine ?? null) === (job.move.srcOn ?? null)) {
+        const items = clipItems(clip).filter((i) => i.path !== job.src);
+        const { path: _path, isDir: _isDir, items: _items, ...base } = clip;
+        setShared("filer-pro.clipboard", items.length === 0 ? null : { ...base, items });
+      }
+    }
+    if (job.state === "done" && !job.move) { // a Cut waiting on this copy ("Copy instead", requests.js runMove) is complete now
       const clip = getShared("filer-pro.clipboard");
       const idOf = (e) => (typeof e === "string" ? e : e?.id);
       const mine = Array.isArray(clip?.copyJobs) ? clip.copyJobs.find((e) => idOf(e) === id) : undefined;
@@ -213,7 +233,7 @@ export function createJobs(deps) {
         setShared("filer-pro.clipboard", items.length === 0 ? null : { ...base, items, ...(copyJobs.length > 0 ? { copyJobs } : {}) });
       }
     }
-    if (job.state === "done" && (job.direction === "down" || job.direction === "local") && job.reveal) {
+    if (job.state === "done" && (job.direction === "down" || job.direction === "local") && job.reveal && (!job.move || job.moved)) {
       afterDownload(job, { exec, notify, platform, now }).catch(() => {}); // true: Finder; "open" / "preview": open after the checks
     }
     return job;
@@ -347,7 +367,7 @@ export function createJobs(deps) {
   // preview: a Load of the file view (main.js fetchLoad): the view shows the outcome, so the job ends without toast,
   // last_download, changed or reveal. as: the file name at the destination (loads/<key>/<key>.<ext>), the source name
   // stays the job's name. `as` only goes with choice "new"; the keep_both branch below is untouched.
-  async function start({ direction, machine, from, src, destDir, choice, isDir = false, reveal = false, preview = false, as = null }) {
+  async function start({ direction, machine, from, src, destDir, choice, isDir = false, reveal = false, preview = false, as = null, move = null }) {
     const id = newId();
     const name = baseName(src), file = as ?? name;
     const statusFile = `${appHome()}/filer-pro/jobs/${id}.status`;
@@ -359,6 +379,7 @@ export function createJobs(deps) {
       startedAt, lastGrowthAt: startedAt, at: startedAt, statusFile, stalled: false, finishedAt: null,
       ...(reveal ? { reveal } : {}),
       ...(preview ? { preview: true } : {}),
+      ...(move ? { move: { root: move.root, clipAt: move.clipAt, srcOn: srcOn(direction, machine, from) } } : {}),
     };
 
     let t = { target: null }, srcT = null;
@@ -400,10 +421,28 @@ export function createJobs(deps) {
     }
     put(job);
 
+    // A move (#100): before one byte is copied the original gets its guard check and its numbers. Without either, nothing is
+    // copied, so nothing can be deleted later.
+    let moveTotal = null;
+    if (move) {
+      const sOn = srcOn(direction, machine, from);
+      if (typeof move.root !== "string" || move.root === "" || !deps.fileOps) return fail(id, KEPT_NO_ROOT);
+      try {
+        const c = await deps.fileOps.check({ on: sOn, path: src, root: move.root, timeout: VERIFY_MS });
+        if (!c.ok) return fail(id, c.error);
+        const before = parseVerify(okOut(await exec("sh", verifyArgs(src, "L"), { on: sOn, timeout: VERIFY_MS })));
+        if (!before) return fail(id, "Could not check the original before the copy");
+        moveTotal = before.bytes;
+        job = update(id, { move: { ...get(id).move, physical: c.path, before } });
+      } catch (e) {
+        return fail(id, explainError(String(e?.message ?? e), sOn ?? machine, "Could not check the original before the copy"));
+      }
+    }
+
     try {
       const t0 = now();
-      const total = await measure(src, srcOn(direction, machine, from));
-      const total2 = total !== null && now() - t0 <= SIZE_LIMIT_MS ? total : null;
+      const total = move ? moveTotal : await measure(src, srcOn(direction, machine, from));
+      const total2 = move ? total : total !== null && now() - t0 <= SIZE_LIMIT_MS ? total : null;
       if (get(id).cancelRequested) return end(id, { state: "cancelled", total: total2 });
       job = update(id, { total: total2, percent: null });
       await exec("mkdir", ["-p", `${appHome()}/filer-pro/jobs`], { on: null });
@@ -575,13 +614,19 @@ export function createJobs(deps) {
     if (info.gone && !status) {
       await removeTemp(job);
       end(id, { state: "failed", error: "Interrupted" });
+    } else if (status?.state === "done" && job.move && (info.recovered || job.move.recovered)) {
+      // A move whose copy finished while Herdr was away, or after a restart: nothing is checked, nothing is deleted.
+      end(id, { state: "done", error: null, percent: 100, kept: KEPT_RESTART });
     } else if (status?.state === "done") {
       const m = OLD_COPY_LEFT.exec(status.stderr);
       const left = m ? cleanText(m[1]) : "";
       const oldCopy = left ? `Could not fully remove the old copy: ${left}` : "";
       // An extract also reports links that point outside the extracted files (extract.sh writes that line first).
       const warning = job.kind === "extract" ? [LINKS_OUTSIDE.exec(status.stderr)?.[1], oldCopy].filter(Boolean).join(" ") : oldCopy;
-      end(id, { state: "done", error: null, percent: 100, ...(warning ? { warning } : {}) });
+      if (job.move) { // verify, then delete (finishMove); the job is "verifying" until then
+        update(id, { state: "verifying", error: null, percent: 100, ...(warning ? { warning } : {}) });
+        startFinish(id);
+      } else end(id, { state: "done", error: null, percent: 100, ...(warning ? { warning } : {}) });
     } else if (job.stalled) {
       fail(id, "Transfer stalled");
     } else if (status?.state === "cancelled" || (!status && info.reason === "killed")) {
@@ -604,6 +649,56 @@ export function createJobs(deps) {
       return r.code === 0 ? JSON.parse(r.stdout) : null;
     } catch {
       return null;
+    }
+  }
+
+  // ---- move: verify the copy, then delete the original (#100). Every ending but a verified copy keeps the original.
+  const finishing = new Map();
+  function startFinish(id) {
+    const p = finishMove(id).catch(() => {}).finally(() => finishing.delete(id));
+    finishing.set(id, p);
+  }
+  const drain = async () => { while (finishing.size > 0) await Promise.all([...finishing.values()]); };
+
+  // "Kept" ends the job as done with the reason. Only while the job is still verifying or deleting: a restart (recover) or
+  // a later holder of the lease may have ended it already, and a late result never overwrites that.
+  function keep(id, reason) {
+    if (get(id)?.state === "verifying" || get(id)?.state === "deleting") end(id, { state: "done", kept: reason });
+  }
+
+  async function measureFor(path, on, links) {
+    try {
+      return parseVerify(okOut(await exec("sh", verifyArgs(path, links), { on, timeout: VERIFY_MS })));
+    } catch {
+      return null;
+    }
+  }
+
+  async function finishMove(id) {
+    try {
+      const job = get(id), mv = job?.move;
+      if (!mv || typeof mv.physical !== "string" || mv.physical === "" || !mv.before || typeof mv.root !== "string" || mv.root === "" || !deps.fileOps) return keep(id, KEPT_UNKNOWN);
+      const sOn = mv.srcOn ?? null;
+      const target = await measureFor(job.dest, destOn(job.direction, job.machine), "P");
+      const source = await measureFor(job.src, sOn, "L");
+      const v = verdict({ before: mv.before, source, target });
+      if (v.kept) return keep(id, v.kept);
+      // The job may have ended (restart, new lease holder) or be cancelled while the copy was measured.
+      const alive = (state) => get(id)?.state === state;
+      if (!alive("verifying")) return;
+      if (get(id).cancelRequested) return keep(id, KEPT_CANCELLED);
+      const c = await deps.fileOps.check({ on: sOn, path: job.src, root: mv.root, timeout: VERIFY_MS });
+      if (!c.ok) return keep(id, c.error);
+      if (c.path !== mv.physical) return keep(id, KEPT_CHANGED);
+      if (!alive("verifying")) return;
+      if (get(id).cancelRequested) return keep(id, KEPT_CANCELLED);
+      update(id, { state: "deleting" });
+      const r = await deps.fileOps.remove({ on: sOn, path: job.src, root: mv.root, expect: mv.physical, timeout: VERIFY_MS });
+      if (!alive("deleting")) return;
+      if (!r.ok) return keep(id, `Could not delete the original: ${r.error}`);
+      end(id, { state: "done", moved: true, ...(r.trashed ? { trashed: true } : {}) });
+    } catch {
+      keep(id, KEPT_UNKNOWN);
     }
   }
 
@@ -634,16 +729,26 @@ export function createJobs(deps) {
 
   async function cancel(id) {
     const job = get(id);
+    // Verifying and deleting only record the wish: the original is kept before the delete, a running delete finishes.
+    if (job?.state === "verifying" || job?.state === "deleting") { update(id, { cancelRequested: true }); return; }
     if (job?.state !== "running") return;
     if (job.terminal) await hc(["kill", job.terminal]);
     else update(id, { cancelRequested: true });
   }
 
+  // After a restart or a lease change. A move job is never verified or deleted from here: finished -> kept, still live -> marked
+  // and kept when it finishes, verifying and deleting -> kept (a delete may have run: the text says to check the original).
   async function recover() {
+    for (const snap of Object.values(all())) {
+      if (!snap.move) continue;
+      if (snap.state === "verifying") end(snap.id, { state: "done", kept: KEPT_RESTART });
+      else if (snap.state === "deleting") end(snap.id, { state: "done", kept: KEPT_RESTART_DELETE });
+    }
     for (const snap of running()) {
       const info = snap.terminal ? await terminalInfo(snap) : null;
-      if (!info) await settle(snap.id, { gone: true });
-      else if (info.state === "finished") await settle(snap.id, { reason: info.reason });
+      if (!info) await settle(snap.id, { gone: true, recovered: true });
+      else if (info.state === "finished") await settle(snap.id, { reason: info.reason, recovered: true });
+      else if (snap.move) update(snap.id, { move: { ...snap.move, recovered: true } });
     }
   }
 
@@ -658,10 +763,10 @@ export function createJobs(deps) {
 
   function dismiss(id) {
     const job = get(id);
-    if (!job || job.state === "running") return;
+    if (!job || job.state === "running" || job.state === "verifying" || job.state === "deleting") return;
     const { [id]: _, ...rest } = all();
     setShared(KEY, rest);
   }
 
-  return { inspect, sameMachine, overlap, inspectArchive, startExtract, sourceSize, start, tick, cancel, recover, clearFinished, dismiss };
+  return { inspect, sameMachine, overlap, inspectArchive, startExtract, sourceSize, start, tick, cancel, recover, clearFinished, dismiss, drain };
 }
