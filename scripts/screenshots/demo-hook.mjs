@@ -72,6 +72,6 @@ patch("main.js", [
   ["configPath: tilde(`${appHome()}/filer-pro.json`, home()) });", 'configPath: "~/.config/herdr-app/filer-pro.json" });'],
   ["force: this.force, full: id }", "force: this.force, full: id, ...(this.demoFull ?? {}) }"],
   ["        this.startFullscreen(cx);\n", "        this.startFullscreen(cx);\n        if (props().demoSpread) cx.timer.after(3000, () => { this.setLayout(true, cx); cx.timer.after(1500, () => this.showPages(2, cx)); if (props().demoZoom) this.zoomBy(props().demoZoom, cx); });\n"],
-  [".when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))", ".when(path === this.lastOpened, el => el.bg(t.selected)).when(path === this.demoRow, el => el.bg(t.hover)).hover(s => s.bg(t.hover))"],
+  [".when(picked || current, el => el.bg(t.selected)).hover(s => s.bg(t.hover))", ".when(picked || current, el => el.bg(t.selected)).when(path === this.demoRow, el => el.bg(t.hover)).hover(s => s.bg(t.hover))"],
 ]);
 console.log("patched", dir);

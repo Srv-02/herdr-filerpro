@@ -8,6 +8,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { BASE } from "../lib/icons.js";
+import { checkBox } from "./checkbox.js";
 import { formatSymbolic, getBit, specialBits } from "../lib/perms.js";
 import { createPermsState, setText, toggleBit, toggleSpecial, setRecursive, canApply, notes } from "../lib/permsstate.js";
 
@@ -67,15 +68,6 @@ export function flipRecursive(state, cx) {
 
 const locked = (state) => state.phase !== "ready" || state.readOnly !== null || state.busy;
 
-// The drawn box of a checkbox (16px). The click and the accessible name sit on the element around it, which also holds
-// the text label where there is one, so the label toggles too.
-function box(t, on, dim) {
-  return div().w(16).h(16).flex_none().rounded(4).border_1().flex().items_center().justify_center()
-    .border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
-    .when(dim, (el) => el.opacity(0.45))
-    .when(on, (el) => el.child(svg(`${BASE}/check.svg`).size(11).flex_none().text_color(t.accent_foreground)));
-}
-
 // A clickable checkbox target: role, accessible name with its state, the click (not when locked) and, unless hover is
 // false, a hover background.
 function toggle(el, t, { id, label, on, dim, onClick, hover = true }) {
@@ -108,7 +100,7 @@ function matrix(t, state) {
         const on = getBit(state.mode, who, what);
         return toggle(h_flex().w(COL).h(24).flex_none().items_center().justify_center().rounded(6), t,
           { id: `filer-pro-perms-${who}-${what}`, label: `${label} ${whatLabel.toLowerCase()}`, on, dim, onClick: (cx) => flip(state, who, what, cx) })
-          .child(box(t, on, dim));
+          .child(checkBox(t, on, { dim }));
       }))
       .child(div().w(DIG).flex_none().flex().justify_end().text_size(12.5).text_color(t.muted).child(state.phase === "ready" ? String(digit) : ""));
   });
@@ -162,7 +154,7 @@ export function permsView(t, state, handlers) {
   // Sized to its content (box, gap, text) and without a hover change: only the box and the text are the click target.
   const recursive = toggle(h_flex().flex_none().h(28).gap(8).items_center(), t,
     { id: "filer-pro-perms-recursive", label: "Apply to enclosed items", on: state.recursive, dim, onClick: (cx) => handlers.onRecursive(cx), hover: false })
-    .child(box(t, state.recursive, dim))
+    .child(checkBox(t, state.recursive, { dim }))
     .child(div().text_size(12.5).text_color(dim ? t.dim : t.foreground).child("Apply to enclosed items"));
   return v_flex().id("filer-pro-permissions").track_focus(state.handle)
     .on_key_down((e, cx) => { if (e.key === "escape") { handlers.onCancel(); cx.stop_propagation(); } })

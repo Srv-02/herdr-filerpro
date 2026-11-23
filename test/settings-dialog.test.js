@@ -66,7 +66,7 @@ test("dialog: every setting starts with its current value; ~/ stays as written; 
   assert.equal(s.fields.node_path.input.placeholder, "Automatic");
   assert.equal(s.flags.svg_check, false);
   assert.equal(s.flags.update_check, true);
-  for (const k of SETTINGS.map((x) => x.key)) assert.ok(k in s.fields || k in s.flags, k);
+  for (const k of SETTINGS.map((x) => x.key)) assert.ok(k in s.fields || k in s.flags || k in s.choices, k);
   assert.ok(!("perf" in s.flags), "perf is not in the dialog");
   assert.equal(s.editors.terminal.choice, "vi");
   assert.equal(s.editors.gui.choice, "VS Code");
@@ -404,4 +404,70 @@ test("view: Show file sizes is a File list switch below the hide switches; it to
   assert.deepEqual(collect(s), { show_sizes: false });
   const off = createSettingsDialog(await snapshot({ show_sizes: false }), cx);
   assert.equal(off.flags.show_sizes, false);
+});
+
+const LABELS = ["Cmd", "Shift", "Cmd+Shift", "Option", "Option+Shift"];
+const VALUES = ["cmd", "shift", "cmd_shift", "alt", "alt_shift"];
+
+test("view: File list shows multi_select, then the two click pickers with the five labels in order (#98)", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  assert.deepEqual(s.choices, { select_toggle_click: "cmd", select_range_click: "shift" });
+  assert.equal(s.clickError, null);
+  const root = view(s), out = texts(root);
+  const at = (id) => out.indexOf(`#filer-pro-settings-${id}`);
+  assert.ok(at("double_click_folders") < at("multi_select") && at("multi_select") < at("select_toggle_click") && at("select_toggle_click") < at("select_range_click") && at("select_range_click") < at("extract_space_check"));
+  for (const key of ["select_toggle_click", "select_range_click"]) {
+    assert.ok(byId(root, `filer-pro-settings-${key}-picker`), key);
+    const ids = VALUES.map((v) => out.indexOf(`#filer-pro-settings-${key}-${v}`));
+    assert.ok(ids.every((i, n) => i > 0 && (n === 0 || i > ids[n - 1])), key);
+    assert.deepEqual(VALUES.map((v) => byId(root, `filer-pro-settings-${key}-${v}`).kids[0]), LABELS);
+  }
+});
+
+test("view: the pickers are dimmed and dead while multi_select is off; on, a click picks (#98)", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  const c = makeCx();
+  assert.deepEqual(called(byId(view(s), "filer-pro-settings-select_toggle_click"), "opacity"), [[0.45]]);
+  called(byId(view(s), "filer-pro-settings-select_toggle_click-alt"), "on_click")[0]?.[0]({}, c);
+  assert.equal(s.choices.select_toggle_click, "cmd", "off: nothing changes");
+  assert.equal(c.notes, 0);
+  s.flags.multi_select = true;
+  assert.equal(called(byId(view(s), "filer-pro-settings-select_toggle_click"), "opacity").length, 0);
+  called(byId(view(s), "filer-pro-settings-select_toggle_click-alt"), "on_click")[0][0]({}, c);
+  assert.equal(s.choices.select_toggle_click, "alt");
+  assert.equal(c.notes, 1);
+});
+
+test("save: the same pick twice writes nothing and shows the click error; a pick clears it (#98)", async () => {
+  const s = createSettingsDialog(await snapshot({ multi_select: true }), cx);
+  const c = makeCx();
+  called(byId(view(s), "filer-pro-settings-select_toggle_click-shift"), "on_click")[0][0]({}, c);
+  const writes = [];
+  const ok = await submitSettings(s, { readTextFile: async () => "{}", writeTextFile: async (...a) => { writes.push(a); }, path: "/x" }, c);
+  assert.equal(ok, false);
+  assert.equal(writes.length, 0);
+  assert.equal(s.clickError, "Pick two different clicks.");
+  assert.equal(s.error, FIX_FIELDS);
+  assert.ok(texts(view(s)).includes("Pick two different clicks."));
+  called(byId(view(s), "filer-pro-settings-select_toggle_click-alt"), "on_click")[0][0]({}, c);
+  assert.equal(s.clickError, null);
+  assert.equal(s.error, null);
+});
+
+test("save: equal picks with multi_select off are not an error and keep the stored picks (#98)", async () => {
+  const s = createSettingsDialog(await snapshot({ multi_select: true }), cx);
+  const c = makeCx();
+  called(byId(view(s), "filer-pro-settings-select_toggle_click-shift"), "on_click")[0][0]({}, c);
+  s.flags.multi_select = false;
+  assert.deepEqual(collect(s), { multi_select: false }, "no error, the equal picks are not written");
+  assert.equal(s.clickError, null);
+  s.flags.multi_select = true;
+  assert.equal(collect(s), null, "on: still refused");
+});
+
+test("save: only a changed pick is written (#98)", async () => {
+  const s = createSettingsDialog(await snapshot({ multi_select: true }), cx);
+  assert.deepEqual(collect(s), {}, "unchanged: nothing");
+  called(byId(view(s), "filer-pro-settings-select_toggle_click-alt"), "on_click")[0][0]({}, makeCx());
+  assert.deepEqual(collect(s), { select_toggle_click: "alt" });
 });

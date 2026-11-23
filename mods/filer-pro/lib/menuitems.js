@@ -7,7 +7,7 @@ const SEPARATOR = { separator: true };
 const openIn = (editor) => `Open in ${editor || "Editor"}`;
 const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action.replace(/_/g, "-")}`, label, action, enabled });
 
-// state: { paste: { enabled, reason }, editor?, editorFile?, editorFolder?, isDir?, name?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
+// state: { selecting? (the Select Files mode is on: no Select Files entry), paste: { enabled, reason }, editor?, editorFile?, editorFolder?, isDir?, name?, remote?, bundle?, contents? } (isDir: the row is a folder, Open, Open in Preview,
 // Open in <editor> and Edit in Terminal are dimmed; editor: the name of the configured GUI editor (label "Open in <editor>", "Open in Editor"
 // without a name; ui/menu.js cuts a long one), editorFile false: it has no remote template, the row entry is dimmed on a machine, editorFolder
 // false: no remote_folder, the free-area entry is dimmed on a machine; name: the file name, an archive (lib/archives.js) gets Extract Here and Extract to "<name>/"
@@ -30,6 +30,7 @@ export function rowMenuItems(state) {
     ...(bundle ? [entry("package_contents", state.contents === true ? "Hide Package Contents" : "Show Package Contents")] : []),
     ...(file || bundle ? [] : [entry("show_as_root", "Show as Root")]),
     ...(file ? [] : [{ ...entry("calculate_size", "Calculate Size", state.sizing !== true && (state.windows !== true || !local)), detail: state.size ?? null, title: state.sizeTitle ?? null }]),
+    ...(state.selecting === true ? [] : [entry("select_files", "Select Files")]),
     SEPARATOR,
     entry("download", "Download"),
     entry("download_to", "Download to…"),
@@ -52,12 +53,12 @@ export function rowMenuItems(state) {
 // The row's part of that state, built the same way where the popup is sized (the row's right click in main.js) and where
 // it is drawn (the popup copy): sized from a state without remote and windows, a local Windows archive row left an
 // empty strip where Extract Here and Extract to are not shown (follow-up to #68).
-export function rowMenuState({ name, isDir, machine, platform, bundle, contents }) {
-  return { isDir: isDir === true, name: typeof name === "string" ? name : "", remote: Boolean(machine), windows: platform === "windows", bundle: bundle === true, contents: contents === true };
+export function rowMenuState({ name, isDir, machine, platform, bundle, contents, selecting }) {
+  return { isDir: isDir === true, name: typeof name === "string" ? name : "", remote: Boolean(machine), windows: platform === "windows", bundle: bundle === true, contents: contents === true, selecting: selecting === true };
 }
 
 export function rootMenuItems(state) {
-  return [entry("open_editor", openIn(state.editor), state.editorFolder !== false), SEPARATOR, entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), SEPARATOR, entry("settings", "Settings…")];
+  return [entry("open_editor", openIn(state.editor), state.editorFolder !== false), SEPARATOR, entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), ...(state.selecting === true ? [] : [entry("select_files", "Select Files")]), SEPARATOR, entry("settings", "Settings…")];
 }
 
 export function menuHeight(items) {

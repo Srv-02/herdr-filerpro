@@ -68,6 +68,11 @@ The tree shows the folder of the focused terminal, locally or on its machine.
 - **Row menu:** right click for open, edit, calculate size, show as root (folders), download, extract (archives only, locally and on machines), copy, paste, rename, permissions and delete.
 - **Free area menu:** right click the free area below the tree for `Settings…` and **Open in &lt;editor&gt;** for the shown folder.
 - **Apps and packages:** apps and other macOS packages show as files. A double click starts them, and Show Package Contents looks inside.
+- **Select several rows:** pick **Select Files** in a row menu or in the free area menu. Every row then shows a checkbox. A click on a row toggles it, a click on the arrow still opens and closes a folder, and **Done** in the selection bar ends the mode and clears the selection. **Select Files** on a row adds that row to a selection that already exists. The entry is also in the menu while **Select several files with Cmd and Shift** is off, and it is hidden while the mode runs.
+- **Select with Cmd and Shift:** turn on **Select several files with Cmd and Shift** in Settings (File list). **Cmd+click** then adds or removes a file or folder and **Shift+click** selects every visible row from the last added row to the clicked one. A second Shift+click moves only the end of the range. A double click does not toggle twice. You can pick other clicks in Settings. Without a usable last row (none yet, or hidden by a collapse) Shift+click works like Cmd+click.
+- **The selection bar:** below the tree, above the transfers, it shows `<n> selected` and **Clear**, or **Done** in the checkbox mode. It stays while the selection is not empty.
+- **Ending a selection:** a plain click on a row clears it and opens the row as usual. A click in the free area clears it, and so does a right click on a row outside the selection. In the checkbox mode none of these clear it. Switching the terminal and back keeps the selection. Rows that you delete or rename outside the panel, or that a collapsed folder hides, leave it. Keyboard selection is not supported yet.
+- **Show in Finder with the switch on:** Cmd+click is then the selection click, so Show in Finder needs **Option+Cmd+click**. The right-click menu entry works either way.
 - **System and hidden files:** system files like `.DS_Store` stay out of the way, and hidden files can go too (`hide_system_files`, `hide_dotfiles` in [All settings](#all-settings)).
 - **No permission:** a folder you may not read or search shows the row "No permission to list this folder" below it instead of looking empty.
 
@@ -182,7 +187,7 @@ Archives (`zip`, `gz`, `tgz`, `bz2`, `xz`, `zst`, `7z`, `rar`, `tar`) and Office
 
 - **On this computer** a click shows the message with an **Open** button, and a double click starts the default app (a single click starts it when **Open apps with a double click** is off).
 - A file that only turns out to be binary after the read shows the same message and button.
-- **On an SSH machine** a click never downloads or opens anything: the message shows at once without a read and without a button. **Open** and **Download** in the right-click menu stay available, and so does Cmd+click for other files (not for these types).
+- **On an SSH machine** a click never downloads or opens anything: the message shows at once without a read and without a button. **Open** and **Download** in the right-click menu stay available, and so does Cmd+click for other files (not for these types; Option+Cmd+click with **Select several files with Cmd and Shift** on).
 
 ### Links in terminals
 
@@ -352,7 +357,7 @@ The dialog shows, in this order:
 | **Updates** | The installed version, **Check now**, and the switch for the automatic check |
 | **Downloads** | The folder, with **Choose…** for the system folder picker |
 | **Editors** | Pick the GUI and the terminal editor. Own editors are added in the config file (see [Editors](#editors)) and appear here after reopening Settings |
-| **File list** | The switches **Hide system files**, **Hide hidden files**, **Show file sizes**, **Open files with a double click**, **Open apps with a double click**, **Show folders as root with a double click** and **Check free space before extracting**. While hidden files are hidden, **Hide system files** shows on and cannot be switched |
+| **File list** | The switches **Hide system files**, **Hide hidden files**, **Show file sizes**, **Open files with a double click**, **Open apps with a double click**, **Show folders as root with a double click**, **Select several files with Cmd and Shift**, **Click to add or remove a file**, **Click to select a range** and **Check free space before extracting**. The two click pickers are dimmed while **Select several files with Cmd and Shift** is off, and the two picks must differ. While hidden files are hidden, **Hide system files** shows on and cannot be switched |
 | **Preview** | **Show previews**, **Draw diagrams** |
 | **Security** | The SVG check, see [SVG check](#svg-check) |
 | **Advanced** | Closed at first. Every limit, timeout and connection setting (and the warning before a copy between machines) in three groups: **File list limits**, **Preview limits** and **Transfers & connections** |
@@ -396,6 +401,9 @@ All settings live in `~/.config/herdr-app/filer-pro.json`:
 | `double_click_files` | File list: Open files with a double click | `false` | `true` / `false` | Open a file with a double click; a single click then only marks it. Folders open and close with a single click either way |
 | `double_click_apps` | File list: Open apps with a double click | `true` | `true` / `false` | Start a local macOS package (`.app`, `.pkg`, `.rtfd`) or open a local archive or Office file with the default app with a double click; a single click then only marks it. Off: a single click starts it |
 | `double_click_folders` | File list: Show folders as root with a double click | `true` | `true` / `false` | Show a folder as the tree's root with a double click, as Show as Root in its row menu does. Off: a double click opens and closes it again |
+| `multi_select` | File list: Select several files with Cmd and Shift | `false` | `true` / `false` | Cmd+click adds or removes a file, Shift+click selects everything in between. Show in Finder then needs Option+Cmd+click or the right-click menu. **Select Files** in the row menu works either way |
+| `select_toggle_click` | File list: Click to add or remove a file | `cmd` | `cmd`, `shift`, `cmd_shift`, `alt`, `alt_shift` | The click that adds or removes a row while `multi_select` is on. `alt` is Option. It must differ from `select_range_click`, otherwise both fall back to the defaults |
+| `select_range_click` | File list: Click to select a range | `shift` | `cmd`, `shift`, `cmd_shift`, `alt`, `alt_shift` | The click that selects every visible row from the last added row to this one while `multi_select` is on |
 | `extract_space_check` | File list: Check free space before extracting | `true` | `true` / `false` | Look into the archive and the free space of its folder before extracting and stop when it would not fit: a tar's size usually comes from the listing that is read anyway, a zip's from its directory, a single compressed file takes one extra pass. Off: skip that look |
 | `preview` | Preview: Show previews | `true` | `true` / `false` | Preview Markdown, HTML, images and PDFs |
 | `mermaid` | Preview: Draw diagrams | `true` | `true` / `false` | Draw Mermaid diagrams |

@@ -114,7 +114,7 @@ test("the free-area right click passes the editor and sizes the popup for five r
   assert.equal(o.props.root, "/r");
   assert.deepEqual(o.props.editor, { name: "VS Code", remote: true, remoteFolder: true });
   assert.equal(o.height, menuHeight(rootMenuItems({ paste: { enabled: false } })));
-  assert.equal(o.height, 138);
+  assert.equal(o.height, 166);
 });
 
 test("the popup draws Open in <name> from its props, cut by truncate", () => {

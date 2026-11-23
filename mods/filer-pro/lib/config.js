@@ -1,9 +1,9 @@
 import { TERMINAL_EDITORS, GUI_EDITORS, DEFAULT_TERMINAL_EDITOR, DEFAULT_GUI_EDITOR } from "./editors.js";
-import { numbers, terminalProblem, guiProblem, remoteProblem, validateField } from "./settings.js";
+import { numbers, terminalProblem, guiProblem, remoteProblem, validateField, clickProblem } from "./settings.js";
 
 // Config: appHome()/filer-pro.json. Keys: download_folder, preview, mermaid, perf, update_check, terminal_editor,
 // terminal_editors, gui_editor, gui_editors ({ name, local, remote?, remote_folder? }), node_path, svg_check, hide_system_files, hide_dotfiles,
-// double_click_files, double_click_apps, double_click_folders, extract_space_check, warn_cross_copy, show_sizes and the numbers of lib/settings.js (NUMBERS).
+// double_click_files, double_click_apps, double_click_folders, multi_select, select_toggle_click, select_range_click, extract_space_check, warn_cross_copy, show_sizes and the numbers of lib/settings.js (NUMBERS).
 // A missing or broken file, or a value of the wrong type, means the default; a number out of range is clamped.
 
 const trimmed = (v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
@@ -58,10 +58,14 @@ export async function loadConfig(readTextFile, appHome, home) {
     folder = null; cfg = null;
   }
   const flag = (key, fallbackValue) => (cfg && typeof cfg[key] === "boolean" ? cfg[key] : fallbackValue);
+  // An unknown pick gives the default; two equal picks would leave one click dead, so both fall back.
+  const pick = (key, def) => validateField(key, cfg?.[key]).value ?? def;
+  let toggleClick = pick("select_toggle_click", "cmd"), rangeClick = pick("select_range_click", "shift");
+  if (clickProblem(toggleClick, rangeClick)) [toggleClick, rangeClick] = ["cmd", "shift"];
   const flags = { preview: flag("preview", true), mermaid: flag("mermaid", true), perf: flag("perf", false), update_check: flag("update_check", true), ...editors(cfg),
     node_path: validateField("node_path", typeof cfg?.node_path === "string" ? cfg.node_path : "").value ?? "", svg_check: flag("svg_check", true),
     hide_system_files: flag("hide_system_files", true), hide_dotfiles: flag("hide_dotfiles", false),
-    double_click_files: flag("double_click_files", false), double_click_apps: flag("double_click_apps", true), double_click_folders: flag("double_click_folders", true), extract_space_check: flag("extract_space_check", true), warn_cross_copy: flag("warn_cross_copy", true),
+    double_click_files: flag("double_click_files", false), double_click_apps: flag("double_click_apps", true), double_click_folders: flag("double_click_folders", true), multi_select: flag("multi_select", false), select_toggle_click: toggleClick, select_range_click: rangeClick, extract_space_check: flag("extract_space_check", true), warn_cross_copy: flag("warn_cross_copy", true),
     show_sizes: flag("show_sizes", true), ...numbers(cfg) };
   if (folder == null) return { download_folder: fallback, ...flags };
   if (folder === "~" || folder.startsWith("~/")) folder = home() + folder.slice(1);

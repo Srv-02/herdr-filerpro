@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { group as groupFromNumbers } from "../mods/filer-pro/lib/numbers.js";
-import { SETTINGS, NUMBERS, numbers, validateField, terminalProblem, guiProblem, saveSettings, changedEdits, group, ADVANCED } from "../mods/filer-pro/lib/settings.js";
+import { SETTINGS, NUMBERS, numbers, validateField, terminalProblem, guiProblem, saveSettings, changedEdits, group, ADVANCED, SELECT_CLICKS, clickProblem } from "../mods/filer-pro/lib/settings.js";
 import { PREVIEW_MAX_CHARS, MAX_DIAGRAMS, MAX_DIAGRAM_CHARS } from "../mods/filer-pro/preview/prepare.js";
 import { MAX_IMAGE, CACHE_LIMIT } from "../mods/filer-pro/preview/images.js";
 import { MAX_PDF_LOCAL, MAX_PDF_REMOTE } from "../mods/filer-pro/preview/pdf.js";
@@ -94,13 +94,35 @@ test("settings: double_click_folders (#90) is a File list switch, on by default,
   assert.equal(keys.indexOf("double_click_folders"), keys.indexOf("double_click_apps") + 1);
 });
 
-test("settings: extract_space_check (#57) is a File list switch, on by default, right after double_click_folders", () => {
+test("settings: extract_space_check (#57) is a File list switch, on by default, right after the selection pickers (#98)", () => {
   const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
   assert.deepEqual([by.extract_space_check.kind, by.extract_space_check.default, by.extract_space_check.section], ["bool", true, "File list"]);
   assert.equal(by.extract_space_check.label, "Check free space before extracting");
   assert.equal(by.extract_space_check.help, "Stops when the archive would not fit. A single compressed file is read once more.");
   const keys = SETTINGS.map((s) => s.key);
-  assert.equal(keys.indexOf("extract_space_check"), keys.indexOf("double_click_folders") + 1);
+  assert.equal(keys.indexOf("extract_space_check"), keys.indexOf("select_range_click") + 1);
+});
+
+test("multi_select (#98) is a File list switch, off by default, after double_click_folders, followed by the two click pickers", () => {
+  const by = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
+  const keys = SETTINGS.map((s) => s.key);
+  const at = keys.indexOf("double_click_folders");
+  assert.deepEqual(keys.slice(at, at + 5), ["double_click_folders", "multi_select", "select_toggle_click", "select_range_click", "extract_space_check"]);
+  assert.deepEqual([by.multi_select.kind, by.multi_select.default, by.multi_select.section], ["bool", false, "File list"]);
+  assert.equal(by.multi_select.label, "Select several files with Cmd and Shift");
+  assert.equal(by.multi_select.help, "Cmd+click adds or removes a file, Shift+click selects everything in between. Show in Finder then needs Option+Cmd+click or the right-click menu.");
+  assert.deepEqual([by.select_toggle_click.kind, by.select_toggle_click.default, by.select_toggle_click.section], ["choice", "cmd", "File list"]);
+  assert.deepEqual([by.select_range_click.kind, by.select_range_click.default, by.select_range_click.section], ["choice", "shift", "File list"]);
+  assert.equal(by.select_toggle_click.label, "Click to add or remove a file");
+  assert.equal(by.select_toggle_click.help, "Used while Select several files is on.");
+  assert.equal(by.select_range_click.label, "Click to select a range");
+  assert.equal(by.select_range_click.help, "Selects every visible row from the last added file to this one.");
+  assert.deepEqual(SELECT_CLICKS, [["cmd", "Cmd"], ["shift", "Shift"], ["cmd_shift", "Cmd+Shift"], ["alt", "Option"], ["alt_shift", "Option+Shift"]]);
+  for (const [v] of SELECT_CLICKS) assert.ok(v !== "none" && v !== "cmd_alt" && !v.includes("ctrl"), v);
+  assert.deepEqual(validateField("select_range_click", "alt"), { value: "alt" });
+  for (const bad of ["ctrl", "cmd_alt", "", 3]) assert.deepEqual(validateField("select_range_click", bad), { error: "Pick one of the choices." }, String(bad));
+  assert.equal(clickProblem("cmd", "cmd"), "Pick two different clicks.");
+  assert.equal(clickProblem("cmd", "shift"), null);
 });
 
 test("group is the one from lib/numbers.js (settings re-exports it for the dialog)", () => {
