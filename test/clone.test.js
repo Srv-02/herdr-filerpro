@@ -10,7 +10,18 @@ test("mod.json keeps place none and its origin, and carries the mod's own versio
     place: "none",
     version: "1.3.3",
     cloned_from: { name: "files", version: "0.1.12" },
+    link_handlers: [{ kind: "file", pattern: "(?i)\\.(md|markdown|html|htm|png|jpg|jpeg|gif|webp|ico|svg|pdf)$" }],
   });
+});
+
+test("the link rule takes exactly the files with a preview", async () => {
+  const { PREVIEW } = await import("../mods/filer-pro/lib/langs.js");
+  const [rule] = JSON.parse(read("mod.json")).link_handlers;
+  const re = new RegExp(rule.pattern.replace(/^\(\?i\)/, ""), "i"); // Herdr uses Rust regex: (?i) is its case flag
+  for (const ext of Object.keys(PREVIEW)) assert.ok(re.test(`/a/b.${ext.toUpperCase()}`), ext);
+  assert.deepEqual(/\(([^()]*)\)\$$/.exec(rule.pattern)[1].split("|").sort(), Object.keys(PREVIEW).sort(), "no extension without a preview");
+  for (const name of ["/a/b.rs", "/a/b.txt", "/a/b.png.bak", "/a/png"]) assert.ok(!re.test(name), name);
+  assert.match(read("link.js"), /export async function handleLink\(/);
 });
 
 test("main.js points to the assets of filer-pro", () => {

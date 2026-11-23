@@ -32,3 +32,13 @@ export function panelShown(root, id) {
   if (body.type === "stack") return body.active === id && find(body, id) !== null;
   return (body.children ?? []).some((c) => c.id === id && !c.hidden);
 }
+
+// The layout commands that put the panel block `id` on screen (a clicked file link, link.js); null when the layout
+// has no such block in panel-body. Pure: the caller runs them.
+export function revealCommands(root, id) {
+  const panel = find(root, "panel"), body = find(root, "panel-body");
+  if (!panel || !body || !find(body, id)) return null;
+  const show = [["layout.show", { id: "panel" }]];
+  if (body.type === "stack") return [["layout.select", { stack: "panel-body", child: id }], ...show];
+  return [...(body.children ?? []).filter((c) => c.id === id && c.hidden).map((c) => ["layout.show", { id: c.id }]), ...show];
+}
