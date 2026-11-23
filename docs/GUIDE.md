@@ -6,7 +6,7 @@ Everything Filer Pro does, in detail. For the overview, see the [README](../READ
 
 - [Requirements](#requirements)
 - [Install](#install): [Manual install](#manual-install)
-- [The file tree](#the-file-tree): [Git marks](#git-marks), [File sizes](#file-sizes), [Navigating above the terminal's folder](#navigating-above-the-terminals-folder), [Show as Root](#show-as-root), [Staying current](#staying-current)
+- [The file tree](#the-file-tree): [Git marks](#git-marks), [File sizes](#file-sizes), [Navigating above the terminal's folder](#navigating-above-the-terminals-folder), [Show as Root](#show-as-root), [Local folder below](#local-folder-below), [Staying current](#staying-current)
 - [Preview](#preview): [Markdown, Mermaid and PDF](#markdown-mermaid-and-pdf), [Source, HTML and images](#source-html-and-images), [Files that are not text](#files-that-are-not-text), [Archives and Office files](#archives-and-office-files), [Links in terminals](#links-in-terminals)
 - [Extracting archives](#extracting-archives)
 - [Editing plain text](#editing-plain-text): [Edit mode](#edit-mode), [Which files can be edited](#which-files-can-be-edited), [Saving](#saving), [Files that grow past 1 MiB](#files-that-grow-past-1-mib)
@@ -21,7 +21,7 @@ Everything Filer Pro does, in detail. For the overview, see the [README](../READ
 
 ## Requirements
 
-- Herdr app with its shipped `tabs` mod.
+- Herdr app 0.1.17 or newer, with its shipped `tabs` mod.
 - macOS as the local side. Remote machines: Linux or macOS, added to Herdr as SSH machines with key based login.
 - Optional: Node.js for Mermaid diagrams, macOS 15 or later for `Delete…` on local files.
 
@@ -123,6 +123,17 @@ Three icons in the header take you above the terminal's folder without leaving t
 - **Up one level** and **Back to the terminal's folder** lead back.
 - A single click still opens and closes a folder.
 - **Show folders as root with a double click** (Settings, File list) turns the double click off.
+
+### Local folder below
+
+The button left of the gear in the header (**Show This Mac**) opens a second tree under the first one, on this computer. It works with a local terminal too. The first tree keeps following the terminal. The lower tree is always this computer and does not follow the focus. One lower tree serves all spaces and panel copies.
+
+- **Start folder:** it opens in the folder you set as **Start folder for This Mac** in Settings (Downloads). Empty means the download folder. Up, Go to `/`, **Show as Root** and a double click on a folder move it, and it keeps that folder after a restart.
+- **Same rules:** both trees have the same rows, menus, sizes, git marks and selection. A selection is in one tree at a time: a click in the other tree clears it, and one selection bar sits under both trees.
+- **Between the trees:** **Copy** (or **Cut**) in one tree and **Paste** in a folder of the other moves files between this computer and a machine without the Finder, or between two folders on this computer.
+- **Location lines:** each tree has a line with its place (a server icon and the machine name, or a laptop icon and **This Mac**), its folder and its own Go to `/`, Up and Refresh. **Back to the terminal's folder** is only in the upper line.
+- **The divider:** drag it to resize. Each tree stays at least 120 px high. The sizes, the shown state and the folder are remembered.
+- **Open files:** a file opens in the viewer as before and hides both trees. `←` brings both back at their scroll positions. A file you opened from the lower tree stays open when the terminal moves to another folder or machine.
 
 ### Staying current
 

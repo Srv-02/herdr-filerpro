@@ -46,6 +46,7 @@ const hook = `
     if (c.op === "expand") { for (const p of c.paths) if (!this.folders.has(p)) this.toggle(p, cx); }
     else if (c.op === "collapse") { for (const p of c.paths) if (this.folders.has(p)) this.toggle(p, cx); }
     else if (c.op === "size") setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), null, joinPath(this.root, c.path), this.newId(), Date.now()));
+    else if (c.op === "localtree") setShared("filer-pro.localtree", { shown: c.shown !== false, root: c.root ?? null, sizes: c.sizes ?? null });
     else if (c.op === "row") { this.demoRow = c.path ?? null; cx.notify(); }
     else if (c.op === "back") { this.show(null, cx); cx.notify(); }
     else if (c.op === "close") { if (DEMO_LAST) { try { closeOverlay(DEMO_LAST); } catch {} } DEMO_LAST = null; }

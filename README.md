@@ -35,6 +35,7 @@ Then click `Filer Pro` in the tab bar.
 ### Browse
 
 - **Your terminal's folder:** `cd` in the terminal, and the tree follows.
+- **This Mac below:** a second tree on this computer under the terminal's tree; Copy in one, Paste in the other.
 - **Navigate freely:** Up one level, Go to `/`, and one click back to the terminal's folder.
 - **Sizes and git marks:** file sizes next to each name, Calculate Size for folders, `M` `A` `U` `D` from git.
 - **Always current:** follows file system events on this Mac, no polling.
