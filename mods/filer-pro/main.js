@@ -16,7 +16,7 @@ import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick, folderClick, rowClick } from "./lib/clicks.js";
-import { TREE_FIELDS, createTree } from "./lib/treestate.js";
+import { TREE_FIELDS, LOCAL_TREE_KEY, MIN_TREE_PX, DEFAULT_SPLIT, createTree, pinnedContext, readLocalTree, writeLocalTree, startFolder } from "./lib/treestate.js";
 import { applyClick, clearSelection, collapse, prune } from "./lib/selection.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
@@ -188,7 +188,7 @@ export default class FilerPro extends View {
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
       // The first listing ran with the defaults: other list settings reload the tree once more (no timer to wait for).
-      if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles", "show_sizes"].some((k) => cfg[k] !== DEFAULTS[k])) this.refresh(cx);
+      if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles", "show_sizes"].some((k) => cfg[k] !== DEFAULTS[k])) this.refreshAll(cx);
       this.version = await this.readVersion();
       if (cfg.perf) await this.startPerf(cx);
     });
@@ -202,7 +202,7 @@ export default class FilerPro extends View {
     this.refreshedAt = Date.now();
     cx.timer.every(1000, cx => {
       const every = this.conf.refresh_seconds;
-      if (!every || this.loading || Date.now() - this.refreshedAt < every * 1000) return;
+      if (!every || this.anyLoading() || Date.now() - this.refreshedAt < every * 1000) return;
       this.refreshedAt = Date.now();
       this.reloadConfig(cx, { file: FILE_NAMED });
     });
@@ -232,7 +232,7 @@ export default class FilerPro extends View {
   reloadConfig(cx, opts) {
     cx.spawn(async (cx) => {
       try { this.cfg = await loadConfig(readTextFile, appHome, home); } catch {}
-      this.refresh(cx, opts);
+      this.refreshAll(cx, opts);
       cx.notify();
     });
   }
@@ -699,10 +699,10 @@ export default class FilerPro extends View {
   // panel shows refreshes it (watchPlan, issue #42: the root's and the expanded folders' entries, the open file,
   // the git index, HEAD and refs), through the same gate as filer-pro.changed (at most one refresh per second, a
   // later change caught up by the 250 ms tick). The open file is read again only when the batch names it.
-  watch(root, cx) {
-    if (this.on || this.watched === root || !watchable(root, home())) return;
-    this.watched = root;
-    const context = this.context;
+  watch(root, cx, tree = this.trees.follow) {
+    if (tree.on || tree.watched === root || !watchable(root, home())) return;
+    tree.watched = root;
+    const context = tree.context;
     cx.spawn(async cx => {
       try {
         // herdr watches the canonical root (/tmp/x arrives as /private/tmp/x, symlinks resolved): resolved once per
@@ -710,27 +710,27 @@ export default class FilerPro extends View {
         // back to a full refresh (watchPlan).
         let real = null;
         const resolved = this.realRoot(root).then((r) => { real = r; });
-        while (this.context === context) {
+        while (tree.context === context) {
           const paths = await watchFolder(root);
           await resolved;
           if (!this.current(context)) continue;
-          let plan = watchPlan(paths, this.watchOpts(root, real));
+          let plan = watchPlan(paths, this.watchOpts(root, real, tree));
           // A path with the open file's name below another folder: the file's folder may be a symlink. Its real path is
           // resolved once per open file (one exec), then the file is matched exactly (watchOpts).
-          const open = this.file;
-          if (plan.file === "text" && open?.includes("/") && this.fileReal?.file !== open) {
+          const open = this.fileSide().tree === tree ? this.file : null;
+          if (plan.file === "text" && open?.includes("/") && tree.fileReal?.file !== open) {
             const dir = await this.realRoot(joinPath(root, parentOf(open)));
             if (!this.current(context)) continue;
-            if (this.file === open) { this.fileReal = { file: open, dir }; plan = watchPlan(paths, this.watchOpts(root, real)); }
+            if (this.file === open) { tree.fileReal = { file: open, dir }; plan = watchPlan(paths, this.watchOpts(root, real, tree)); }
           }
           if (!plan.refresh) continue;
-          const file = !this.file ? 0 : plan.file === "named" ? FILE_NAMED : plan.file === "text" ? FILE_TEXT : 0;
-          this.fileWanted = Math.max(this.fileWanted ?? 0, file);
+          const file = !open ? 0 : plan.file === "named" ? FILE_NAMED : plan.file === "text" ? FILE_TEXT : 0;
+          tree.fileWanted = Math.max(tree.fileWanted ?? 0, file);
           this.reload.mark();
-          if (this.reload.take(this.loading)) this.refresh(cx);
+          if (this.reload.take(tree.loading)) this.refresh(cx, {}, tree);
         }
       }
-      catch { if (this.context === context) this.watched = null; }
+      catch { if (tree.context === context) tree.watched = null; }
     });
   }
 
@@ -740,23 +740,23 @@ export default class FilerPro extends View {
   // linked worktree's git dir, and a git dir elsewhere); only index, HEAD, refs/ and packed-refs refresh (gitWatchHit),
   // through the same gate as the root watch. place comes from the refresh's rev-parse: no exec of its own. A new place
   // starts new loops; the old ones, and all of them after a root change or at the repository top, end at their next batch.
-  watchGit(place, cx) {
-    const dirs = this.on ? [] : gitWatchDirs(place);
+  watchGit(place, cx, tree = this.trees.follow) {
+    const dirs = tree.on ? [] : gitWatchDirs(place);
     const id = dirs.join("\n");
-    if ((this.gitWatch?.id ?? "") === id) return;
-    if (!dirs.length) { this.gitWatch = null; return; }
-    const watch = { id }, context = this.context;
-    this.gitWatch = watch;
+    if ((tree.gitWatch?.id ?? "") === id) return;
+    if (!dirs.length) { tree.gitWatch = null; return; }
+    const watch = { id }, context = tree.context;
+    tree.gitWatch = watch;
     for (const dir of dirs) cx.spawn(async cx => {
       try {
-        while (this.context === context && this.gitWatch === watch) {
+        while (tree.context === context && tree.gitWatch === watch) {
           const paths = await watchFolder(dir);
-          if (this.gitWatch !== watch || !this.current(context) || !gitWatchHit(paths, place)) continue;
+          if (tree.gitWatch !== watch || !this.current(context) || !gitWatchHit(paths, place)) continue;
           this.reload.mark();
-          if (this.reload.take(this.loading)) this.refresh(cx);
+          if (this.reload.take(tree.loading)) this.refresh(cx, {}, tree);
         }
       }
-      catch { if (this.gitWatch === watch) this.gitWatch = null; }
+      catch { if (tree.gitWatch === watch) tree.gitWatch = null; }
     });
   }
 
@@ -764,12 +764,12 @@ export default class FilerPro extends View {
   // lies elsewhere (a symlinked folder, from its listing) and, once resolved, the open file's real folder. A link
   // target outside the root is never reported (herdr watches the root only), so a change there shows at the next
   // refresh.
-  watchOpts(root, real) {
-    const base = real ?? root, file = this.file, f = this.fileReal;
-    const links = [...(this.realFolders ?? [])].filter(([rel, p]) => this.folders.has(rel) && watchRel(p, [base]) !== rel);
+  watchOpts(root, real, tree = this.trees.follow) {
+    const base = real ?? root, file = this.fileSide().tree === tree ? this.file : null, f = tree.fileReal;
+    const links = [...(tree.realFolders ?? [])].filter(([rel, p]) => tree.folders.has(rel) && watchRel(p, [base]) !== rel);
     const fileKnown = Boolean(file && f?.file === file && f.dir);
     if (fileKnown) links.push([parentOf(file), f.dir]);
-    return { roots: [root, real], links, folders: [...this.folders, ...this.pending], file, fileKnown, hide: this.conf };
+    return { roots: [root, real], links, folders: [...tree.folders, ...tree.pending], file, fileKnown, hide: this.conf };
   }
 
   // The root as the file system names it (cd -P), or null (local Windows, or the folder cannot be entered).
@@ -804,72 +804,88 @@ export default class FilerPro extends View {
   // Shows root instead of the current one for the focused terminal (Up, Go to /; the terminal's own folder ends the
   // override). Expanded folders, packages and the open file are carried over where they lie inside
   // the new root (lib/navigate.js carry). Refused while the open file has unsaved changes.
-  navigate(root, cx) {
-    if (!root || !this.context || root === this.root) return;
-    const own = this.ownsFile(this.trees.follow);
+  navigate(root, cx, tree = this.trees.follow) {
+    if (!root || !tree.context || root === tree.root) return;
+    const own = this.ownsFile(tree);
     if (own && this.edit?.dirty) { notify({ title: "Filer Pro", body: "Unsaved changes in the open file", level: "error" }); return; }
+    if (tree.id === "pinned") {
+      // One root for all spaces and copies (shared); nothing is carried, the selection ends with the old root.
+      const stored = readLocalTree(shared(LOCAL_TREE_KEY)), next = writeLocalTree(stored, { root });
+      if (next !== stored) setShared(LOCAL_TREE_KEY, next);
+      tree.want = root;
+      this.refresh(cx, {}, tree);
+      cx.notify();
+      return;
+    }
     if (!setRoot(this.nav ??= new Map(), paneId(focused()), location(), root)) return;
-    const state = carry({ folders: this.folders, packages: this.packages, selected: this.selected, file: own ? this.file : null, lastOpened: this.lastOpened }, this.root, root);
-    this.carried = { key: this.target().key, ...state, selecting: this.selecting === true }; // the anchor is not carried
-    this.refresh(cx);
+    const state = carry({ folders: tree.folders, packages: tree.packages, selected: tree.selected, file: own ? this.file : null, lastOpened: tree.lastOpened }, tree.root, root);
+    this.carried = { key: this.target().key, ...state, selecting: tree.selecting === true }; // the anchor is not carried
+    this.refresh(cx, {}, tree);
     cx.notify();
   }
 
   async loadFolder(path, context) {
+    const tree = this.treeOf(context);
+    if (!tree) return;
     const { on, cwd: root } = context;
     let entries;
     try {
       entries = await directory(path ? joinPath(root, path) : root, on, this.conf.list_per_folder, this.conf, Boolean(path) && !on, this.conf.show_sizes === true);
     } catch (e) {
       // A folder that cannot be read or searched shows a note instead of looking empty (issue #49); the root has the message below the tree.
-      if (e?.denied && this.current(context) && (!path || this.folders.has(path))) { this.entries.set(path, Object.assign([], { denied: true })); return; }
+      if (e?.denied && this.current(context) && (!path || tree.folders.has(path))) { tree.entries.set(path, Object.assign([], { denied: true })); return; }
       // An open subfolder that was renamed or deleted just leaves the tree, with everything below it.
-      if (path && e?.missing && this.current(context)) { pruneFolder(this.folders, this.entries, path); return; }
+      if (path && e?.missing && this.current(context)) { pruneFolder(tree.folders, tree.entries, path); return; }
       throw e;
     }
-    if (!this.current(context) || (path && !this.folders.has(path))) return;
+    if (!this.current(context) || (path && !tree.folders.has(path))) return;
     // The folder's real path (local): a folder reached through a symlink matches the folder watch's paths (watchOpts).
-    if (path) { this.realFolders ??= new Map(); if (entries.real?.startsWith("/")) this.realFolders.set(path, entries.real); else this.realFolders.delete(path); }
+    if (path) { tree.realFolders ??= new Map(); if (entries.real?.startsWith("/")) tree.realFolders.set(path, entries.real); else tree.realFolders.delete(path); }
     const { list_per_folder: perFolder, list_total: total } = this.conf;
-    const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
-    this.entries.set(path, entries.slice(0, Math.max(0, Math.min(perFolder, total - used))).sort((a, b) => Number(sortsAsFolder(b)) - Number(sortsAsFolder(a)) || a.name.localeCompare(b.name)));
-    if (entries.length > perFolder || used + entries.length > total) this.limited = true;
+    const used = [...tree.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
+    tree.entries.set(path, entries.slice(0, Math.max(0, Math.min(perFolder, total - used))).sort((a, b) => Number(sortsAsFolder(b)) - Number(sortsAsFolder(a)) || a.name.localeCompare(b.name)));
+    if (entries.length > perFolder || used + entries.length > total) tree.limited = true;
   }
 
   // Reloads the tree (listing and git marks) of the shown folder; opts.file also the open file afterwards (reloadOpen),
   // opts.force probes it even when its text is unchanged. One flight at a time: a call during a reload is remembered
   // and runs once when it ends, so triggers never stack and none is lost (issue #31). All in cx.spawn: a slow machine
   // never blocks drawing.
-  refresh(cx, { file = 0, force = false } = {}) {
-    // cwd: the shown root (the terminal's folder or the one navigated to); listing, git and the watch use it.
-    const { root: cwd, on, key: next } = this.target();
-    if (next !== this.context?.key) {
+  refresh(cx, { file = 0, force = false } = {}, tree = this.trees.follow) {
+    const pinned = tree.id === "pinned";
+    // cwd: the shown root (the terminal's folder or the one navigated to); listing, git and the watch use it. The lower
+    // tree never looks at the terminal: its root is the one asked for (navigate, syncPinned) or the one it has.
+    const want = tree.want ?? tree.context?.cwd ?? null;
+    const { root: cwd, on, key: next } = pinned ? { root: want, on: null, key: pinnedContext(want).key } : this.target();
+    if (pinned && !cwd) return;
+    if (next !== tree.context?.key) {
       // A file opened from the other tree is not touched by a switch of this one.
-      const own = this.ownsFile(this.trees.follow);
+      const own = this.ownsFile(tree);
       if (own && this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
-      if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, selected: this.selected, selecting: this.selecting === true, file: own ? this.file : this.saved.get(this.context.key)?.file ?? null, lastOpened: this.lastOpened });
+      if (!pinned && tree.context) this.saved.set(tree.context.key, { folders: tree.folders, packages: tree.packages, selected: tree.selected, selecting: tree.selecting === true, file: own ? this.file : this.saved.get(tree.context.key)?.file ?? null, lastOpened: tree.lastOpened });
       // A navigation carries the tree along (navigate); a switch of terminal or folder restores what was left there.
-      const saved = this.carried?.key === next ? this.carried : this.saved.get(next);
-      this.carried = null;
-      this.context = { key: next, cwd, on, tree: "follow" }; this.root = cwd; this.on = on; this.entries = new Map(); this.realFolders = new Map(); this.fileReal = null; this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
-      this.pending = new Set(); this.marks = {}; if (own) this.show(null); this.watched = null; this.gitWatch = null; this.error = null; this.limited = false;
-      this.loading = false; this.again = false; this.fileWanted = 0; this.fileForce = false; this.lastOpened = saved?.lastOpened ?? null;
-      this.setSelection({ selected: new Set(saved?.selected) }); this.selecting = saved?.selecting === true; // anchor and base are not restored
-      if (own && saved?.file) this.show(saved.file, cx, { tree: this.trees.follow }); // read fresh: no file reload needed
+      const saved = pinned ? null : this.carried?.key === next ? this.carried : this.saved.get(next);
+      if (!pinned) this.carried = null;
+      tree.context = pinned ? pinnedContext(cwd) : { key: next, cwd, on, tree: "follow" }; tree.root = cwd; tree.on = on; tree.entries = new Map(); tree.realFolders = new Map(); tree.fileReal = null; tree.folders = new Set(saved?.folders); tree.packages = new Set(saved?.packages);
+      tree.pending = new Set(); tree.marks = {}; if (own) this.show(null); tree.watched = null; tree.gitWatch = null; tree.error = null; tree.limited = false;
+      tree.loading = false; tree.again = false; tree.fileWanted = 0; tree.fileForce = false; tree.lastOpened = saved?.lastOpened ?? null;
+      this.setSelection({ selected: new Set(saved?.selected) }, tree); tree.selecting = saved?.selecting === true; // anchor and base are not restored
+      if (own && saved?.file) this.show(saved.file, cx, { tree }); // read fresh: no file reload needed
       file = 0; force = false;
     }
-    this.fileWanted = Math.max(this.fileWanted ?? 0, file === true ? FILE_ALL : file || 0);
-    if (force) this.fileForce = true;
+    if (this.fileSide().tree !== tree) { file = 0; force = false; } // only the open file's tree reloads it
+    tree.fileWanted = Math.max(tree.fileWanted ?? 0, file === true ? FILE_ALL : file || 0);
+    if (force) tree.fileForce = true;
     if (!cwd) return;
-    if (this.loading) { this.again = true; return; }
-    const context = this.context;
-    this.loading = true;
-    this.limited = false;
+    if (tree.loading) { tree.again = true; return; }
+    const context = tree.context;
+    tree.loading = true;
+    tree.limited = false;
     cx.spawn(async cx => {
       try {
         // An open folder that a hide setting now hides leaves the tree, with everything below it (it would still use up list_total).
-        for (const path of [...this.folders]) if (hiddenPath(path, this.conf)) pruneFolder(this.folders, this.entries, path);
-        for (const path of ["", ...this.folders]) {
+        for (const path of [...tree.folders]) if (hiddenPath(path, this.conf)) pruneFolder(tree.folders, tree.entries, path);
+        for (const path of ["", ...tree.folders]) {
           if (!this.current(context)) return;
           await this.loadFolder(path, context);
         }
@@ -884,24 +900,24 @@ export default class FilerPro extends View {
           const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
           if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, this.conf.list_total)) {
             const xy = entry.slice(0, 2), rel = rootRelative(prefix, entry.slice(3));
-            if (rel !== null) marks[joinPath(this.root, rel)] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
+            if (rel !== null) marks[joinPath(tree.root, rel)] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
           }
         }
         if (!this.current(context)) return;
-        this.marks = marks; this.error = null; this.watch(cwd, cx); this.watchGit(place, cx);
-        this.pruneSelected(); // a row deleted or renamed outside the panel leaves the selection
-      } catch (e) { if (this.current(context)) this.error = String(e); }
+        tree.marks = marks; tree.error = null; this.watch(cwd, cx, tree); this.watchGit(place, cx, tree);
+        this.pruneSelected(tree); // a row deleted or renamed outside the panel leaves the selection
+      } catch (e) { if (this.current(context)) tree.error = String(e); }
       finally {
-        if (this.context === context) this.loading = false;
+        if (tree.context === context) tree.loading = false;
         cx.notify();
         // The end of a flight: a trigger from meanwhile runs the next one; else the open file follows (after the tree,
         // so this copy never has two commands on a machine at once).
-        if (this.context === context && this.current(context)) {
-          if (this.again) { this.again = false; this.refresh(cx); }
-          else if (this.fileWanted) {
-            const opts = { force: Boolean(this.fileForce), textOnly: this.fileWanted === FILE_TEXT, named: this.fileWanted === FILE_NAMED };
-            this.fileWanted = 0; this.fileForce = false;
-            this.reloadOpen(cx, opts);
+        if (tree.context === context && this.current(context)) {
+          if (tree.again) { tree.again = false; this.refresh(cx, {}, tree); }
+          else if (tree.fileWanted) {
+            const opts = { force: Boolean(tree.fileForce), textOnly: tree.fileWanted === FILE_TEXT, named: tree.fileWanted === FILE_NAMED };
+            tree.fileWanted = 0; tree.fileForce = false;
+            if (this.fileSide().tree === tree) this.reloadOpen(cx, opts);
           }
         }
       }
@@ -910,70 +926,87 @@ export default class FilerPro extends View {
 
   // A click on a folder row (issue #90): it toggles; with double_click_folders the second press of a double click shows the
   // folder as root instead (lib/clicks.js folderClick). A package whose contents are shown keeps the plain toggle.
-  clickFolder(path, bundle, e, cx) {
+  clickFolder(path, bundle, e, cx, tree = this.trees.follow) {
     const action = folderClick(e, this.conf.double_click_folders === true && !bundle);
-    if (action === "toggle") this.toggle(path, cx);
-    else if (action === "root") this.navigate(joinPath(this.root, path), cx);
+    if (action === "toggle") this.toggle(path, cx, tree);
+    else if (action === "root") this.navigate(joinPath(tree.root, path), cx, tree);
   }
 
-  // The only writer of the selection fields (issue #101 moves them into a per-tree object).
-  setSelection({ selected, anchor = null, base = null } = {}) {
-    this.selected = new Set(selected);
-    this.anchor = anchor;
-    this.base = base;
+  // The only writer of the selection fields of a tree.
+  setSelection({ selected, anchor = null, base = null } = {}, tree = this.trees.follow) {
+    tree.selected = new Set(selected);
+    tree.anchor = anchor;
+    tree.base = base;
   }
 
-  clearSelected() { this.setSelection(clearSelection()); }
+  clearSelected(tree = this.trees.follow) { this.setSelection(clearSelection(), tree); }
+
+  // Only one tree holds a selection at a time (one selection bar): a click or a menu in a tree ends the other one's,
+  // checkbox mode included. -> true when something was cleared.
+  dropOtherSelection(tree) {
+    let cleared = false;
+    for (const other of [this.trees.follow, this.trees.pinned]) {
+      if (!other || other === tree || !(other.selected?.size || other.anchor || other.selecting === true)) continue;
+      this.clearSelected(other); other.selecting = false; cleared = true;
+    }
+    return cleared;
+  }
+
+  // The tree that holds the selection (or the checkbox mode), if any: the one the selection bar belongs to.
+  selectionTree() {
+    return this.shownTrees().find((t) => t.selected?.size || t.anchor || t.selecting === true) ?? null;
+  }
 
   // The selection as actions see it: a folder stands for what lies inside it, in tree order (rows that are not shown last).
-  selectedItems() {
-    const shown = this.visible().filter((r) => !r.entry.note).map((r) => r.path);
-    const rest = [...(this.selected ?? [])].filter((p) => !shown.includes(p)).sort();
-    return collapse([...shown.filter((p) => this.selected?.has(p)), ...rest])
-      .map((p) => ({ path: joinPath(this.root, p), isDir: this.entryAt(p)?.dir === true }));
+  selectedItems(tree = this.trees.follow) {
+    const shown = this.visible(tree).filter((r) => !r.entry.note).map((r) => r.path);
+    const rest = [...(tree.selected ?? [])].filter((p) => !shown.includes(p)).sort();
+    return collapse([...shown.filter((p) => tree.selected?.has(p)), ...rest])
+      .map((p) => ({ path: joinPath(tree.root, p), isDir: this.entryAt(p, tree)?.dir === true }));
   }
 
   // Drops selected rows that the loaded listings no longer hold; the anchor goes with its row.
-  pruneSelected() {
-    if (!this.selected?.size) return;
-    const next = prune(this.selected, this.entries);
-    if (next.size === this.selected.size) return;
-    const real = (p) => p != null && Boolean(this.entryAt(p)) && !this.entryAt(p).note;
-    this.setSelection({ selected: next, anchor: real(this.anchor) ? this.anchor : null, base: this.base && new Set([...this.base].filter((p) => next.has(p))) });
+  pruneSelected(tree = this.trees.follow) {
+    if (!tree.selected?.size) return;
+    const next = prune(tree.selected, tree.entries);
+    if (next.size === tree.selected.size) return;
+    const real = (p) => p != null && Boolean(this.entryAt(p, tree)) && !this.entryAt(p, tree).note;
+    this.setSelection({ selected: next, anchor: real(tree.anchor) ? tree.anchor : null, base: tree.base && new Set([...tree.base].filter((p) => next.has(p))) }, tree);
   }
 
   // A click on a tree row with several rows selectable (lib/clicks.js rowClick, lib/selection.js).
-  clickRow(path, dir, bundle, e, cx) {
-    const kind = rowClick(e, { multi: this.conf.multi_select === true, selecting: this.selecting === true, toggleKey: this.conf.select_toggle_click, rangeKey: this.conf.select_range_click, remoteBinary: Boolean(this.on) && !dir && isBinaryName(path) });
+  clickRow(path, dir, bundle, e, cx, tree = this.trees.follow) {
+    const kind = rowClick(e, { multi: this.conf.multi_select === true, selecting: tree.selecting === true, toggleKey: this.conf.select_toggle_click, rangeKey: this.conf.select_range_click, remoteBinary: Boolean(tree.on) && !dir && isBinaryName(path) });
+    if (kind !== "reveal") this.dropOtherSelection(tree);
     if (kind === "toggle" || kind === "range") {
-      const order = this.visible().filter((r) => !r.entry.note).map((r) => r.path);
-      this.setSelection(applyClick({ selected: this.selected ?? new Set(), anchor: this.anchor ?? null, base: this.base ?? null }, kind, path, order));
+      const order = this.visible(tree).filter((r) => !r.entry.note).map((r) => r.path);
+      this.setSelection(applyClick({ selected: tree.selected ?? new Set(), anchor: tree.anchor ?? null, base: tree.base ?? null }, kind, path, order), tree);
       cx.notify();
-    } else if (kind === "reveal") this.reveal(path);
+    } else if (kind === "reveal") this.reveal(path, tree);
     else if (kind === "row") {
-      if (this.selected?.size || this.anchor) { this.clearSelected(); cx.notify(); } // a lone anchor (toggled off) goes too
-      if (dir) this.clickFolder(path, bundle, e, cx); else this.clickFile(path, bundle, e, cx);
+      if (tree.selected?.size || tree.anchor) { this.clearSelected(tree); cx.notify(); } // a lone anchor (toggled off) goes too
+      if (dir) this.clickFolder(path, bundle, e, cx, tree); else this.clickFile(path, bundle, e, cx, tree);
     }
   }
 
-  toggle(path, cx) {
-    if (this.folders.has(path)) {
-      for (const folder of [...this.folders]) if (folder === path || folder.startsWith(path + "/")) {
-        this.folders.delete(folder);
-        this.entries.delete(folder);
+  toggle(path, cx, tree = this.trees.follow) {
+    if (tree.folders.has(path)) {
+      for (const folder of [...tree.folders]) if (folder === path || folder.startsWith(path + "/")) {
+        tree.folders.delete(folder);
+        tree.entries.delete(folder);
       }
       // A collapsed package is a file row again (lib/bundles.js), and so is every package shown below it.
-      for (const p of [...(this.packages ?? [])]) if (p === path || p.startsWith(path + "/")) this.packages.delete(p);
-      this.pruneSelected(); // rows below the folder are hidden now
+      for (const p of [...(tree.packages ?? [])]) if (p === path || p.startsWith(path + "/")) tree.packages.delete(p);
+      this.pruneSelected(tree); // rows below the folder are hidden now
     } else {
-      this.folders.add(path);
-      if (!this.entries.has(path) && !this.pending.has(path)) {
-        const context = this.context;
-        this.pending.add(path);
+      tree.folders.add(path);
+      if (!tree.entries.has(path) && !tree.pending.has(path)) {
+        const context = tree.context;
+        tree.pending.add(path);
         cx.spawn(async cx => {
           try { await this.loadFolder(path, context); }
-          catch (e) { if (this.current(context)) this.error = String(e); }
-          finally { if (this.context === context) this.pending.delete(path); cx.notify(); }
+          catch (e) { if (this.current(context)) tree.error = String(e); }
+          finally { if (tree.context === context) tree.pending.delete(path); cx.notify(); }
         });
       }
     }
@@ -982,13 +1015,13 @@ export default class FilerPro extends View {
 
   // Show Package Contents (show true) expands a macOS package like a folder; Hide (false) collapses it, and it is a
   // file row again. path: relative to the root.
-  showPackage(path, show, cx) {
-    this.packages ??= new Set();
+  showPackage(path, show, cx, tree = this.trees.follow) {
+    tree.packages ??= new Set();
     if (show) {
-      this.packages.add(path);
-      if (!this.folders.has(path)) this.toggle(path, cx);
-    } else if (this.folders.has(path)) this.toggle(path, cx);
-    else this.packages.delete(path);
+      tree.packages.add(path);
+      if (!tree.folders.has(path)) this.toggle(path, cx, tree);
+    } else if (tree.folders.has(path)) this.toggle(path, cx, tree);
+    else tree.packages.delete(path);
   }
 
   // The menu copy asks through shared("filer-pro.package") = { id, machine, path, show }: this copy applies it once,
@@ -998,9 +1031,23 @@ export default class FilerPro extends View {
     const r = shared("filer-pro.package");
     if (!r?.id || r.id === this.packageSeen) return;
     this.packageSeen = r.id;
-    const rel = expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on);
-    if (rel) cx.spawn(async (cx) => this.showPackage(rel, r.show === true, cx));
+    const tree = this.requestTree(r, (t) => Boolean(expandPath({ machine: r.machine ?? null, folder: r.path }, t.root, t.on)));
+    if (!tree) return;
+    const rel = expandPath({ machine: r.machine ?? null, folder: r.path }, tree.root, tree.on);
+    cx.spawn(async (cx) => this.showPackage(rel, r.show === true, cx, tree));
   }
+
+  // The tree a shared request (Show as Root, Show Package Contents, Select Files) is for: the tree the menu came from
+  // (r.tree), else the upper tree first, else the lower one, never both. hit(tree): does that tree show the request's folder?
+  requestTree(r, hit) {
+    const trees = this.shownTrees();
+    if (r.tree === "follow" || r.tree === "pinned") { const t = trees.find((x) => x.id === r.tree); return t && hit(t) ? t : null; }
+    return trees.find(hit) ?? null;
+  }
+
+  // The lower tree's shared state (lib/treestate.js readLocalTree) and the trees on screen: the upper one, and the lower one while shown.
+  localTree() { return readLocalTree(shared(LOCAL_TREE_KEY)); }
+  shownTrees() { const p = this.trees.pinned; return p?.context && this.localTree().shown ? [this.trees.follow, p] : [this.trees.follow]; }
 
   // Show as Root (issue #90): the menu copy asks through shared("filer-pro.goto") = { id, machine, path }; the panel that shows
   // that machine and a folder above the path makes it the root (navigate), once. Called from render, so it runs in a task.
@@ -1008,7 +1055,8 @@ export default class FilerPro extends View {
     const r = shared("filer-pro.goto");
     if (!r?.id || r.id === this.gotoSeen) return;
     this.gotoSeen = r.id;
-    if (expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on)) cx.spawn(async (cx) => this.navigate(r.path, cx));
+    const tree = this.requestTree(r, (t) => Boolean(expandPath({ machine: r.machine ?? null, folder: r.path }, t.root, t.on)));
+    if (tree) cx.spawn(async (cx) => this.navigate(r.path, cx, tree));
   }
 
   // Select Files (issue #98): the menu copy asks through shared("filer-pro.select") = { id, mode, machine, root, path }. The panel that
@@ -1018,17 +1066,19 @@ export default class FilerPro extends View {
     const r = shared("filer-pro.select");
     if (!r?.id || r.id === this.selectSeen) return;
     this.selectSeen = r.id;
-    if ((r.machine ?? null) !== (this.on ?? null) || r.root !== this.root) return;
-    const rel = r.path ? expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on) : null;
-    if (r.path && !rel) return;
+    const relIn = (t) => (r.path ? expandPath({ machine: r.machine ?? null, folder: r.path }, t.root, t.on) : null);
+    const tree = this.requestTree(r, (t) => (r.machine ?? null) === (t.on ?? null) && r.root === t.root && (!r.path || Boolean(relIn(t))));
+    if (!tree) return;
+    const rel = relIn(tree);
     cx.spawn(async (cx) => {
-      if (r.mode === "clear") this.clearSelected();
+      if (r.mode === "clear") this.clearSelected(tree);
       else if (r.mode === "start") {
-        this.selecting = true;
+        this.dropOtherSelection(tree);
+        tree.selecting = true;
         if (rel) {
-          const next = new Set(this.selected).add(rel);
-          this.setSelection({ selected: next, anchor: rel, base: next });
-        } else this.setSelection({ selected: this.selected });
+          const next = new Set(tree.selected).add(rel);
+          this.setSelection({ selected: next, anchor: rel, base: next }, tree);
+        } else this.setSelection({ selected: tree.selected }, tree);
       }
       cx.notify();
     });
@@ -1041,8 +1091,9 @@ export default class FilerPro extends View {
   pollSizes(cx) {
     const map = shared("filer-pro.sizes");
     if (map !== this.sizesSeen) { this.sizesSeen = map; if (this.conf.show_sizes) cx.notify(); }
-    if (!map || !this.root) return;
-    const got = claimSizes(map, (machine, path) => (machine ?? null) === (this.on ?? null) && expandPath({ machine, folder: path }, this.root, this.on) !== null, Date.now());
+    const trees = this.shownTrees().filter((t) => t.root);
+    if (!map || !trees.length) return;
+    const got = claimSizes(map, (machine, path) => trees.some((t) => (machine ?? null) === (t.on ?? null) && expandPath({ machine, folder: path }, t.root, t.on) !== null), Date.now());
     if (!got) return;
     setShared("filer-pro.sizes", got.map);
     for (const { key, machine, path, id } of got.claimed) cx.spawn(async (cx) => {
@@ -1059,9 +1110,9 @@ export default class FilerPro extends View {
   }
 
   // The loaded entry of a path relative to the root, or undefined.
-  entryAt(path) {
+  entryAt(path, tree = this.trees.follow) {
     const name = baseName(path);
-    return this.entries?.get(parentOf(path) ?? "")?.find((e) => e.name === name);
+    return tree.entries?.get(parentOf(path) ?? "")?.find((e) => e.name === name);
   }
 
   // A Ctrl/Cmd-click on a file link in a terminal (link.js): the copy that shows the clicked terminal's machine shows the
@@ -2126,108 +2177,115 @@ export default class FilerPro extends View {
   // A click on a file row or a macOS package row (local only, lib/bundles.js) under double_click_files or
   // double_click_apps, read at each click (lib/clicks.js fileClick). "select" marks the row as the tree marks the last
   // opened file; "open" shows a file in the viewer and starts a package like the Finder does (lib/open.js openBundle).
-  clickFile(path, bundle, event, cx) {
+  clickFile(path, bundle, event, cx, tree = this.trees.follow) {
     // Local archives and Office documents (lib/binary.js) are apps for the click: double_click_apps decides. A single
     // click shows the message with an Open button; the double click starts the default app (binaryView). On a machine
     // nothing is ever downloaded or opened by a click: the regular file click shows the message (show() skips the read).
-    if (!bundle && !this.on && isBinaryName(path)) {
+    if (!bundle && !tree.on && isBinaryName(path)) {
       const a = fileClick(event, this.conf.double_click_apps);
-      if (a === "open") { this.lastOpened = path; cx.notify(); this.openBinary(path); }
-      else if (a) this.show(path, cx, { tree: this.trees.follow });
+      if (a === "open") { tree.lastOpened = path; cx.notify(); this.openBinary(path, tree); }
+      else if (a) this.show(path, cx, { tree });
       return;
     }
     const action = fileClick(event, bundle ? this.conf.double_click_apps : this.conf.double_click_files);
-    if (action === "open" && !bundle) { this.show(path, cx, { tree: this.trees.follow }); return; }
+    if (action === "open" && !bundle) { this.show(path, cx, { tree }); return; }
     if (!action) return;
-    this.lastOpened = path; cx.notify();
-    if (action === "open") openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
+    tree.lastOpened = path; cx.notify();
+    if (action === "open") openBundle(joinPath(tree.root, path), { exec, notify, platform }).catch(() => {});
   }
 
   // Opens a local file with the default app after the checks of lib/open.js (like Open in the menu). Never on a machine.
-  openBinary(path) {
-    if (this.on) return;
-    openChecked(joinPath(this.root, path), { app: "default" }, { exec, notify, platform }).catch(() => {});
+  openBinary(path, tree = this.fileSide().tree) {
+    if (tree.on) return;
+    openChecked(joinPath(tree.root, path), { app: "default" }, { exec, notify, platform }).catch(() => {});
   }
 
   // The message of a file that is not text. Locally (openable) with an Open button, and a double click on it (the first
   // click showed this view in place of the tree) starts the default app when double_click_apps is on.
   binaryView(t) {
-    const path = this.file;
+    const path = this.file, tree = this.fileSide().tree;
     return v_flex().id("files-binary").flex_1().min_h(0).p(12).gap(8).items_start().text_color(t.dim)
-      .on_click((e, cx) => { if (this.openable && this.file === path && this.conf.double_click_apps && e.click_count === 2) this.openBinary(path); })
+      .on_click((e, cx) => { if (this.openable && this.file === path && this.conf.double_click_apps && e.click_count === 2) this.openBinary(path, tree); })
       .child(div().child(this.fileError))
-      .when(this.openable, el => el.child(this.tool("files-open-binary", "Open", t, (cx) => { cx.stop_propagation(); this.openBinary(path); })));
+      .when(this.openable, el => el.child(this.tool("files-open-binary", "Open", t, (cx) => { cx.stop_propagation(); this.openBinary(path, tree); })));
   }
 
   // Cmd+click: remote rows are downloaded and shown in the Finder, local rows are only shown there.
-  reveal(path) {
-    if (this.on) { this.request({ machine: this.on, path: joinPath(this.root, path), reveal: true }); return; }
-    const [cmd, args] = platform.revealArgs(joinPath(this.root, path));
+  reveal(path, tree = this.trees.follow) {
+    if (tree.on) { this.request({ machine: tree.on, path: joinPath(tree.root, path), reveal: true }); return; }
+    const [cmd, args] = platform.revealArgs(joinPath(tree.root, path));
     exec(cmd, args).catch(() => {});
   }
 
   // Dropped Finder items: upload (remote tree) or local copy into the folder the drop landed on.
-  drop(paths, rowPath, rowIsDir) {
-    const r = dropRequest({ on: this.on, root: this.root, rowPath, rowIsDir, paths });
+  drop(paths, rowPath, rowIsDir, tree = this.trees.follow) {
+    const r = dropRequest({ on: tree.on, root: tree.root, rowPath, rowIsDir, paths });
     if (r) this.request(r);
   }
 
+  anyLoading() { return this.shownTrees().some((t) => t.loading); }
+
+  // Reloads every tree on screen (a change signal, the periodic timer, a new config).
+  refreshAll(cx, opts) { for (const tree of this.shownTrees()) this.refresh(cx, opts, tree); }
+
   // The visible tree rows under the list settings; rows() and the spacer of an open file use the same (issue #5).
-  visible() {
-    return visibleRows(this.entries, this.folders, { limit: this.conf.list_total, maxDepth: this.conf.tree_depth, isDir: (entry, path) => treeDir(entry, path, this.packages) });
+  visible(tree = this.trees.follow) {
+    return visibleRows(tree.entries, tree.folders, { limit: this.conf.list_total, maxDepth: this.conf.tree_depth, isDir: (entry, path) => treeDir(entry, path, tree.packages) });
   }
 
   // The tree rows; the last opened file is marked with t.selected (issue #5). With show_sizes (issue #58) a size column
   // sits right-aligned directly left of the git mark, which then keeps a fixed slot at the edge so the sizes line up.
-  rows(t, dark) {
+  rows(t, dark, tree = this.trees.follow) {
     const sizes = this.conf.show_sizes === true ? shared("filer-pro.sizes") ?? {} : null, font = sizes ? settings().font_family : null;
-    const boxes = this.selecting === true, none = !this.selected?.size && !boxes;
-    return this.visible().map(({ path, entry, depth }) => {
-      if (entry.note) return h_flex().id(`file-${path}-note`).h(ROW_H).flex_none().pl(8 + (boxes ? 16 + 7 : 0) + depth * 18 + 19).pr(8).items_center().text_size(12).text_color(t.dim).child(div().flex_1().min_w(0).truncate().child(entry.name));
-      const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
+    const boxes = tree.selecting === true, none = !tree.selected?.size && !boxes;
+    const pre = tree.id === "pinned" ? "local-" : ""; // element ids of the lower tree
+    return this.visible(tree).map(({ path, entry, depth }) => {
+      if (entry.note) return h_flex().id(`${pre}file-${path}-note`).h(ROW_H).flex_none().pl(8 + (boxes ? 16 + 7 : 0) + depth * 18 + 19).pr(8).items_center().text_size(12).text_color(t.dim).child(div().flex_1().min_w(0).truncate().child(entry.name));
+      const open = tree.folders.has(path), mark = tree.marks[joinPath(tree.root, path)];
       // A macOS package acts as a file until its contents are shown (lib/bundles.js); `dir` decides chevron, click and drop.
-      const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
+      const dir = treeDir(entry, path, tree.packages), bundle = entry.bundle === true, contents = bundle && dir;
       // The last opened file is marked only while no selection competes with it. In checkbox mode the box leads the row and
       // a spacer (pulled back over the row gap) carries the depth, so the boxes line up in one column.
-      const picked = this.selected?.has(path) === true, current = path === this.lastOpened && none;
-      return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(boxes ? 8 : 8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+      const picked = tree.selected?.has(path) === true, current = path === tree.lastOpened && none;
+      return h_flex().id(`${pre}file-${path}`).h(ROW_H).flex_none().pl(boxes ? 8 : 8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(picked || current, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .when(boxes, el => el.role("check_box").accessibility_label(`${entry.name}, ${picked ? "checked" : "not checked"}`))
-        .on_click((e, cx) => { cx.stop_propagation(); this.clickRow(path, dir, bundle, e, cx); })
+        .on_click((e, cx) => { cx.stop_propagation(); this.clickRow(path, dir, bundle, e, cx, tree); })
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
-          // A menu on a row outside the selection ends the selection, except in checkbox mode.
-          if (this.selecting !== true && this.selected?.size && !this.selected.has(path)) { this.clearSelected(); cx.notify(); }
+          // A menu on a row outside the selection ends the selection, except in checkbox mode; the other tree's ends too.
+          if (this.dropOtherSelection(tree)) cx.notify();
+          if (tree.selecting !== true && tree.selected?.size && !tree.selected.has(path)) { this.clearSelected(tree); cx.notify(); }
           // Several rows (a folder and what lies inside it count once) get the short menu for all of them (#99).
-          const items = picked ? this.selectedItems() : [];
+          const items = picked ? this.selectedItems(tree) : [];
           const multi = items.length >= 2 ? { items, count: items.length } : {};
-          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents, selecting: this.selecting === true, count: multi.count }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: tree.on, platform: window()?.platform, bundle, contents, selecting: tree.selecting === true, count: multi.count }) };
+          openOverlay({ mod: "filer-pro", props: { view: "menu", tree: tree.id, machine: tree.on, root: tree.root, path: joinPath(tree.root, path), isDir: entry.dir, bundle, contents, selecting: tree.selecting === true, folder: dropTarget(tree.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
-        .on_drop((e, cx) => this.drop(e.paths, path, dir))
+        .on_drop((e, cx) => this.drop(e.paths, path, dir, tree))
         .when(boxes, el => el.child(checkBox(t, picked)).when(depth > 0, e => e.child(div().w(depth * 18).flex_none().ml(-7))))
-        .child(this.chevron(path, dir, open, t))
+        .child(this.chevron(path, dir, open, t, tree))
         .child(image(bundle && !dir ? bundleIcon(entry.name, dark) : icon(path, entry.dir, open, dark)).size(16).flex_none())
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
-        .when(Boolean(sizes), el => el.child(this.sizeCell(path, entry, sizes, font, t)))
+        .when(Boolean(sizes), el => el.child(this.sizeCell(path, entry, sizes, font, t, tree)))
         .when(Boolean(mark) || Boolean(sizes), el => el.child(div().text_size(11).when(Boolean(sizes), m => m.w(12).flex_none().flex().justify_center()).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark ?? "")));
     });
   }
 
   // The chevron of a row. In checkbox mode a click on it only opens or closes the folder (a double click does nothing more).
-  chevron(path, dir, open, t) {
+  chevron(path, dir, open, t, tree = this.trees.follow) {
     if (!dir) return div().w(12).flex_none();
     const glyph = svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim);
-    if (this.selecting !== true) return glyph;
-    return div().id(`chevron-${path}`).w(12).flex_none().on_click((e, cx) => { cx.stop_propagation(); if (!(e?.click_count > 1)) this.toggle(path, cx); }).child(glyph);
+    if (tree.selecting !== true) return glyph;
+    return div().id(`${tree.id === "pinned" ? "local-" : ""}chevron-${path}`).w(12).flex_none().on_click((e, cx) => { cx.stop_propagation(); if (!(e?.click_count > 1)) this.toggle(path, cx, tree); }).child(glyph);
   }
 
   // The size of a row (lib/sizes.js sizeCell): text 11, dim, in the terminal font so the digits line up; a spinner
   // while Calculate Size runs on the folder.
-  sizeCell(path, entry, sizes, font, t) {
-    const calc = Boolean(this.on) || window()?.platform !== "windows"; // Calculate Size is dimmed on local Windows
-    const cell = sizeCell(entry, entry.dir ? sizes[sizeKey(this.on, joinPath(this.root, path))] : undefined, Date.now(), calc);
-    const el = div().id(`file-${path}-size`).flex_none().flex().justify_end().text_size(11).text_color(t.dim).when(Boolean(font), e => e.font_family(font));
+  sizeCell(path, entry, sizes, font, t, tree = this.trees.follow) {
+    const calc = Boolean(tree.on) || window()?.platform !== "windows"; // Calculate Size is dimmed on local Windows
+    const cell = sizeCell(entry, entry.dir ? sizes[sizeKey(tree.on, joinPath(tree.root, path))] : undefined, Date.now(), calc);
+    const el = div().id(`${tree.id === "pinned" ? "local-" : ""}file-${path}-size`).flex_none().flex().justify_end().text_size(11).text_color(t.dim).when(Boolean(font), e => e.font_family(font));
     if (cell.spin) return el.child(svg(`${BASE}/loader-circle.svg`).size(11).text_color(t.dim).spin(900));
     return el.when(Boolean(cell.title), e => e.tooltip(cell.title)).child(cell.text);
   }
@@ -2237,15 +2295,19 @@ export default class FilerPro extends View {
   pollReload(cx) {
     const changed = shared("filer-pro.changed");
     if (this.reload.signal(changed?.at ?? null)) {
-      const open = expandPath(changed?.expand, this.root, this.on);
-      if (open) this.folders.add(open);
-      // Kept on the copy, not passed along: take() may only let the reload through later (gap, running load).
-      if (changed?.at !== this.ownChanged) this.fileWanted = Math.max(this.fileWanted ?? 0, FILE_ALL);
+      for (const tree of this.shownTrees()) {
+        const open = expandPath(changed?.expand, tree.root, tree.on);
+        if (open) tree.folders.add(open);
+      }
+      // Kept on the copy, not passed along: take() may only let the reload through later (gap, running load). The open
+      // file's own tree reloads it.
+      const file = this.fileSide();
+      if (changed?.at !== this.ownChanged) file.tree.fileWanted = Math.max(file.tree.fileWanted ?? 0, FILE_ALL);
       // A chmod of the open file, its folder or (recursive) a folder above it: probe it again even when its text is
       // unchanged, so the edit check and mode follow (issue #41). Kept like fileWanted until the next flight ends.
-      if (permsCover(changed?.perms, { on: this.on, root: this.root, file: this.file })) this.fileForce = true;
+      if (permsCover(changed?.perms, { on: file.on, root: file.root, file: this.file })) file.tree.fileForce = true;
     }
-    if (this.context && this.reload.take(this.loading)) this.refresh(cx);
+    if (this.context && this.reload.take(this.anyLoading())) this.refreshAll(cx);
   }
 
   render(cx) {
