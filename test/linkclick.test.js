@@ -24,6 +24,9 @@ test("a remote link resolves against the terminal's folder and the home folder",
   assert.equal(t("$HOME/a.png", "/Users/u"), "/Users/u/a.png");
   assert.equal(t("~/a.png"), null, "no home folder known");
   assert.equal(t("file://studio/tmp/a%20b.png"), "/tmp/a b.png");
+  assert.equal(t("file:///home/u/doc.pdf#page=2"), "/home/u/doc.pdf", "no #fragment");
+  assert.equal(t("file:///home/u/doc.pdf?x=1"), "/home/u/doc.pdf", "no ?query");
+  assert.equal(t("file:/home/u/shot.png"), "/home/u/shot.png", "file: with one slash");
   assert.equal(t("file:C:/x.png"), null);
   assert.equal(t("file:///%E0.png"), null, "a bad escape");
   assert.equal(linkTarget(file("a.png"), { machine: "studio", cwd: null }), null, "a relative path needs the folder");

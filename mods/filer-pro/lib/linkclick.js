@@ -23,7 +23,8 @@ export function linkTarget(link, source, home = null) {
 // :line[:column] suffix (as Herdr's own without_suffix), relative to the terminal's folder or the home folder.
 function remotePath(raw, cwd, home) {
   let s;
-  const uri = /^file:\/\/[^/]*(\/.*)$/i.exec(raw);
+  // file:/p, file:///p or file://host/p; ?query and #fragment are not part of the path (as Herdr's decode_file_url_path).
+  const uri = /^file:(?:\/\/[^/]*)?(\/[^?#]*)/i.exec(raw);
   if (uri) {
     try { s = decodeURIComponent(uri[1]); } catch { return null; }
   } else if (/^file:/i.test(raw)) return null;

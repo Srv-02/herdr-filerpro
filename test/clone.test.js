@@ -19,6 +19,7 @@ test("the link rule takes exactly the files with a preview", async () => {
   const [rule] = JSON.parse(read("mod.json")).link_handlers;
   const re = new RegExp(rule.pattern.replace(/^\(\?i\)/, ""), "i"); // Herdr uses Rust regex: (?i) is its case flag
   for (const ext of Object.keys(PREVIEW)) assert.ok(re.test(`/a/b.${ext.toUpperCase()}`), ext);
+  assert.deepEqual(/\(([^()]*)\)\$$/.exec(rule.pattern)[1].split("|").sort(), Object.keys(PREVIEW).sort(), "no extension without a preview");
   for (const name of ["/a/b.rs", "/a/b.txt", "/a/b.png.bak", "/a/png"]) assert.ok(!re.test(name), name);
   assert.match(read("link.js"), /export async function handleLink\(/);
 });
