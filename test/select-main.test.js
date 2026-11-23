@@ -341,3 +341,73 @@ test("#98 context: the selection is saved and restored, the anchor is not; navig
   assert.equal(self.anchor, null);
   assert.equal(self.selecting, true);
 });
+
+const callsOf = (el, k) => el.calls.filter(([n]) => n === k).map((c) => c.slice(1));
+
+test("#98 look: a selected row is marked; the last opened row only while nothing is selected and the mode is off", async () => {
+  const { self, cx } = await multi();
+  self.lastOpened = "a.txt";
+  assert.deepEqual(callsOf(byId(self.render(cx), "file-a.txt"), "bg"), [["selected"]]);
+  clickRow(self, cx, "src", 1, CMD);
+  const root = self.render(cx);
+  assert.deepEqual(callsOf(byId(root, "file-src"), "bg"), [["selected"]]);
+  assert.deepEqual(callsOf(byId(root, "file-a.txt"), "bg"), [], "the last opened mark gives way to the selection");
+  self.clearSelected();
+  self.selecting = true;
+  assert.deepEqual(callsOf(byId(self.render(cx), "file-a.txt"), "bg"), [], "no mark in the mode");
+});
+
+test("#98 look: checkbox mode puts a 16 px box first, a fixed pl and an indent spacer", async () => {
+  const { self, cx } = await multi({}, { multi_select: false });
+  self.selecting = true;
+  clickRow(self, cx, "src", 1);
+  self.folders.add("src");
+  self.entries.set("src", [{ name: "b.txt", dir: false }]);
+  const root = self.render(cx);
+  const src = byId(root, "file-src"), a = byId(root, "file-a.txt");
+  for (const row of [src, a]) {
+    assert.deepEqual(callsOf(row.kids[0], "w"), [[16]]);
+    assert.deepEqual(callsOf(row.kids[0], "h"), [[16]]);
+    assert.deepEqual(callsOf(row, "pl"), [[8]]);
+    assert.deepEqual(callsOf(row, "role"), [["check_box"]]);
+  }
+  assert.deepEqual(callsOf(src.kids[0], "bg"), [["accent"]], "checked");
+  assert.deepEqual(callsOf(a.kids[0], "bg"), [["background"]], "unchecked");
+  assert.match(callsOf(src, "accessibility_label")[0][0], /, checked$/);
+  assert.match(callsOf(a, "accessibility_label")[0][0], /, not checked$/);
+  const sub = byId(root, "file-src/b.txt");
+  assert.deepEqual(callsOf(sub, "pl"), [[8]]);
+  assert.deepEqual(callsOf(sub.kids[1], "w"), [[18]]);
+});
+
+test("#98 bar: hidden without a selection, counts and clears with one, Done ends the mode", async () => {
+  const { self, cx } = await multi();
+  const ids = (root) => [...walk(root)].map(idOf);
+  assert.ok(!ids(self.render(cx)).includes("files-selection"));
+  clickRow(self, cx, "a.txt", 1, CMD);
+  clickRow(self, cx, "src", 1, CMD);
+  const root = self.render(cx);
+  assert.deepEqual(byId(root, "files-selection-count").kids, ["2 selected"]);
+  assert.ok(!byId(root, "files-selection-done"));
+  handler(byId(root, "files-selection-clear"), "on_click")({}, cx);
+  assert.equal(self.selected.size, 0);
+  assert.ok(!ids(self.render(cx)).includes("files-selection"));
+  self.selecting = true;
+  const mode = self.render(cx);
+  assert.deepEqual(byId(mode, "files-selection-count").kids, ["0 selected"]);
+  assert.ok(!byId(mode, "files-selection-clear"));
+  handler(byId(mode, "files-selection-done"), "on_click")({}, cx);
+  assert.equal(self.selecting, false);
+  assert.equal(self.selected.size, 0);
+  assert.ok(!ids(self.render(cx)).includes("files-selection"));
+});
+
+test("#98 bar: not while a file is open; before the transfers bar otherwise", async () => {
+  const { self, cx } = await multi({ store: { "filer-pro.jobs": [{ id: "j1", kind: "copy", name: "x", state: "running", direction: "local", bytes: 1, total: 2, rate: 1, percent: 50 }] } });
+  clickRow(self, cx, "a.txt", 1, CMD);
+  const order = self.render(cx).kids.map(idOf);
+  assert.equal(order.indexOf("files-selection") + 1, order.indexOf("transfers"));
+  assert.ok(order.indexOf("files-selection") > order.indexOf("files-tree"));
+  self.file = "a.txt";
+  assert.ok(![...walk(self.render(cx))].map(idOf).includes("files-selection"));
+});

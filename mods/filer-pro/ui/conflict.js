@@ -1,10 +1,10 @@
 // The question dialog: a link warning (Transfer anyway / Cancel, or only OK for a symlink loop), a target
 // conflict (also for a move: no Merge), the Another volume question of a move ("copy_instead" and "cancel"),
 // or the confirmation before a delete (choices "delete" and "cancel").
-import { div, svg } from "gpui-kit";
+import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { conflictText, crossTitle, crossText, THIS_COMPUTER, CROSS_DONT_SHOW } from "../lib/conflicttext.js";
-import { BASE } from "../lib/icons.js";
+import { checkBox } from "./checkbox.js";
 
 const LABEL = { replace: "Replace", merge: "Merge", keep_both: "Keep both", copy_instead: "Copy instead", copy: "Copy", cancel: "Cancel", transfer_anyway: "Transfer anyway", ok: "OK" };
 
@@ -52,9 +52,7 @@ function crossView(t, pending, state, handlers) {
   const item = pending.item ?? {};
   const chip = (name) => div().px(6).py(2).rounded(4).bg(t.hover).text_color(t.foreground).truncate().child(name ?? "");
   const on = state?.all === true;
-  const box = div().w(14).h(14).flex_none().rounded(4).border_1().flex().items_center().justify_center()
-    .border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
-    .when(on, (el) => el.child(svg(`${BASE}/check.svg`).size(10).flex_none().text_color(t.accent_foreground)));
+  const box = checkBox(t, on, { size: 14 });
   const action = (choice) => div().id(`filer-pro-choice-${choice}`).h(30).px(14).flex().items_center().rounded(6).cursor_pointer()
     .when(choice === "copy", (el) => el.bg(t.accent).text_color(t.accent_foreground).font_medium())
     .when(choice !== "copy", (el) => el.border_1().border_color(t.border))

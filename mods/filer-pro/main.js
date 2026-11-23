@@ -44,6 +44,8 @@ import { loaded, failed, canApply, setRecursive, counted, needsCount } from "./l
 import { formatChange, mismatchText } from "./lib/perms.js";
 import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
 import { transfersBar } from "./ui/bar.js";
+import { checkBox } from "./ui/checkbox.js";
+import { selectionBar } from "./ui/selbar.js";
 import { menuView } from "./ui/menu.js";
 import { conflictView } from "./ui/conflict.js";
 import { editTools, promptBar, statusBar } from "./ui/edit.js";
@@ -2117,13 +2119,18 @@ export default class FilerPro extends View {
   // sits right-aligned directly left of the git mark, which then keeps a fixed slot at the edge so the sizes line up.
   rows(t, dark) {
     const sizes = this.conf.show_sizes === true ? shared("filer-pro.sizes") ?? {} : null, font = sizes ? settings().font_family : null;
+    const boxes = this.selecting === true, none = !this.selected?.size && !boxes;
     return this.visible().map(({ path, entry, depth }) => {
-      if (entry.note) return h_flex().id(`file-${path}-note`).h(ROW_H).flex_none().pl(8 + depth * 18 + 19).pr(8).items_center().text_size(12).text_color(t.dim).child(div().flex_1().min_w(0).truncate().child(entry.name));
+      if (entry.note) return h_flex().id(`file-${path}-note`).h(ROW_H).flex_none().pl(8 + (boxes ? 16 + 7 : 0) + depth * 18 + 19).pr(8).items_center().text_size(12).text_color(t.dim).child(div().flex_1().min_w(0).truncate().child(entry.name));
       const open = this.folders.has(path), mark = this.marks[joinPath(this.root, path)];
       // A macOS package acts as a file until its contents are shown (lib/bundles.js); `dir` decides chevron, click and drop.
       const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
-      return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
-        .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
+      // The last opened file is marked only while no selection competes with it. In checkbox mode the box leads the row and
+      // a spacer (pulled back over the row gap) carries the depth, so the boxes line up in one column.
+      const picked = this.selected?.has(path) === true, current = path === this.lastOpened && none;
+      return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(boxes ? 8 : 8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+        .when(picked || current, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
+        .when(boxes, el => el.role("check_box").accessibility_label(`${entry.name}, ${picked ? "checked" : "not checked"}`))
         .on_click((e, cx) => { cx.stop_propagation(); this.clickRow(path, dir, bundle, e, cx); })
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
@@ -2133,6 +2140,7 @@ export default class FilerPro extends View {
           openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))
+        .when(boxes, el => el.child(checkBox(t, picked)).when(depth > 0, e => e.child(div().w(depth * 18).flex_none().ml(-7))))
         .child(this.chevron(path, dir, open, t))
         .child(image(bundle && !dir ? bundleIcon(entry.name, dark) : icon(path, entry.dir, open, dark)).size(16).flex_none())
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
@@ -2189,6 +2197,11 @@ export default class FilerPro extends View {
     // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
     const update = this.conf.update_check ? updateHint(shared("filer-pro.update"), this.version) : null;
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
+    const sel = this.file ? null : selectionBar(t, { count: this.selected?.size ?? 0, selecting: this.selecting === true }, {
+      onDone: (cx) => { this.selecting = false; this.clearSelected(); cx.notify(); },
+      onClear: (cx) => { this.clearSelected(); cx.notify(); },
+      actions: [],
+    });
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => this.requestLeave((cx) => { this.show(null); cx.notify(); }, cx)).child("←")))
@@ -2216,6 +2229,7 @@ export default class FilerPro extends View {
         })
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.entries.get("")?.denied ? NO_LIST_MESSAGE : this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total)))))
+      .when(Boolean(sel), el => el.child(sel))
       .when(Boolean(bar), el => el.child(bar))
       .when(Boolean(this.file), el => el.child(this.viewer(t)));
     if (this.perf) this.perf.sample("render", Date.now() - t0);
