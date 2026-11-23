@@ -159,3 +159,23 @@ test("#54: Apply to all merge stores replace for a folder over a file and does n
   c.preset({ conflict: "merge" });
   assert.equal(c.decision("y"), "replace");
 });
+
+test("#99 merge: false never offers Merge and turns a Merge answer into cancel", () => {
+  const b = createBatch([d("a", true, { destIsDir: true }), d("b", true, { destIsDir: true })], { merge: false });
+  assert.deepEqual(b.choices(b.next()), ["replace", "keep_both", "cancel"]);
+  b.answer("merge", true);
+  assert.equal(b.next(), null);
+  assert.equal(b.decision("a"), "cancel");
+  assert.equal(b.decision("b"), "cancel");
+});
+test("#99 merge: false turns a merge preset into cancel, other answers stay", () => {
+  const items = [d("a", true, { destIsDir: true }), d("b", true, { destIsDir: true })];
+  const p = createBatch(items, { merge: false });
+  p.preset({ conflict: "merge" });
+  assert.deepEqual([p.decision("a"), p.decision("b")], ["cancel", "cancel"]);
+  const r = createBatch(items, { merge: false });
+  r.next();
+  r.answer("replace", true);
+  assert.deepEqual([r.decision("a"), r.decision("b")], ["replace", "replace"]);
+  assert.deepEqual(createBatch(items).choices(items[0]), ["merge", "replace", "keep_both", "cancel"]);
+});
