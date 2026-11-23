@@ -2,6 +2,7 @@
 // Pure helpers and shell scripts here; every path goes in as an argument, never into a shell string.
 import { SAME_FN, MOUNT_FN, REMOVE_SCRIPT, normalizePath } from "./fileops.js";
 import { LIST_SCRIPT } from "./jobs.js";
+import { group } from "./numbers.js";
 import { keepBothName, joinPath, baseName, nameKey } from "./names.js";
 import { explainError as explainRaw } from "./errors.js";
 
@@ -157,6 +158,10 @@ export function moveVerdict({ info, src, destDir, stderr, on = null, localPlatfo
 
 export function moveToasts(out) {
   if (!out?.ok || !out.moved) return [];
+  if (typeof out.moved === "number") { // several items (requests.js runMoves)
+    const body = out.moved === 1 && out.names?.length === 1 ? out.names[0] : `${group(out.moved)} items`;
+    return [{ title: "Moved", body, level: "success" }, ...(out.warnings ?? []).map((w) => ({ title: "Could not remove the old entry", body: w, level: "error" }))];
+  }
   const toasts = [{ title: "Moved", body: baseName(out.path), level: "success" }];
   if (out.warning) toasts.push({ title: "Could not remove the old entry", body: out.warning, level: "error" });
   return toasts;

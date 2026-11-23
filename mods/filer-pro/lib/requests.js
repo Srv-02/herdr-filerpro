@@ -364,7 +364,7 @@ export async function runExtract({ machine, path, how, conflict }, deps) {
 
 // Paste after Cut: inspect, ask (replace / keep both / cancel; or copy instead on another volume), move.
 // Replace is the confirmation, there is no second dialog. conflict answers the dialog up front;
-// merge counts as replace. Another volume is never answered up front: it is Copy instead or Cancelled.
+// merge counts as cancel (#99: it used to delete the target folder like replace). Another volume is never answered up front: it is Copy instead or Cancelled.
 // deps: as handleRequest; fileOps.inspectMove / fileOps.move (move.js).
 export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) {
   const { getShared, setShared } = deps;
@@ -402,7 +402,7 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
   }
   let choice = "new";
   if (i.exists) {
-    if (conflict !== undefined) choice = conflict === "merge" ? "replace" : conflict;
+    if (conflict !== undefined) choice = conflict === "merge" ? "cancel" : conflict;
     else {
       const a = await deps.ask({ batch, item, choices: ["replace", "keep_both", "cancel"], remaining: 1 });
       choice = a?.choice ?? "cancel";
@@ -421,6 +421,102 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
   if (out.ok) clearClipboard();
   changedAfter(setShared, now); // a failed move may have moved the old entry aside already
   return out;
+}
+
+// Paste after Cut of several items (#99): one conflict pass without Merge (Apply to all), one Another volume question per
+// item, then the moves in clipboard order. An item that moved leaves the clipboard; cancelled, failed and no-op items stay.
+// Returns { ok, moved: number, names, jobs?, errors?, warnings? }; deps as runMove.
+export async function runMoves({ on, plan, clip, root, conflict, reveal }, deps) {
+  const { getShared, setShared } = deps;
+  const now = deps.now ?? Date.now;
+  if (typeof root !== "string" || root === "") return { ok: false, error: "root is required" };
+  const errors = [], batchItems = [], infoOf = new Map(), volume = [], seen = new Map();
+  for (const src of plan.srcs) {
+    const i = await deps.fileOps.inspectMove({ on, src, destDir: plan.destDir, root });
+    if (!i.ok) { errors.push({ path: src, error: i.error }); continue; }
+    if (i.noop) continue;
+    const shown = {
+      name: i.name, isDir: i.isDir, path: i.src, machine: on, trash: on === null, action: "move", direction: plan.direction, destDir: plan.destDir,
+      ...(i.destIsDir !== undefined ? { destIsDir: i.destIsDir } : {}),
+    };
+    if (i.crossVolume) { volume.push({ src, shown }); continue; }
+    // Like runTransfers: a later source with the name of an earlier one is kept both, or cancelled with it.
+    const key = String(batchItems.length), first = seen.get(nameKey(i.name));
+    if (first === undefined) seen.set(nameKey(i.name), key);
+    batchItems.push({ ...shown, key, exists: first === undefined ? i.exists === true : false, ...(first !== undefined ? { first } : {}) });
+    infoOf.set(key, { src, i });
+  }
+  const id = deps.newBatchId();
+  let n = 0;
+  const batch = createBatch(batchItems, { merge: false });
+  batch.preset({ conflict });
+  for (let item = batch.next(); item; item = batch.next()) {
+    const { first: _first, key: _key, exists: _exists, ...dialog } = item;
+    const a = await deps.ask({ batch: `${id}#${++n}`, item: dialog, choices: batch.choices(item), remaining: batch.remaining(item) });
+    batch.answer(a?.choice ?? "cancel", a?.apply_to_all === true);
+  }
+  // Another volume is never answered up front: Copy instead or cancelled; Apply to all (an answer request) covers the rest.
+  const copyInstead = [];
+  const volumeChoice = new Map();
+  for (let k = 0; k < volume.length; k++) {
+    if (volumeChoice.has(k)) continue;
+    const a = await deps.ask({ batch: `${id}#${++n}`, item: volume[k].shown, choices: ["copy_instead", "cancel"], remaining: volume.length - volumeChoice.size });
+    const choice = a?.choice === "copy_instead" ? "copy_instead" : "cancel";
+    volumeChoice.set(k, choice);
+    if (a?.apply_to_all === true) for (let j = k + 1; j < volume.length; j++) if (!volumeChoice.has(j)) volumeChoice.set(j, choice);
+  }
+  volume.forEach((v, k) => { if (volumeChoice.get(k) === "copy_instead") copyInstead.push(v.src); });
+  // Names a running job already claims in the target folder (target side: up and remote write to a machine).
+  const reserved = [];
+  for (const j of Object.values(getShared("filer-pro.jobs") || {})) {
+    if (j.state !== "running" || typeof j.destDir !== "string" || normalizePath(j.destDir) !== normalizePath(plan.destDir)) continue;
+    const target = j.direction === "up" || j.direction === "remote" || j.direction === "cross" ? j.machine : null;
+    if ((target ?? null) === on && typeof j.dest === "string") reserved.push(baseName(j.dest));
+  }
+  const movedSrcs = [], names = [], warnings = [];
+  let ran = false;
+  for (const item of batchItems) {
+    let choice = batch.decision(item.key);
+    if (item.first !== undefined) choice = batch.decision(item.first) === "cancel" ? "cancel" : choice && "keep_both";
+    if (!choice || choice === "cancel") continue;
+    const { src, i } = infoOf.get(item.key);
+    if (choice === "replace" && i.replaceError) { errors.push({ path: src, error: i.replaceError }); continue; }
+    ran = true;
+    const out = await deps.fileOps.move({ on, src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
+    if (!out.ok) { errors.push({ path: src, error: out.error }); continue; }
+    if (out.noop) continue;
+    movedSrcs.push(src);
+    names.push(out.name ?? baseName(out.path ?? src));
+    if (out.warning) warnings.push(out.warning);
+  }
+  let jobs = [];
+  if (copyInstead.length > 0) {
+    const r = await runTransfers({ direction: plan.direction, machine: plan.machine, paths: copyInstead, destDir: plan.destDir, conflict, reveal }, deps);
+    ran = true;
+    if (r.ok) jobs = r.jobs;
+    for (const e of r.errors ?? []) errors.push(e);
+  }
+  // The clipboard, only while it is still this entry: moved items leave it; a started copy waits for its job (jobs.js end).
+  const cur = getShared("filer-pro.clipboard");
+  if (sameClip(cur, clip) && (movedSrcs.length > 0 || jobs.length > 0)) {
+    const now_ = getShared("filer-pro.jobs") || {};
+    const gone = new Set(movedSrcs);
+    const copyJobs = [];
+    jobs.forEach((j, k) => {
+      const path = j.src ?? (jobs.length === copyInstead.length ? copyInstead[k] : undefined);
+      if (path === undefined) return;
+      if (now_[j.id]?.state === "done") gone.add(path);
+      else copyJobs.push({ id: j.id, path });
+    });
+    const items = clipItems(cur).filter((i) => !gone.has(i.path));
+    const { path: _path, isDir: _isDir, items: _items, copyJobs: _old, ...base } = cur;
+    setShared("filer-pro.clipboard", items.length === 0 ? null : { ...base, items, ...(copyJobs.length > 0 ? { copyJobs } : {}) });
+  }
+  if (ran) changedAfter(setShared, now); // a failed move may have moved the old entry aside already
+  const result = { moved: movedSrcs.length, names, ...(jobs.length > 0 ? { jobs } : {}), ...(errors.length > 0 ? { errors } : {}), ...(warnings.length > 0 ? { warnings } : {}) };
+  if (movedSrcs.length > 0 || jobs.length > 0) return { ok: true, ...result };
+  if (errors.length > 0) return { ok: false, error: errors[0].error, errors };
+  return ran || volume.length > 0 || batchItems.length > 0 ? { ok: false, error: "Cancelled" } : { ok: true, noop: true };
 }
 
 // filer-pro.changed after an operation ran, whether it succeeded or not: a failure on a machine (a dropped connection,
@@ -475,7 +571,7 @@ export async function handleRequest(req, deps) {
       const clip = getShared("filer-pro.clipboard");
       const plan = pastePlan(clip, { on: req.machine ?? null, folder: req.folder });
       if (plan.error) return { ok: false, error: plan.error };
-      if (plan.move) return runMove({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
+      if (plan.move) return (plan.srcs.length === 1 ? runMove : runMoves)({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
       // A copy between two machines runs through this computer: one warning per paste unless the setting is off.
       const warn = plan.direction === "cross" && (await deps.loadConfig())?.warn_cross_copy !== false
         ? { item: { name: baseName(plan.srcs[0]), isDir: clipItems(clip)[0].isDir, path: plan.srcs[0], from: plan.from, machine: plan.machine, direction: "cross" } } : null;

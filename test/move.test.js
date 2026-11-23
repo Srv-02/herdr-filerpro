@@ -427,6 +427,13 @@ test("moveToasts", () => {
   assert.deepEqual(moveToasts({ ok: true, jobs: [] }), []);
   assert.deepEqual(moveToasts({ ok: false, error: "x" }), []);
 });
+test("#99 moveToasts for a list of moved items", () => {
+  assert.deepEqual(moveToasts({ ok: true, moved: 3, names: ["a", "b", "c"] }), [{ title: "Moved", body: "3 items", level: "success" }]);
+  assert.deepEqual(moveToasts({ ok: true, moved: 1, names: ["a"] }), [{ title: "Moved", body: "a", level: "success" }]);
+  assert.deepEqual(moveToasts({ ok: true, moved: 1200, names: [] })[0].body, "1,200 items");
+  assert.deepEqual(moveToasts({ ok: true, moved: 0, names: [] }), []);
+  assert.deepEqual(moveToasts({ ok: true, moved: 2, names: ["a", "b"], warnings: ["w1"] })[1], { title: "Could not remove the old entry", body: "w1", level: "error" });
+});
 
 // ---- Keep both without letter case (#33): also on a machine, where no probe asks the file system.
 test("move keep both: A.TXT next to a.txt and a-1.txt becomes A-2.TXT, local and on a machine", async () => {

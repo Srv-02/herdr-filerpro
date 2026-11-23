@@ -49,13 +49,13 @@ function deps(over = {}) {
       check: async (a) => (fileOpsCalls.push(["check", a]), over.fileOpsError ? { ok: false, error: over.fileOpsError } : { ok: true, path: a.path.replace(/\/+$/, ""), name: a.path.replace(/\/+$/, "").split("/").pop(), isDir: a.path.replace(/\/+$/, "") === "/srv/d" }),
       rename: async (a) => (fileOpsCalls.push(["rename", a]), over.fileOpsError ? { ok: false, error: over.fileOpsError } : { ok: true, path: a.path.replace(/[^/]+$/, a.name) }),
       mkdir: async (a) => (fileOpsCalls.push(["mkdir", a]), over.fileOpsError ? { ok: false, error: over.fileOpsError } : { ok: true, path: `${a.path}/${a.name}` }),
-      inspectMove: async (a) => (fileOpsCalls.push(["inspectMove", a]), over.inspect ?? { ok: true, src: a.src, name: "a", isDir: false, destDir: a.destDir, dest: `${a.destDir}/a`, exists: false, destIsDir: false, replaceError: null }),
-      move: async (a) => (fileOpsCalls.push(["move", a]), over.moveOut ?? { ok: true, moved: true, path: "/srv/in/a", name: "a", isDir: false }),
+      inspectMove: async (a) => (fileOpsCalls.push(["inspectMove", a]), over.inspectBy?.(a.src) ?? over.inspect ?? { ok: true, src: a.src, name: "a", isDir: false, destDir: a.destDir, dest: `${a.destDir}/a`, exists: false, destIsDir: false, replaceError: null }),
+      move: async (a) => (fileOpsCalls.push(["move", a]), over.moveFn?.(a) ?? over.moveOut ?? { ok: true, moved: true, path: "/srv/in/a", name: "a", isDir: false }),
       remove: async (a) => (fileOpsCalls.push(["remove", a]), over.removeOut ? over.removeOut : a.on ? { ok: true, trashed: false, name: "d", isDir: true } : { ok: true, trashed: true, trash_path: "/Users/m/.Trash/a.txt", name: "a.txt", isDir: false }),
     },
     jobs: {
       inspect: async (a) => (calls.push(["inspect", a]), info),
-      start: async (a) => (calls.push(["start", a]), { id: "j1" }),
+      start: async (a) => (calls.push(["start", a]), over.startFn?.(a) ?? { id: "j1" }),
       cancel: async (id) => calls.push(["cancel", id]),
     },
     loadConfig: async () => ({ download_folder: "/home/u/Downloads" }),
@@ -782,10 +782,10 @@ test("move conflict asks replace, keep both, cancel with a move item", async () 
   assert.deepEqual(await handleRequest({ action: "paste", folder: "/srv/in", root: "/srv" }, l), { ok: false, error: "Cancelled" });
   assert.deepEqual(l.asked[0].item, item({ machine: null, trash: true, direction: "local" })); assert.equal(l.fileOpsCalls.length, 1); assert.ok(l.store["filer-pro.clipboard"]);
 });
-test("conflict answers the move dialog up front: merge is replace, cancel only when the target exists, keep_both without target moves as new", async () => {
+test("conflict answers the move dialog up front: merge is cancel (#99), cancel only when the target exists, keep_both without target moves as new", async () => {
   let d = deps({ store: cut("box", "/srv/a"), inspect: found({ exists: true }) });
-  await handleRequest(paste({ conflict: "merge" }), d);
-  assert.deepEqual(d.asked, []); assert.equal(d.fileOpsCalls[1][1].choice, "replace");
+  assert.deepEqual(await handleRequest(paste({ conflict: "merge" }), d), { ok: false, error: "Cancelled" });
+  assert.deepEqual(d.asked, []); assert.equal(d.fileOpsCalls.length, 1); assert.ok(d.store["filer-pro.clipboard"]);
   d = deps({ store: cut("box", "/srv/a"), inspect: found({ exists: true }) });
   assert.deepEqual(await handleRequest(paste({ conflict: "cancel" }), d), { ok: false, error: "Cancelled" }); assert.equal(d.fileOpsCalls.length, 1);
   for (const conflict of ["cancel", "keep_both", "replace"]) {
@@ -1269,4 +1269,95 @@ test("#99 an old single clipboard entry still pastes", async () => {
   const d = deps({ store: { "filer-pro.clipboard": { machine: null, path: "/Users/m/a", isDir: false, at: 1 } } });
   assert.deepEqual(await handleRequest({ action: "paste", folder: "/in" }, d), { ok: true, jobs: [{ id: "j1" }] });
   assert.equal(d.calls.find((c) => c[0] === "start")[1].src, "/Users/m/a");
+});
+
+// ---- #99: a move of several items
+const cutMany = (machine, ...paths) => ({ "filer-pro.clipboard": { machine, items: paths.map((path) => ({ path, isDir: false })), at: 1, cut: true } });
+const foundFor = (src, o = {}) => { const n = src.split("/").pop(); return found({ src: `/srv/real/${n}`, name: n, dest: `/srv/in/${n}`, ...o }); };
+const bySrc = (o = {}) => (src) => foundFor(src, o[src] ?? {});
+const moveOk = (a) => ({ ok: true, moved: true, path: `${a.destDir}/${a.src.split("/").pop()}`, name: a.src.split("/").pop(), isDir: false });
+const moves = (d) => d.fileOpsCalls.filter((c) => c[0] === "move").map((c) => c[1]);
+
+test("#99 move of two files: two moves in order, one result, clipboard emptied, one reload", async () => {
+  const d = deps({ store: cutMany("box", "/srv/b", "/srv/a"), inspectBy: bySrc(), moveFn: moveOk });
+  assert.deepEqual(await handleRequest(paste(), d), { ok: true, moved: 2, names: ["b", "a"] });
+  assert.deepEqual(moves(d).map((m) => [m.src, m.choice, m.expect, m.expectDest]), [["/srv/b", "new", "/srv/real/b", "/srv/in/b"], ["/srv/a", "new", "/srv/real/a", "/srv/in/a"]]);
+  assert.equal(d.store["filer-pro.clipboard"], null);
+  assert.deepEqual(d.store["filer-pro.changed"], { at: 777 });
+  assert.deepEqual(d.asked, []);
+});
+test("#99 move of two existing folders: no Merge, one question, Apply to all answers both", async () => {
+  const dirs = { "/srv/a": { exists: true, isDir: true, destIsDir: true }, "/srv/b": { exists: true, isDir: true, destIsDir: true } };
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: bySrc(dirs), moveFn: moveOk, answers: [{ choice: "keep_both", apply_to_all: true }] });
+  assert.equal((await handleRequest(paste(), d)).moved, 2);
+  assert.equal(d.asked.length, 1);
+  assert.deepEqual(d.asked[0].choices, ["replace", "keep_both", "cancel"]);
+  assert.equal(d.asked[0].remaining, 2);
+  assert.deepEqual(moves(d).map((m) => m.choice), ["keep_both", "keep_both"]);
+});
+test("#99 an answer Merge with Apply to all never merges or replaces", async () => {
+  const dirs = { "/srv/a": { exists: true, isDir: true, destIsDir: true }, "/srv/b": { exists: true, isDir: true, destIsDir: true } };
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: bySrc(dirs), moveFn: moveOk, answers: [{ choice: "merge", apply_to_all: true }] });
+  assert.deepEqual(await handleRequest(paste(), d), { ok: false, error: "Cancelled" });
+  assert.deepEqual(moves(d), []);
+});
+test("#99 a preset conflict merge on two existing folders cancels both and keeps the clipboard", async () => {
+  const dirs = { "/srv/a": { exists: true, isDir: true, destIsDir: true }, "/srv/b": { exists: true, isDir: true, destIsDir: true } };
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: bySrc(dirs), moveFn: moveOk });
+  assert.deepEqual(await handleRequest(paste({ conflict: "merge" }), d), { ok: false, error: "Cancelled" });
+  assert.deepEqual(d.asked, []); assert.deepEqual(moves(d), []);
+  assert.equal(d.store["filer-pro.clipboard"].items.length, 2);
+});
+test("#99 three items, the second cancelled: two move, the clipboard keeps exactly that one", async () => {
+  const ex = { "/srv/b": { exists: true } };
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b", "/srv/c"), inspectBy: bySrc(ex), moveFn: moveOk, answers: [{ choice: "cancel" }] });
+  assert.deepEqual(await handleRequest(paste(), d), { ok: true, moved: 2, names: ["a", "c"] });
+  assert.deepEqual(moves(d).map((m) => m.src), ["/srv/a", "/srv/c"]);
+  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/b", isDir: false }], at: 1, cut: true });
+});
+test("#99 a failed move is listed, the others go on, the failed one stays in the clipboard", async () => {
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: bySrc(), moveFn: (a) => (a.src === "/srv/a" ? { ok: false, error: "boom" } : moveOk(a)) });
+  assert.deepEqual(await handleRequest(paste(), d), { ok: true, moved: 1, names: ["b"], errors: [{ path: "/srv/a", error: "boom" }] });
+  assert.deepEqual(d.store["filer-pro.clipboard"].items, [{ path: "/srv/a", isDir: false }]);
+});
+test("#99 items already in the target folder are skipped and stay; an inspect error is listed", async () => {
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b", "/srv/c"), inspectBy: (src) => (src === "/srv/a" ? { ok: true, noop: true } : src === "/srv/b" ? { ok: false, error: "gone" } : foundFor(src)), moveFn: moveOk });
+  const r = await handleRequest(paste(), d);
+  assert.deepEqual(r, { ok: true, moved: 1, names: ["c"], errors: [{ path: "/srv/b", error: "gone" }] });
+  assert.deepEqual(d.store["filer-pro.clipboard"].items.map((i) => i.path), ["/srv/a", "/srv/b"]);
+  const n = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: () => ({ ok: true, noop: true }) });
+  assert.deepEqual(await handleRequest(paste(), n), { ok: true, noop: true });
+});
+test("#99 two sources with the same name: the second is kept both", async () => {
+  const d = deps({ store: cutMany("box", "/srv/x/a", "/srv/y/a"), inspectBy: (src) => foundFor(src, { src, name: "a", dest: "/srv/in/a" }), moveFn: moveOk });
+  assert.equal((await handleRequest(paste(), d)).moved, 2);
+  assert.deepEqual(moves(d).map((m) => m.choice), ["new", "keep_both"]);
+});
+test("#99 another volume: asked after the conflicts, copy instead starts one copy, the clipboard names it per item", async () => {
+  const vol = { ok: true, crossVolume: true, src: "/srv/real/b", name: "b", isDir: false };
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: (src) => (src === "/srv/b" ? vol : foundFor(src)), moveFn: moveOk, answers: [{ choice: "copy_instead" }], startFn: (a) => ({ id: "j1", src: a.src }) });
+  const r = await handleRequest(paste(), d);
+  assert.deepEqual(r, { ok: true, moved: 1, names: ["a"], jobs: [{ id: "j1", src: "/srv/b" }] });
+  assert.deepEqual(d.asked[0].choices, ["copy_instead", "cancel"]);
+  assert.equal(d.calls.filter((c) => c[0] === "start").length, 1);
+  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/b", isDir: false }], at: 1, cut: true, copyJobs: [{ id: "j1", path: "/srv/b" }] });
+});
+test("#99 another volume, Cancel keeps the item; Apply to all answers the rest", async () => {
+  const vol = (src) => ({ ok: true, crossVolume: true, src: `/srv/real/${src.slice(5)}`, name: src.slice(5), isDir: false });
+  const c = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: vol, answers: [{ choice: "cancel" }, { choice: "cancel" }] });
+  assert.deepEqual(await handleRequest(paste(), c), { ok: false, error: "Cancelled" });
+  assert.equal(c.asked.length, 2); assert.equal(c.store["filer-pro.clipboard"].items.length, 2);
+  const all = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: vol, answers: [{ choice: "copy_instead", apply_to_all: true }], startFn: (a) => ({ id: `j${a.src.slice(5)}`, src: a.src }) });
+  const r = await handleRequest(paste(), all);
+  assert.equal(all.asked.length, 1); assert.equal(r.jobs.length, 2);
+  assert.deepEqual(all.store["filer-pro.clipboard"].copyJobs, [{ id: "ja", path: "/srv/a" }, { id: "jb", path: "/srv/b" }]);
+});
+test("#99 move of several items without root is refused", async () => {
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b") });
+  assert.deepEqual(await handleRequest({ action: "paste", machine: "box", folder: "/srv/in" }, d), { ok: false, error: "root is required" });
+});
+test("#99 the clipboard is left alone when it changed during the move", async () => {
+  const d = deps({ store: cutMany("box", "/srv/a", "/srv/b"), inspectBy: bySrc(), moveFn: (a) => { d.store["filer-pro.clipboard"] = { machine: "box", items: [{ path: "/srv/z", isDir: false }], at: 9, cut: true }; return moveOk(a); } });
+  assert.equal((await handleRequest(paste(), d)).moved, 2);
+  assert.deepEqual(d.store["filer-pro.clipboard"].items, [{ path: "/srv/z", isDir: false }]);
 });
