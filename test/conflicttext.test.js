@@ -99,3 +99,29 @@ test("#99 deleteText: several items list the names, at most what the item carrie
     { title: "Delete 3 items?", body: "Delete 3 items on box? This cannot be undone.", lines: ["a", "b", "c"] });
   assert.equal(deleteText({ count: 1200, names: [], more: 1200, trash: true }).title, "Delete 1,200 items?");
 });
+
+// ---- #100: move
+import { moveTitle, moveText, moveNote } from "../mods/filer-pro/lib/conflicttext.js";
+const A = "host-a.example.com", B = "host-b.example.com";
+test("moveTitle names both sides with this computer for the local one", () => {
+  assert.equal(moveTitle({ from: A, machine: null }), `Move from ${A} to this computer?`);
+  assert.equal(moveTitle({ from: null, machine: A }), `Move from this computer to ${A}?`);
+  assert.equal(moveTitle({ from: A, machine: B }), `Move from ${A} to ${B}?`);
+});
+test("moveText: down, up and cross for one item and for three", () => {
+  const f = { size: 48_000_000, isDir: false };
+  assert.equal(moveText({ ...f, from: A, machine: null, direction: "down", count: 1 }), `1 file, 48 MB. Filer Pro copies it to this computer, checks that the copy is complete, and only then deletes the original on ${A}.`);
+  assert.equal(moveText({ ...f, isDir: true, from: A, machine: null, direction: "down", count: 1 }).startsWith("1 folder, 48 MB."), true);
+  assert.equal(moveText({ ...f, from: A, machine: null, direction: "down", count: 3 }), `3 items, 48 MB. Filer Pro copies them to this computer, checks that the copies are complete, and only then deletes the originals on ${A}.`);
+  assert.equal(moveText({ ...f, from: null, machine: A, direction: "up", count: 1 }), `1 file, 48 MB. Filer Pro copies it to ${A}, checks that the copy is complete, and then moves the original to the Trash on this computer.`);
+  assert.equal(moveText({ ...f, from: null, machine: A, direction: "up", count: 3 }), `3 items, 48 MB. Filer Pro copies them to ${A}, checks that the copies are complete, and then moves the originals to the Trash on this computer.`);
+  assert.equal(moveText({ ...f, from: A, machine: B, direction: "cross", count: 1 }), `1 file, 48 MB. The data travels through this computer. Filer Pro checks the copy on ${B}, then deletes the original on ${A}.`);
+  assert.equal(moveText({ ...f, from: A, machine: B, direction: "cross", count: 3 }), `3 items, 48 MB. The data travels through this computer. Filer Pro checks the copies on ${B}, then deletes the originals on ${A}.`);
+  assert.equal(moveText({ isDir: false, from: A, machine: null, direction: "down", count: 1, size: null }).startsWith("1 file. "), true);
+});
+test("moveNote: permanent on a machine, Trash locally", () => {
+  assert.equal(moveNote({ from: A, count: 1 }), `The original on ${A} is deleted permanently. It does not go to a Trash.`);
+  assert.equal(moveNote({ from: A, count: 3 }), `The originals on ${A} are deleted permanently. They do not go to a Trash.`);
+  assert.equal(moveNote({ from: null, count: 1 }), "You can put the original back from the Trash.");
+  assert.equal(moveNote({ from: null, count: 2 }), "You can put the originals back from the Trash.");
+});

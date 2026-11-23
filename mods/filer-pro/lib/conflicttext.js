@@ -14,6 +14,24 @@ export function crossText(item) {
   return `${amount}. The data travels through ${THIS_COMPUTER}: ${item.from} → ${THIS_COMPUTER} → ${item.machine}. Slower than a direct copy, and it uses ${THIS_COMPUTER}'s connection twice.`;
 }
 
+// The dialog before a move across sides (#100). item: { from, machine, direction, count, size, isDir }; from is the source side,
+// machine the target side, null is this computer.
+export const moveTitle = (item) => `Move from ${item.from ?? THIS_COMPUTER} to ${item.machine ?? THIS_COMPUTER}?`;
+export function moveText(item) {
+  const n = Number.isInteger(item.count) && item.count > 0 ? item.count : 1, one = n === 1;
+  const kind = item.isDir ? "folder" : "file";
+  const amount = `${one ? `1 ${kind}` : `${n} items`}${typeof item.size === "number" ? `, ${formatBytes(item.size)}` : ""}`;
+  const it = one ? "it" : "them", copies = one ? "the copy is" : "the copies are", copy = one ? "the copy" : "the copies", original = one ? "the original" : "the originals";
+  if (item.direction === "down") return `${amount}. Filer Pro copies ${it} to ${THIS_COMPUTER}, checks that ${copies} complete, and only then deletes ${original} on ${item.from}.`;
+  if (item.direction === "up") return `${amount}. Filer Pro copies ${it} to ${item.machine}, checks that ${copies} complete, and then moves ${original} to the Trash on ${THIS_COMPUTER}.`;
+  return `${amount}. The data travels through ${THIS_COMPUTER}. Filer Pro checks ${copy} on ${item.machine}, then deletes ${original} on ${item.from}.`;
+}
+export function moveNote(item) {
+  const one = !(item.count > 1);
+  if (item.from) return one ? `The original on ${item.from} is deleted permanently. It does not go to a Trash.` : `The originals on ${item.from} are deleted permanently. They do not go to a Trash.`;
+  return one ? "You can put the original back from the Trash." : "You can put the originals back from the Trash.";
+}
+
 // Machine that holds the target: an upload, a copy on one machine and a copy between machines write there.
 function targetMachine(item) {
   return item.direction === "up" || item.direction === "remote" || item.direction === "cross" ? item.machine ?? null : null;
