@@ -9,6 +9,7 @@ const CONFLICTS = ["replace", "merge", "keep_both", "cancel"];
 const REVEALS = [true, "open", "preview"];
 const MODES = ["preview", "source"];
 
+const VERB = { upload: "uploaded", download: "downloaded", delete: "deleted" };
 const SPELLING_ERROR = 'Path must not contain ".", ".." or "//"';
 
 // A request path is refused with a "." or ".." component or an empty one from "//" (badSpelling): ".." behind
@@ -46,7 +47,7 @@ export function parseRequest(text) {
     if (!o.paths.every((p) => p.startsWith("/"))) return "paths must be absolute";
     if (o.folder !== undefined && (!str(o.folder) || !o.folder.startsWith("/"))) return "folder must be absolute";
     for (const p of o.paths) {
-      const e = spellingError(p, false, `"/" cannot be ${o.action === "upload" ? "uploaded" : "copied"}`);
+      const e = spellingError(p, false, `"/" cannot be ${VERB[o.action] ?? "copied"}`);
       if (e) return e;
     }
     if (o.folder !== undefined && spellingError(o.folder, true)) return SPELLING_ERROR;
@@ -67,7 +68,9 @@ export function parseRequest(text) {
   switch (o.action) {
     case "download": {
       if (!str(o.machine)) return { error: "machine is required" };
-      const pe = pathError("path", o.path, false, '"/" cannot be downloaded');
+      const list = o.paths !== undefined;
+      if (list && o.path !== undefined) return { error: "Use path or paths, not both" };
+      const pe = list ? pathsError() : pathError("path", o.path, false, '"/" cannot be downloaded');
       if (pe) return { error: pe };
       // dest_dir: absent or null means download_folder; anything else must be an absolute folder (#33).
       const hasDest = o.dest_dir !== undefined && o.dest_dir !== null;
@@ -77,7 +80,7 @@ export function parseRequest(text) {
       }
       const c = common();
       if (c.error) return c;
-      return { action: "download", machine: o.machine, path: o.path, ...(hasDest ? { dest_dir: o.dest_dir } : {}), ...c };
+      return { action: "download", machine: o.machine, ...(list ? { paths: o.paths } : { path: o.path }), ...(hasDest ? { dest_dir: o.dest_dir } : {}), ...c };
     }
     case "upload": {
       if (!str(o.machine)) return { error: "machine is required" };
@@ -108,6 +111,15 @@ export function parseRequest(text) {
     case "clip": {
       const m = machineOf();
       if (m.error) return m;
+      if (o.items !== undefined) {
+        if (o.path !== undefined) return { error: "Use path or items, not both" };
+        if (!Array.isArray(o.items) || o.items.length === 0 || !o.items.every((i) => i && typeof i === "object" && !Array.isArray(i))) return { error: "items is required" };
+        for (const i of o.items) {
+          const e = pathError("path", i.path, false, '"/" cannot be copied or cut');
+          if (e) return { error: e };
+        }
+        return { action: "clip", ...m, items: o.items.map((i) => ({ path: i.path, is_dir: i.is_dir === true })), ...(o.cut === true ? { cut: true } : {}) };
+      }
       const pe = pathError("path", o.path, false, '"/" cannot be copied or cut');
       if (pe) return { error: pe };
       return { action: "clip", ...m, path: o.path, is_dir: o.is_dir === true, ...(o.cut === true ? { cut: true } : {}) };
@@ -144,6 +156,12 @@ export function parseRequest(text) {
     case "delete": {
       const m = machineOf();
       if (m.error) return m;
+      if (o.paths !== undefined) {
+        if (o.path !== undefined) return { error: "Use path or paths, not both" };
+        const le = pathsError() ?? absError("root", o.root);
+        if (le) return { error: le };
+        return { action: "delete", ...m, paths: o.paths, root: o.root, confirm: o.confirm === true };
+      }
       const pe = absError("path", o.path) ?? absError("root", o.root);
       if (pe) return { error: pe };
       return { action: "delete", ...m, path: o.path, root: o.root, confirm: o.confirm === true };

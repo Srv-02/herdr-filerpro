@@ -1225,3 +1225,33 @@ test("extract: the request's conflict answers up front", async () => {
   await handleRequest(xr({ conflict: "merge" }), m);
   assert.deepEqual(starts(m)[0].plan, [{ entry: "a.txt", mode: "replace", name: "a.txt" }, { entry: "d", mode: "merge", name: "d" }]);
 });
+
+// ---- #99: list requests
+test("#99 parseRequest: download, clip and delete accept lists", () => {
+  assert.deepEqual(parseRequest('{"action":"download","machine":"box","paths":["/a","/b"],"dest_dir":"/d"}'), { action: "download", machine: "box", paths: ["/a", "/b"], dest_dir: "/d" });
+  assert.deepEqual(parseRequest('{"action":"clip","machine":"box","items":[{"path":"/a","is_dir":true},{"path":"/b"}],"cut":true}'),
+    { action: "clip", machine: "box", items: [{ path: "/a", is_dir: true }, { path: "/b", is_dir: false }], cut: true });
+  assert.deepEqual(parseRequest('{"action":"delete","paths":["/a","/b"],"root":"/"}'), { action: "delete", paths: ["/a", "/b"], root: "/", confirm: false });
+  // the single forms stay
+  assert.deepEqual(parseRequest('{"action":"download","machine":"box","path":"/a"}'), { action: "download", machine: "box", path: "/a" });
+  assert.deepEqual(parseRequest('{"action":"delete","path":"/a","root":"/"}'), { action: "delete", path: "/a", root: "/", confirm: false });
+});
+test("#99 parseRequest: bad lists", () => {
+  const e = (o) => parseRequest(JSON.stringify(o)).error;
+  assert.equal(e({ action: "download", machine: "b", paths: [] }), "paths is required");
+  assert.equal(e({ action: "download", machine: "b", paths: ["a"] }), "paths must be absolute");
+  assert.equal(e({ action: "download", machine: "b", paths: ["/a", "/"] }), '"/" cannot be downloaded');
+  assert.equal(e({ action: "download", machine: "b", paths: ["/a/../b"] }), 'Path must not contain ".", ".." or "//"');
+  assert.equal(e({ action: "download", machine: "b", path: "/a", paths: ["/a"] }), "Use path or paths, not both");
+  assert.equal(e({ action: "clip", items: [] }), "items is required");
+  assert.equal(e({ action: "clip", items: ["/a"] }), "items is required");
+  assert.equal(e({ action: "clip", items: [{ path: "a" }] }), "path must be absolute");
+  assert.equal(e({ action: "clip", items: [{ path: "/" }] }), '"/" cannot be copied or cut');
+  assert.equal(e({ action: "clip", items: [{ path: "/a/../b" }] }), 'Path must not contain ".", ".." or "//"');
+  assert.equal(e({ action: "clip", path: "/a", items: [{ path: "/a" }] }), "Use path or items, not both");
+  assert.equal(e({ action: "delete", paths: [], root: "/" }), "paths is required");
+  assert.equal(e({ action: "delete", paths: ["a"], root: "/" }), "paths must be absolute");
+  assert.equal(e({ action: "delete", paths: ["/a/./b"], root: "/" }), 'Path must not contain ".", ".." or "//"');
+  assert.equal(e({ action: "delete", paths: ["/a"] }), "root is required");
+  assert.equal(e({ action: "delete", path: "/a", paths: ["/a"], root: "/" }), "Use path or paths, not both");
+});
