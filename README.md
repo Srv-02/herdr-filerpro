@@ -89,6 +89,7 @@ Then click `Filer Pro` in the tab bar.
 - **Drop to upload** from the Finder, right click to download.
 - **Progress and cancel** for every transfer, nothing overwritten without asking.
 - **Machine to machine:** Copy on one, Paste on the other, through this computer.
+- **Several at once:** select rows, then Download, Copy, Cut or Delete them in one step.
 
 ![A running transfer and the conflict dialog](screenshots/transfers.png)
 

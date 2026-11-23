@@ -70,7 +70,7 @@ The tree shows the folder of the focused terminal, locally or on its machine.
 - **Apps and packages:** apps and other macOS packages show as files. A double click starts them, and Show Package Contents looks inside.
 - **Select several rows:** pick **Select Files** in a row menu or in the free area menu. Every row then shows a checkbox. A click on a row toggles it, a click on the arrow still opens and closes a folder, and **Done** in the selection bar ends the mode and clears the selection. **Select Files** on a row adds that row to a selection that already exists. The entry is also in the menu while **Select several files with Cmd and Shift** is off, and it is hidden while the mode runs.
 - **Select with Cmd and Shift:** turn on **Select several files with Cmd and Shift** in Settings (File list). **Cmd+click** then adds or removes a file or folder and **Shift+click** selects every visible row from the last added row to the clicked one. A second Shift+click moves only the end of the range. A double click does not toggle twice. You can pick other clicks in Settings. Without a usable last row (none yet, or hidden by a collapse) Shift+click works like Cmd+click.
-- **The selection bar:** below the tree, above the transfers, it shows `<n> selected` and **Clear**, or **Done** in the checkbox mode. It stays while the selection is not empty.
+- **The selection bar:** below the tree, above the transfers, it shows `<n> selected`, the buttons Download, Copy, Cut and Delete, and **Clear**, or **Done** in the checkbox mode. The buttons are dimmed while nothing is selected. A right click on a selected row opens a short menu with the actions for all selected rows and **Clear Selection**. It stays while the selection is not empty.
 - **Ending a selection:** a plain click on a row clears it and opens the row as usual. A click in the free area clears it, and so does a right click on a row outside the selection. In the checkbox mode none of these clear it. Switching the terminal and back keeps the selection. Rows that you delete or rename outside the panel, or that a collapsed folder hides, leave it. Keyboard selection is not supported yet.
 - **Show in Finder with the switch on:** Cmd+click is then the selection click, so Show in Finder needs **Option+Cmd+click**. The right-click menu entry works either way.
 - **System and hidden files:** system files like `.DS_Store` stay out of the way, and hidden files can go too (`hide_system_files`, `hide_dotfiles` in [All settings](#all-settings)).
@@ -317,6 +317,7 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 - Drop files from the Finder to upload, right click to download.
 - Every transfer shows progress and can be cancelled.
 - Nothing is overwritten without asking.
+- **Several rows at once:** select rows, then right click one of them or use the selection bar. **Download**, **Copy**, **Cut**, **Paste**, **Copy Paths** and **Delete** act on every selected row in one step. A folder and a file inside it count once, as the folder. A conflict is asked once with **Apply to all**. A move of several items never offers **Merge**. **Delete** asks once and lists the names. On a machine a delete stops after 120 s.
 - Timeouts and how long finished transfers stay visible: **Transfers & connections** in [All settings](#all-settings).
 
 ### Copy between machines
@@ -489,7 +490,7 @@ All settings live in `~/.config/herdr-app/filer-pro.json`:
 
 ### Automation folder
 
-The mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). Anything that can write to that folder can drive the mod.
+The mod watches `~/.config/herdr-app/filer-pro/requests/` for JSON requests (download, upload, copy, rename, delete and more). `download` and `delete` take a list in `paths` instead of `path`, and `clip` takes `items` (`[{ "path": "/srv/a", "is_dir": false }]`) instead of `path`; a request with a single `path` works as before. A move preset `"conflict": "merge"` now cancels the item (it used to replace it). Anything that can write to that folder can drive the mod.
 
 ### Network
 
