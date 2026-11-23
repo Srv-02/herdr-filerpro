@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { LIST_SCRIPT } from "../mods/filer-pro/lib/tree.js";
+import { SIZE_SCRIPT, requestSize, sizeKey } from "../mods/filer-pro/lib/sizes.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
 import { OPEN_BUNDLE_SCRIPT, OPEN_CHECK_SCRIPT } from "../mods/filer-pro/lib/open.js";
 
@@ -45,13 +46,14 @@ const UP = "/home/u/project", LOW = "/Users/example/Downloads", INBOX = "/Users/
 const list = (...names) => names.flatMap((n) => (n.endsWith("/") ? ["d", n.slice(0, -1)] : ["f", n])).join("\0") + "\0";
 
 // A fake host: the focused space is on machine `box` at UP (or local); listings per path, every exec and watch logged.
-function host({ machine = "box", store = {}, listings = {}, fail = {}, props = {} } = {}) {
+function host({ machine = "box", folder = UP, store = {}, listings = {}, fail = {}, props = {}, terminal = false } = {}) {
   const log = { execs: [], overlays: [], watched: [], writes: [] };
-  const state = { machine, folder: UP };
+  const state = { machine, folder };
   globalThis.__impl = {
     props: () => props, appHome: () => "/app", home: () => "/Users/example", window: () => ({ platform: "macos" }),
     theme: () => new Proxy({}, { get: (_t, k) => String(k) }), settings: () => ({ dark: true, font_family: "mono" }),
-    spaces: () => [{ active: true, id: "s1", folder: state.folder, machine: state.machine }], panes: () => [], focused: () => ({}),
+    spaces: () => [{ active: true, id: "s1", folder: state.folder, machine: state.machine }],
+    panes: () => (terminal ? [{ pane: "p1", cwd: state.folder, terminal: "t-p1" }] : []), focused: () => (terminal ? { space: "s1", pane: "p1", terminal: "t-p1", cwd: null } : {}),
     shared: (k) => store[k], setShared: (k, v) => { store[k] = v; },
     readTextFile: async (p) => (p.endsWith("notes.txt") ? "hello\n" : null), writeFile: async () => {},
     exec: async (cmd, args, opts) => {
@@ -61,6 +63,7 @@ function host({ machine = "box", store = {}, listings = {}, fail = {}, props = {
         if (fail[path]) return { code: 1, stdout: "", stderr: fail[path] };
         return { code: 0, stdout: listings[path] ?? "", stderr: "" };
       }
+      if (cmd === "sh" && args[1] === SIZE_SCRIPT) return { code: 0, stdout: "2400000\n", stderr: "" };
       return { code: 1, stdout: "", stderr: "" };
     },
     hc: async () => ({ code: 0, stdout: "{}", stderr: "" }),
@@ -267,4 +270,121 @@ test("#101 both trees watch their own folder; hiding the lower tree ends its loo
   store[KEY] = { shown: false, root: null, sizes: null };
   self.render(cx);
   assert.equal(self.trees.pinned.context, null);
+});
+
+const SHOWN = { shown: true, root: null, sizes: null };
+const iconOf = (line) => [...walk(line)].filter((e) => e.kind === "svg").map((e) => e.args[0]);
+const idsIn = (el) => ids(el);
+
+test("#101 lines only while shown: server + machine above, laptop + This Mac below, with their own controls", async () => {
+  host({ store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  const tree = await show(self, cx);
+  const up = byId(tree, "files-line"), low = byId(tree, "local-files-line");
+  assert.ok(iconOf(up)[0].endsWith("/server.svg"));
+  assert.ok(texts(up).includes("box"));
+  for (const id of ["files-top", "files-back-terminal", "files-up", "files-refresh"]) assert.ok(idsIn(up).includes(id), id);
+  assert.ok(iconOf(low)[0].endsWith("/laptop.svg"));
+  assert.ok(texts(low).includes("This Mac"));
+  for (const id of ["local-files-top", "local-files-up", "local-files-refresh"]) assert.ok(idsIn(low).includes(id), id);
+  assert.ok(!idsIn(low).includes("local-files-back-terminal") && !idsIn(low).includes("files-back-terminal"));
+  const header = idsIn(byId(tree, "files")).slice(0, idsIn(byId(tree, "files")).indexOf("files-split-frame"));
+  assert.ok(header.includes("files-local-toggle") && header.includes("files-settings"));
+  assert.ok(!header.includes("files-top") && !header.includes("files-refresh"));
+});
+
+test("#101 hidden: no lines, the header keeps its controls with the toggle left of the gear", async () => {
+  host({ listings: { [UP]: list("a.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  await settle();
+  const tree = self.render(cx);
+  assert.equal(byId(tree, "files-line"), undefined);
+  const order = idsIn(tree).filter((id) => ["files-top", "files-back-terminal", "files-up", "files-refresh", "files-local-toggle", "files-settings"].includes(id));
+  assert.deepEqual(order, ["files-top", "files-back-terminal", "files-up", "files-refresh", "files-local-toggle", "files-settings"]);
+});
+
+test("#101 the toggle sits left of the gear and does not move when the lower tree opens", async () => {
+  const { store } = host({ listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  await settle();
+  const at = (tree) => { const l = idsIn(tree); return l.indexOf("files-settings") - l.indexOf("files-local-toggle"); };
+  const before = at(self.render(cx));
+  store[KEY] = SHOWN;
+  assert.equal(at(await show(self, cx)), before);
+  assert.equal(before, 1);
+});
+
+test("#101 upper tree local: laptop + This Mac in both lines", async () => {
+  host({ machine: null, store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  const tree = await show(self, cx);
+  for (const id of ["files-line", "local-files-line"]) {
+    assert.ok(iconOf(byId(tree, id))[0].endsWith("/laptop.svg"), id);
+    assert.ok(texts(byId(tree, id)).includes("This Mac"), id);
+  }
+});
+
+test("#101 Refresh in the lower line reloads only the lower tree and drops its sizes only", async () => {
+  const { log, store } = host({ store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  const tree = await show(self, cx);
+  store["filer-pro.sizes"] = { [sizeKey(null, `${LOW}/x`)]: { state: "done", bytes: 5, at: Date.now() }, [sizeKey("box", `${UP}/y`)]: { state: "done", bytes: 6, at: Date.now() } };
+  const upBefore = listsOf(log, UP).length, lowBefore = listsOf(log, LOW).length;
+  handler(byId(tree, "local-files-refresh"), "on_click")({}, cx);
+  await settle();
+  assert.ok(listsOf(log, LOW).length > lowBefore);
+  assert.equal(listsOf(log, UP).length, upBefore);
+  assert.equal(Object.keys(store["filer-pro.sizes"]).length, 1);
+  assert.ok(store["filer-pro.sizes"][sizeKey("box", `${UP}/y`)]);
+});
+
+test("#101 Show as Root from the lower tree's menu moves only the lower tree, also when both trees show the folder", async () => {
+  for (const which of ["pinned", "follow"]) {
+    const { store, log } = host({ machine: null, folder: LOW, terminal: true, store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("sub/"), [`${LOW}/sub`]: list("c.txt") } });
+    const cx = fakeCx(), self = panel();
+    self.refresh(cx);
+    await show(self, cx);
+    const upperRoot = self.trees.follow.root;
+    // the menu copy
+    host({ machine: null, folder: LOW, store, props: { overlay: "m1", view: "menu", tree: which, root: LOW, path: `${LOW}/sub`, isDir: true, folder: `${LOW}/sub` } });
+    const menu = Object.create(FilerPro.prototype), mcx = fakeCx();
+    handler(byId(menu.overlayView(mcx), "filer-pro-menu-show-as-root"), "on_click")({}, mcx);
+    assert.equal(store["filer-pro.goto"].tree, which);
+    host({ machine: null, folder: LOW, terminal: true, store, listings: { [LOW]: list("sub/"), [`${LOW}/sub`]: list("c.txt") } });
+    self.render(cx);
+    await settle();
+    if (which === "pinned") {
+      assert.equal(self.trees.pinned.root, `${LOW}/sub`);
+      assert.equal(self.trees.follow.root, upperRoot);
+      assert.equal(store[KEY].root, `${LOW}/sub`);
+    } else {
+      assert.equal(self.trees.follow.root, `${LOW}/sub`);
+      assert.equal(self.trees.pinned.root, LOW);
+    }
+    void log;
+  }
+});
+
+test("#101 Calculate Size in the lower tree: claimed once, shown in both trees when both show the folder", async () => {
+  const { log, store } = host({ machine: null, folder: LOW, store: { [KEY]: SHOWN }, listings: { [LOW]: list("sub/") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  await show(self, cx);
+  store["filer-pro.sizes"] = requestSize(store["filer-pro.sizes"], null, `${LOW}/sub`, "id1", Date.now());
+  self.pollSizes(cx);
+  await settle();
+  assert.equal(log.execs.filter((e) => e.args?.[1] === SIZE_SCRIPT).length, 1);
+  self.pollSizes(cx);
+  await settle();
+  assert.equal(log.execs.filter((e) => e.args?.[1] === SIZE_SCRIPT).length, 1, "claimed once");
+  const tree = self.render(cx);
+  assert.ok(texts(byId(tree, "file-sub-size")).length + [...walk(byId(tree, "file-sub-size"))].length > 0);
+  const a = texts(byId(tree, "file-sub-size")).join(""), b = texts(byId(tree, "local-file-sub-size")).join("");
+  assert.equal(a, b);
+  assert.notEqual(a, "—");
 });
