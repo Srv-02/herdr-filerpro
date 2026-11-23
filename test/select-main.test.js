@@ -465,8 +465,8 @@ test("#99 multi menu: Copy, Cut, Delete and Download write one request with the 
   menuClick("filer-pro-menu-download");
   await settle();
   assert.deepEqual(written(log), [
-    { action: "clip", items: list },
-    { action: "clip", items: list, cut: true },
+    { action: "clip", items: list, root: ROOT },
+    { action: "clip", items: list, cut: true, root: ROOT },
     { action: "delete", paths: [`${ROOT}/a.txt`, `${ROOT}/src`], root: ROOT },
     { action: "copy", paths: [`${ROOT}/a.txt`, `${ROOT}/src`] },
   ]);
@@ -511,7 +511,7 @@ test("#99 bar: four buttons before Clear; a click writes one request with the co
   handler(byId(root, "files-selection-delete"), "on_click")({}, cx);
   await settle();
   assert.deepEqual(written(log), [
-    { action: "clip", items: [{ path: `${ROOT}/src`, is_dir: true }, { path: `${ROOT}/a.txt`, is_dir: false }] },
+    { action: "clip", items: [{ path: `${ROOT}/src`, is_dir: true }, { path: `${ROOT}/a.txt`, is_dir: false }], root: ROOT },
     { action: "delete", paths: [`${ROOT}/src`, `${ROOT}/a.txt`], root: ROOT },
   ]);
 });
