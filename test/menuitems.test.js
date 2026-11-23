@@ -200,3 +200,18 @@ test("#99 a count of one or none gives today's menu; thousands are grouped", () 
   assert.equal(rowMenuState({ name: "a" }).count, 1);
   assert.equal(rowMenuState({ name: "a", count: 0 }).count, 1);
 });
+
+test("#27 Upload File… only with upload: row after Download to…, free area above New Folder…, heights", () => {
+  const acts = (items) => items.filter((i) => !i.separator).map((i) => i.action);
+  assert.equal(acts(rowMenuItems(on)).includes("upload"), false);
+  assert.equal(acts(rootMenuItems(on)).includes("upload"), false);
+  const row = acts(rowMenuItems({ ...on, upload: true }));
+  assert.equal(row[row.indexOf("download_to") + 1], "upload");
+  assert.equal(rowMenuItems({ ...on, upload: true }).find((i) => i.action === "upload").label, "Upload File…");
+  const root = acts(rootMenuItems({ ...on, upload: true }));
+  assert.equal(root[root.indexOf("upload") + 1], "new_folder");
+  assert.equal(menuHeight(rowMenuItems({ ...on, upload: true })), 516 + 28);
+  assert.equal(menuHeight(rowMenuItems({ ...on, upload: true, isDir: true })), 572 + 28);
+  assert.equal(menuHeight(rootMenuItems({ ...on, upload: true })), 166 + 28);
+  assert.equal(acts(rowMenuItems({ ...on, upload: true, count: 2 })).includes("upload"), false);
+});

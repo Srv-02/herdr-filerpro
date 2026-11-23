@@ -24,3 +24,12 @@ test("dropRequest: nothing to do without root or paths", () => {
   assert.equal(dropRequest({ on: null, root: "/r", rowPath: null, rowIsDir: false, paths: undefined }), null);
   assert.equal(dropRequest({ on: null, root: undefined, rowPath: null, rowIsDir: false, paths: ["/a"] }), null);
 });
+
+test("uploadRequest: the drop request for the folder the menu names", async () => {
+  const { uploadRequest } = await import("../mods/filer-pro/lib/droptarget.js");
+  const paths = ["/Users/m/a.txt"];
+  assert.deepEqual(uploadRequest({ on: "box", folder: "/srv/in", paths }), dropRequest({ on: "box", root: "/srv", rowPath: "in", rowIsDir: true, paths }));
+  assert.deepEqual(uploadRequest({ on: null, folder: "/r", paths }), { action: "copy", paths, folder: "/r" });
+  assert.equal(uploadRequest({ on: null, folder: "/r", paths: null }), null);
+  assert.equal(uploadRequest({ on: null, folder: "/r", paths: [] }), null);
+});
