@@ -1062,3 +1062,22 @@ test("#99 deleteErrorToast: one title with the count, a line per item, at most f
   assert.deepEqual(deleteErrorToast([e(1), e(2)]), { title: "Could not delete 2 items", body: "d1: err1\nd2: err2", level: "error" });
   assert.equal(deleteErrorToast([1, 2, 3, 4, 5, 6, 7].map(e)).body, "d1: err1\nd2: err2\nd3: err3\nd4: err4\nd5: err5\nand 2 more");
 });
+
+test("#100 remove and check pass timeout to the guard, the delete and the Trash; without it no call has one", async () => {
+  const remote = recorder({ guard: fakeGuard(guardInfo({ 2: "/home/u/tmp/in" })) });
+  assert.equal((await remote.ops.remove({ on: "box", path: "/home/u/link/a", root: "/home/u/tmp", timeout: 600000 })).ok, true);
+  assert.ok(remote.calls.length >= 2);
+  assert.ok(remote.calls.every((c) => c.timeout === 600000));
+  const d = guardTree(), root = `${d}/Users/m/proj`;
+  const local = recorder({ env: { HOME: `${d}/Users/m` } });
+  assert.equal((await local.ops.remove({ on: null, path: `${root}/a.txt`, root, timeout: 600000 })).ok, true);
+  assert.ok(local.calls.length >= 3);
+  assert.ok(local.calls.some((c) => c.cmd === "/usr/bin/trash"));
+  assert.ok(local.calls.every((c) => c.timeout === 600000));
+  const chk = recorder({ guard: fakeGuard(guardInfo({ 2: "/home/u/tmp/in" })) });
+  assert.equal((await chk.ops.check({ on: "box", path: "/home/u/link/a", root: "/home/u/tmp", timeout: 600000 })).ok, true);
+  assert.ok(chk.calls.length >= 1 && chk.calls.every((c) => c.timeout === 600000));
+  const plain = recorder({ guard: fakeGuard(guardInfo({ 2: "/home/u/tmp/in" })) });
+  await plain.ops.remove({ on: "box", path: "/home/u/link/a", root: "/home/u/tmp" });
+  assert.ok(plain.calls.every((c) => c.timeout === undefined));
+});

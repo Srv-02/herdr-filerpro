@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clipEntry, clipItems, sameClip, pastePlan, pasteState } from "../mods/filer-pro/lib/clipboard.js";
+import { clipEntry, clipItems, sameClip, pastePlan, pasteState, MOVE_ROOT_ERROR } from "../mods/filer-pro/lib/clipboard.js";
 
 const L = clipEntry({ on: null, items: [{ path: "/Users/m/a.txt", isDir: false }], at: 1 });
 const R = clipEntry({ on: "box", items: [{ path: "/srv/d", isDir: true }], at: 2 });
@@ -35,15 +35,35 @@ test("clip with cut sets the mark, a later copy clears it", () => {
 test("legacy clipboard without cut is copy", () => {
   assert.deepEqual(pastePlan({ machine: "box", path: "/srv/a", isDir: false, at: 1 }, { on: null, folder: "/Users/me/Downloads" }), { direction: "down", machine: "box", srcs: ["/srv/a"], destDir: "/Users/me/Downloads" });
 });
-test("cut gives a move plan only within one machine", () => {
+test("cut gives a same-side move plan within one machine", () => {
   assert.deepEqual(pastePlan(C, { on: "box", folder: "/srv/in" }), { direction: "remote", machine: "box", srcs: ["/srv/d/a.txt"], destDir: "/srv/in", move: true });
   assert.deepEqual(pastePlan(LC, { on: null, folder: "/Users/me/git" }), { direction: "local", machine: null, srcs: ["/Users/me/a"], destDir: "/Users/me/git", move: true });
-  for (const [clip, on] of [[C, null], [C, "other"], [LC, "box"]]) assert.deepEqual(pastePlan(clip, { on, folder: "/x" }), { error: "Cut and Paste work only within one machine" });
 });
-test("cut then paste on another machine is dimmed", () => {
-  assert.deepEqual(pasteState(C, null), { enabled: false, reason: "Cut and Paste work only within one machine" });
-  assert.deepEqual(pasteState(C, "other"), { enabled: false, reason: "Cut and Paste work only within one machine" });
-  assert.deepEqual(pasteState(C, "box"), { enabled: true, reason: null });
+test("clipEntry keeps root of a Cut, drops a relative or empty one", () => {
+  assert.equal(clipEntry({ on: "box", items: [{ path: "/srv/a" }], at: 1, cut: true, root: "/srv" }).root, "/srv");
+  assert.equal("root" in clipEntry({ on: "box", items: [{ path: "/srv/a" }], at: 1, cut: true, root: "srv" }), false);
+  assert.equal("root" in clipEntry({ on: "box", items: [{ path: "/srv/a" }], at: 1, cut: true, root: "" }), false);
+  assert.equal("root" in clipEntry({ on: "box", items: [{ path: "/srv/a" }], at: 1, cut: true }), false);
+});
+test("a Cut on another side is a move plan: down, up and cross keep the copy directions", () => {
+  const c = (machine) => ({ machine, items: [{ path: "/p/a", isDir: false }], at: 1, cut: true, root: "/p" });
+  assert.deepEqual(pastePlan(c("box"), { on: null, folder: "/in" }), { direction: "down", machine: "box", srcs: ["/p/a"], destDir: "/in", move: true, root: "/p" });
+  assert.deepEqual(pastePlan(c(null), { on: "box", folder: "/in" }), { direction: "up", machine: "box", srcs: ["/p/a"], destDir: "/in", move: true, root: "/p" });
+  assert.deepEqual(pastePlan(c("box2"), { on: "box", folder: "/in" }), { direction: "cross", from: "box2", machine: "box", srcs: ["/p/a"], destDir: "/in", move: true, root: "/p" });
+});
+test("a cross-side Cut without root is refused (data loss rule: no root, no move), a same-side Cut without root is not", () => {
+  const c = { machine: "box", items: [{ path: "/p/a" }], at: 1, cut: true };
+  assert.deepEqual(pastePlan(c, { on: null, folder: "/in" }), { error: MOVE_ROOT_ERROR });
+  assert.deepEqual(pastePlan({ ...c, root: "" }, { on: "x", folder: "/in" }), { error: MOVE_ROOT_ERROR });
+  assert.equal(pastePlan(c, { on: "box", folder: "/in" }).direction, "remote");
+  assert.equal(MOVE_ROOT_ERROR, "Cut it again to move it to another machine");
+});
+test("pasteState: Cut a to b is enabled; Already in this folder only on the same side", () => {
+  const c = { machine: "box", items: [{ path: "/in/a" }], at: 1, cut: true, root: "/" };
+  assert.deepEqual(pasteState(c, "other", "/in"), { enabled: true, reason: null });
+  assert.deepEqual(pasteState(c, null, "/in"), { enabled: true, reason: null });
+  assert.equal(pasteState(c, "box", "/in").reason, "Already in this folder");
+  assert.equal(pasteState({ ...c, root: undefined }, null, "/in").reason, MOVE_ROOT_ERROR);
 });
 test("cut then paste into the own folder is dimmed, copy is not", () => {
   assert.deepEqual(pasteState(C, "box", "/srv/d"), { enabled: false, reason: "Already in this folder" });
@@ -55,10 +75,9 @@ test("a copy across two machines is a cross plan, the target machine is machine"
   assert.deepEqual(pastePlan(clipEntry({ on: "a", items: [{ path: "/s/x", isDir: false }], at: 1 }), { on: "b", folder: "/d" }), { direction: "cross", from: "a", machine: "b", srcs: ["/s/x"], destDir: "/d" });
   assert.deepEqual(pastePlan(R, { on: "box", folder: "/d" }).direction, "remote");
 });
-test("pasteState: Copy a to b is enabled, Cut a to b is not", () => {
+test("pasteState: Copy a to b is enabled", () => {
   const a = clipEntry({ on: "a", items: [{ path: "/s/x", isDir: false }], at: 1 });
   assert.deepEqual(pasteState(a, "b", "/d"), { enabled: true, reason: null });
-  assert.deepEqual(pasteState({ ...a, cut: true }, "b", "/d"), { enabled: false, reason: "Cut and Paste work only within one machine" });
 });
 
 // ---- #99: the clipboard holds a list

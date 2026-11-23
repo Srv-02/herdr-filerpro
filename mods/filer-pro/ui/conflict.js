@@ -1,12 +1,13 @@
 // The question dialog: a link warning (Transfer anyway / Cancel, or only OK for a symlink loop), a target
 // conflict (also for a move: no Merge), the Another volume question of a move ("copy_instead" and "cancel"),
 // or the confirmation before a delete (choices "delete" and "cancel").
-import { div } from "gpui-kit";
+import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { conflictText, deleteText, crossTitle, crossText, THIS_COMPUTER, CROSS_DONT_SHOW } from "../lib/conflicttext.js";
+import { conflictText, deleteText, crossTitle, crossText, moveTitle, moveText, moveNote, THIS_COMPUTER, CROSS_DONT_SHOW } from "../lib/conflicttext.js";
+import { BASE } from "../lib/icons.js";
 import { checkBox } from "./checkbox.js";
 
-const LABEL = { replace: "Replace", merge: "Merge", keep_both: "Keep both", copy_instead: "Copy instead", copy: "Copy", cancel: "Cancel", transfer_anyway: "Transfer anyway", ok: "OK" };
+const LABEL = { replace: "Replace", merge: "Merge", keep_both: "Keep both", copy_instead: "Copy instead", copy: "Copy", move: "Move", cancel: "Cancel", transfer_anyway: "Transfer anyway", ok: "OK" };
 
 // The delete button says what happens: a move to the Trash here, or a final Delete (red) on a machine.
 function label(choice, item) {
@@ -69,10 +70,39 @@ function crossView(t, pending, state, handlers) {
       .children(["cancel", "copy"].filter((c) => (pending.choices ?? []).includes(c)).map(action)));
 }
 
+// The question before a move across sides (#100): the layout of crossView without "Don't show again". The note says what happens
+// to the original: deleted for good on a machine (red frame and a red Move), the Trash on this computer (accent Move).
+function moveView(t, pending, handlers) {
+  const item = pending.item ?? {};
+  const chip = (name) => div().px(6).py(2).rounded(4).bg(t.hover).text_color(t.foreground).truncate().child(name ?? "");
+  const permanent = item.trash !== true;
+  const route = item.direction === "cross"
+    ? [chip(item.from), "→", div().flex_none().child(THIS_COMPUTER), "→", chip(item.machine)]
+    : [item.from ? chip(item.from) : div().flex_none().child(THIS_COMPUTER), "→", item.machine ? chip(item.machine) : div().flex_none().child(THIS_COMPUTER)];
+  const action = (choice) => div().id(`filer-pro-choice-${choice}`).h(30).px(14).flex().items_center().rounded(6).cursor_pointer()
+    .when(choice === "move" && !permanent, (el) => el.bg(t.accent).text_color(t.accent_foreground).font_medium())
+    .when(choice === "move" && permanent, (el) => el.border_1().border_color(t.border).text_color(t.ansi1).font_medium())
+    .when(choice !== "move", (el) => el.border_1().border_color(t.border))
+    .hover((s) => s.opacity(0.88)).on_click((_e, cx) => handlers.onChoose(choice, cx)).child(label(choice, item));
+  const note = permanent
+    ? h_flex().id("filer-pro-move-note").gap(8).px(10).py(8).items_center().rounded(8).border_1().border_color(t.ansi1).text_size(12.5).text_color(t.ansi1)
+      .child(svg(`${BASE}/shield-exclamation-point.svg`).size(14).flex_none().text_color(t.ansi1)).child(div().flex_1().min_w(0).child(moveNote(item)))
+    : h_flex().id("filer-pro-move-note").gap(8).items_center().text_size(12).text_color(t.muted)
+      .child(svg(`${BASE}/info.svg`).size(12).flex_none().text_color(t.muted)).child(div().flex_1().min_w(0).child(moveNote(item)));
+  return v_flex().id("filer-pro-conflict").size_full().p(20).gap(14).bg(t.background).text_color(t.foreground).text_size(13)
+    .child(div().text_size(15).font_medium().truncate().child(moveTitle(item)))
+    .child(div().line_height("19.5px").text_color(t.muted).child(moveText(item)))
+    .child(h_flex().id("filer-pro-cross-route").gap(8).px(10).py(8).items_center().rounded(6).bg(t.chrome).text_size(12).text_color(t.muted).children(route))
+    .child(note)
+    .child(div().flex_1().min_h(0))
+    .child(h_flex().gap(8).justify_end().children(["cancel", "move"].filter((c) => (pending.choices ?? []).includes(c)).map(action)));
+}
+
 // pending: { batch, item, choices, remaining }; state: { all }; handlers: { onChoose(choice, cx), onToggleAll(cx) }
 export function conflictView(t, pending, state, handlers) {
   if (pending.choices?.includes("delete")) return deleteView(t, pending, handlers);
   if (pending.choices?.includes("copy_instead")) return volumeView(t, pending, handlers);
+  if (pending.choices?.includes("move")) return moveView(t, pending, handlers);
   if (pending.choices?.includes("copy")) return crossView(t, pending, state, handlers);
   const item = pending.item ?? {};
   const isLinks = Boolean(pending.choices?.includes("transfer_anyway") || pending.choices?.includes("ok"));

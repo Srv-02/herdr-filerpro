@@ -41,7 +41,7 @@ test("resultText is JSON with 2 spaces", () => {
 
 function deps(over = {}) {
   const store = { ...(over.store || {}) };
-  const calls = [], asked = [], fileOpsCalls = [];
+  const calls = [], asked = [], fileOpsCalls = [], moveCalls = [], saves = [];
   const info = { name: "a", isDir: false, exists: false, linkWarning: null, ...(over.info || {}) };
   return {
     calls, store, fileOpsCalls, now: () => 777,
@@ -57,8 +57,13 @@ function deps(over = {}) {
       inspect: async (a) => (calls.push(["inspect", a]), info),
       start: async (a) => (calls.push(["start", a]), over.startFn?.(a) ?? { id: "j1" }),
       cancel: async (id) => calls.push(["cancel", id]),
+      sameMachine: async (a, b) => (moveCalls.push(["sameMachine", a, b]), "same" in over ? over.same : false),
+      overlap: async (a) => (moveCalls.push(["overlap", a]), over.overlapBy?.(a) ?? { ok: true }),
+      sourceSize: async () => over.size ?? null,
     },
-    loadConfig: async () => ({ download_folder: "/home/u/Downloads" }),
+    moveCalls, saves,
+    saveConfig: async (c) => { saves.push(c); },
+    loadConfig: async () => ({ download_folder: "/home/u/Downloads", ...(over.config || {}) }),
     asked,
     ask: async (pending) => (asked.push(pending), (over.answers || []).shift() || { choice: "cancel" }),
     newBatchId: () => "b1",
@@ -739,10 +744,10 @@ test("clip with cut stores the mark, clip without clears it", async () => {
   await handleRequest({ action: "clip", machine: "box", path: "/srv/a", is_dir: false }, d);
   assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/a", isDir: false }], at: 777 });
 });
-test("paste after cut on another machine is refused and starts nothing", async () => {
+test("paste after a Cut without root on another side is refused and starts nothing", async () => {
   for (const [store, extra] of [[cut("box", "/srv/a"), { machine: undefined }], [cut("box", "/srv/a"), { machine: "other" }], [cut(null, "/Users/me/a"), { machine: "box" }]]) {
     const d = deps({ store });
-    assert.deepEqual(await handleRequest(paste(extra), d), { ok: false, error: "Cut and Paste work only within one machine" });
+    assert.deepEqual(await handleRequest(paste(extra), d), { ok: false, error: "Cut it again to move it to another machine" });
     assert.deepEqual(d.calls, []); assert.deepEqual(d.fileOpsCalls, []);
   }
 });
@@ -1049,9 +1054,9 @@ test("paste cross: no warning when every path errors in inspect", async () => {
   assert.equal(d.asked.length, 0);
 });
 
-test("paste cross: Cut across machines still errors; same-machine paste has no warning and no from", async () => {
+test("paste cross: a Cut across machines without root errors; same-machine paste has no warning and no from", async () => {
   const d = deps({ store: crossClip({ cut: true }) });
-  assert.deepEqual(await handleRequest(crossPaste(), d), { ok: false, error: "Cut and Paste work only within one machine" });
+  assert.deepEqual(await handleRequest(crossPaste(), d), { ok: false, error: "Cut it again to move it to another machine" });
   const e = deps({ store: crossClip() });
   await handleRequest(crossPaste({ machine: "box" }), e);
   assert.equal(e.asked.length, 0);
@@ -1406,4 +1411,132 @@ test("#99 a single delete passes the timeout too", async () => {
   const d = deps({ answers: [{ choice: "delete" }] });
   await handleRequest({ action: "delete", machine: "box", path: "/srv/a", root: "/srv" }, d);
   assert.equal(d.fileOpsCalls.find((c) => c[0] === "remove")[1].timeout, 120000);
+});
+
+// ---- #100: the root of a Cut
+test("clip: root is optional, absolute, spelled cleanly, and stored in the entry", async () => {
+  assert.equal(parseRequest(JSON.stringify({ action: "clip", machine: "box", path: "/srv/a", cut: true, root: "/srv" })).root, "/srv");
+  assert.equal(parseRequest(JSON.stringify({ action: "clip", machine: "box", items: [{ path: "/srv/a" }], cut: true, root: "/srv" })).root, "/srv");
+  assert.deepEqual(parseRequest(JSON.stringify({ action: "clip", path: "/srv/a", root: "srv" })), { error: "root must be absolute" });
+  assert.deepEqual(parseRequest(JSON.stringify({ action: "clip", path: "/srv/a", root: "/srv/../x" })), { error: 'Path must not contain ".", ".." or "//"' });
+  const d = deps();
+  await handleRequest({ action: "clip", machine: "box", path: "/srv/a", is_dir: false, cut: true, root: "/srv" }, d);
+  assert.equal(d.store["filer-pro.clipboard"].root, "/srv");
+});
+
+// ---- #100: paste of a Cut on another side
+const movedClip = (extra = {}) => ({ "filer-pro.clipboard": { machine: "box", items: [{ path: "/srv/a", isDir: false }], at: 1, cut: true, root: "/srv", ...extra } });
+const mvPaste = (x = {}) => ({ action: "paste", folder: "/Users/m/in", ...x });
+const mvStarts = (d) => d.calls.filter((c) => c[0] === "start").map((c) => c[1]);
+
+test("paste cut down: asks Move once, then starts the job with move", async () => {
+  const d = deps({ store: movedClip(), answers: [{ choice: "move" }] });
+  const r = await handleRequest(mvPaste(), d);
+  assert.equal(r.ok, true);
+  assert.equal(d.asked.length, 1);
+  assert.deepEqual(d.asked[0].choices, ["move", "cancel"]);
+  assert.deepEqual(d.asked[0].item, { name: "a", isDir: false, path: "/srv/a", from: "box", machine: null, direction: "down", trash: false, count: 1, size: null });
+  assert.deepEqual(mvStarts(d).map((a) => [a.direction, a.machine, a.src, a.destDir, a.move]), [["down", "box", "/srv/a", "/Users/m/in", { root: "/srv", clipAt: 1 }]]);
+  assert.deepEqual(d.fileOpsCalls.filter((c) => c[0] === "check").map((c) => c[1]), [{ on: "box", path: "/srv/a", root: "/srv" }]);
+});
+test("paste cut up: the Move question says Trash (trash true)", async () => {
+  const d = deps({ store: movedClip({ machine: null, items: [{ path: "/Users/m/a", isDir: false }], root: "/Users/m" }), answers: [{ choice: "move" }] });
+  await handleRequest(mvPaste({ machine: "box", folder: "/srv/in" }), d);
+  assert.deepEqual(d.asked[0].item, { name: "a", isDir: false, path: "/Users/m/a", from: null, machine: "box", direction: "up", trash: true, count: 1, size: null });
+  assert.equal(mvStarts(d)[0].move.root, "/Users/m");
+  assert.equal(d.fileOpsCalls.find((c) => c[0] === "check")[1].on, null);
+});
+test("paste cut: Cancel, a closed dialog or any other answer starts nothing and keeps the Cut", async () => {
+  for (const answers of [[{ choice: "cancel" }], [], [{}], [{ choice: "copy" }], [{ choice: "replace" }]]) {
+    const d = deps({ store: movedClip(), answers });
+    const r = await handleRequest(mvPaste(), d);
+    assert.deepEqual(r, { ok: false, error: "Cancelled" });
+    assert.deepEqual(mvStarts(d), []);
+    assert.deepEqual(d.moveCalls.filter((c) => c[0] === "overlap"), []);
+    assert.deepEqual(d.store["filer-pro.clipboard"], movedClip()["filer-pro.clipboard"]);
+  }
+});
+test("paste cut cross: one SSH target under two names runs the same-host move with the Cut root", async () => {
+  const d = deps({ store: movedClip(), same: true });
+  const r = await handleRequest(mvPaste({ machine: "alias", folder: "/srv/in" }), d);
+  assert.equal(r.ok, true);
+  assert.deepEqual(d.moveCalls[0], ["sameMachine", "box", "alias"]);
+  const im = d.fileOpsCalls.find((c) => c[0] === "inspectMove")[1];
+  assert.equal(im.on, "box");
+  assert.equal(im.root, "/srv");
+  assert.equal(mvStarts(d).length, 0);
+  assert.equal(d.asked.length, 0);
+  const m = deps({ store: movedClip({ items: [{ path: "/srv/a", isDir: false }, { path: "/srv/b", isDir: false }] }), same: true });
+  await handleRequest(mvPaste({ machine: "alias", folder: "/srv/in" }), m);
+  assert.equal(m.fileOpsCalls.filter((c) => c[0] === "inspectMove").length, 2);
+  assert.equal(mvStarts(m).length, 0);
+});
+test("paste cut cross: an unreadable machine list refuses before any question", async () => {
+  const d = deps({ store: movedClip(), same: null, answers: [{ choice: "move" }] });
+  const r = await handleRequest(mvPaste({ machine: "alias" }), d);
+  assert.deepEqual(r, { ok: false, error: "Could not tell whether both machines are the same" });
+  assert.equal(d.asked.length, 0);
+  assert.deepEqual(mvStarts(d), []);
+  assert.deepEqual(d.calls, []);
+});
+test("paste cut cross: two different machines run a transfer with from and move", async () => {
+  const d = deps({ store: movedClip(), same: false, answers: [{ choice: "move" }] });
+  await handleRequest(mvPaste({ machine: "other", folder: "/in" }), d);
+  assert.deepEqual(d.asked[0].item.direction, "cross");
+  assert.deepEqual([d.asked[0].item.from, d.asked[0].item.machine], ["box", "other"]);
+  const s = mvStarts(d)[0];
+  assert.deepEqual([s.direction, s.from, s.machine, s.move], ["cross", "box", "other", { root: "/srv", clipAt: 1 }]);
+});
+test("paste cut: the guard refuses the shown folder before the question", async () => {
+  const d = deps({ store: movedClip(), fileOpsError: "Refusing to delete the shown folder", answers: [{ choice: "move" }] });
+  const r = await handleRequest(mvPaste(), d);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "Refusing to delete the shown folder");
+  assert.equal(d.asked.length, 0);
+  assert.deepEqual(mvStarts(d), []);
+});
+test("paste cut: the marker probe refuses same folder and into itself after the question", async () => {
+  const d = deps({
+    store: movedClip({ items: [{ path: "/srv/a", isDir: false }, { path: "/srv/b", isDir: true }] }),
+    answers: [{ choice: "move" }], overlapBy: (a) => (a.src === "/srv/a" ? { error: "The target is the original's own folder" } : { ok: true }),
+  });
+  const r = await handleRequest(mvPaste(), d);
+  assert.equal(r.ok, true);
+  assert.deepEqual(mvStarts(d).map((a) => a.src), ["/srv/b"]);
+  assert.deepEqual(r.errors, [{ path: "/srv/a", error: "The target is the original's own folder" }]);
+  assert.equal(d.asked.length, 1, "the question comes before the probe");
+  const all = deps({ store: movedClip(), answers: [{ choice: "move" }], overlapBy: () => ({ error: "Cannot move a folder into itself" }) });
+  const r2 = await handleRequest(mvPaste(), all);
+  assert.deepEqual([r2.ok, r2.error], [false, "Cannot move a folder into itself"]);
+  assert.deepEqual(mvStarts(all), []);
+});
+test("paste cut: folders get no Merge, a preset merge never replaces", async () => {
+  const info = { name: "d", isDir: true, exists: true, destIsDir: true };
+  const d = deps({ store: movedClip({ items: [{ path: "/srv/d", isDir: true }] }), info, answers: [{ choice: "move" }, { choice: "cancel" }] });
+  await handleRequest(mvPaste(), d);
+  assert.deepEqual(d.asked[1].choices, ["replace", "keep_both", "cancel"]);
+  const p = deps({ store: movedClip({ items: [{ path: "/srv/d", isDir: true }] }), info, answers: [{ choice: "move" }] });
+  const r = await handleRequest(mvPaste({ conflict: "merge" }), p);
+  assert.deepEqual(mvStarts(p), []);
+  assert.equal(r.ok, false);
+  const m = deps({ store: movedClip({ items: [{ path: "/srv/d", isDir: true }] }), info, answers: [{ choice: "move" }, { choice: "merge" }] });
+  await handleRequest(mvPaste(), m);
+  assert.deepEqual(mvStarts(m), []);
+});
+test("paste cut: warn_cross_copy false still asks Move, Don't show again changes nothing", async () => {
+  const d = deps({ store: movedClip(), config: { warn_cross_copy: false }, answers: [{ choice: "move", apply_to_all: true }] });
+  await handleRequest(mvPaste({ machine: "other", folder: "/in" }), d);
+  assert.equal(d.asked.length, 1);
+  assert.deepEqual(d.asked[0].choices, ["move", "cancel"]);
+  assert.deepEqual(d.saves, []);
+  assert.equal(mvStarts(d).length, 1);
+});
+test("paste cut: a second item with a failing check is reported, the first one moves", async () => {
+  const d = deps({ store: movedClip({ items: [{ path: "/srv/a", isDir: false }, { path: "/srv/b", isDir: false }] }), answers: [{ choice: "move" }] });
+  const orig = d.fileOps.check;
+  d.fileOps.check = async (a) => (a.path === "/srv/b" ? { ok: false, error: "Refusing to delete the home folder" } : orig(a));
+  const r = await handleRequest(mvPaste(), d);
+  assert.deepEqual(mvStarts(d).map((a) => a.src), ["/srv/a"]);
+  assert.deepEqual(r.errors, [{ path: "/srv/b", error: "Refusing to delete the home folder" }]);
+  assert.equal(d.asked[0].item.count, 1);
 });

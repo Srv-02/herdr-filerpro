@@ -1811,3 +1811,453 @@ test("inspectArchive: an encrypted zip is refused before anything is asked or st
   assert.deepEqual(r, { error: "Encrypted archives are not supported" });
   assert.equal(f.hcRuns().length, 0);
 });
+
+// ---- #100: same machine, marker probe
+import { MARK_SCRIPT, UNMARK_SCRIPT, OVERLAP_SCRIPT } from "../mods/filer-pro/lib/jobs.js";
+
+test("sameMachine: true for one SSH target under two names, false for two, null when the list fails or a name is unknown", async () => {
+  const { f, jobs } = setup({ machines: { machines: [{ name: "box", target: "user@box" }, { name: "alias", target: "user@box" }, { name: "other", target: "user@other" }, { name: "cmd", via: true }] } });
+  assert.equal(await jobs.sameMachine("box", "alias"), true);
+  assert.equal(await jobs.sameMachine("box", "other"), false);
+  assert.equal(await jobs.sameMachine("box", "nope"), null);
+  assert.equal(await jobs.sameMachine("box", "cmd"), null);
+  f.machineReject = new Error("boom");
+  assert.equal(await jobs.sameMachine("box", "alias"), null);
+});
+test("overlap: the marker goes into the source's folder on the source side, the probe runs on the target side, the marker is removed", async () => {
+  const { f, jobs } = setup();
+  assert.deepEqual(await jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), { ok: true });
+  const scripts = f.execCalls.filter((c) => [MARK_SCRIPT, UNMARK_SCRIPT, OVERLAP_SCRIPT].includes(c.args[1]));
+  assert.deepEqual(scripts.map((c) => [c.args[1], c.on]), [[MARK_SCRIPT, "box"], [OVERLAP_SCRIPT, null], [UNMARK_SCRIPT, "box"]]);
+  assert.equal(scripts[0].args[3], "/srv/data");
+  assert.deepEqual(scripts[1].args.slice(3, 3), []);
+  assert.equal(scripts[1].args[3], DIR);
+  assert.equal(scripts[1].args[5], "a.txt");
+  assert.equal(scripts[0].args[4], scripts[1].args[4]);
+  assert.equal(scripts[2].args[4], scripts[0].args[4]);
+  const up = setup();
+  await up.jobs.overlap({ direction: "up", machine: "box", src: "/Users/m/a.txt", destDir: "/srv/in" });
+  const sc = up.f.execCalls.filter((c) => [MARK_SCRIPT, OVERLAP_SCRIPT, UNMARK_SCRIPT].includes(c.args[1]));
+  assert.deepEqual(sc.map((c) => [c.args[1], c.on]), [[MARK_SCRIPT, null], [OVERLAP_SCRIPT, "box"], [UNMARK_SCRIPT, null]]);
+  const cross = setup({ machines: { machines: [{ name: "a", target: "u@a" }, { name: "b", target: "u@b" }] } });
+  await cross.jobs.overlap({ direction: "cross", machine: "b", from: "a", src: "/s/x", destDir: "/d" });
+  assert.deepEqual(cross.f.execCalls.filter((c) => [MARK_SCRIPT, OVERLAP_SCRIPT, UNMARK_SCRIPT].includes(c.args[1])).map((c) => c.on), ["a", "b", "a"]);
+});
+test("overlap: same folder and into itself are refused", async () => {
+  const { f, jobs } = setup();
+  f.overlapOut = "same\n";
+  assert.deepEqual(await jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), { error: "The target is the original's own folder" });
+  f.overlapOut = "inside\n";
+  assert.deepEqual(await jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), { error: "Cannot move a folder into itself" });
+});
+test("overlap: a failing mark or probe refuses and still removes the marker", async () => {
+  const e = { error: "Could not check whether the target is the original's folder" };
+  const a = setup();
+  a.f.markFail = true;
+  assert.deepEqual(await a.jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), e);
+  assert.equal(a.f.execCalls.at(-1).args[1], UNMARK_SCRIPT);
+  assert.equal(a.f.execCalls.some((c) => c.args[1] === OVERLAP_SCRIPT), false);
+  const b = setup();
+  b.f.overlapCode = 3;
+  assert.deepEqual(await b.jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), e);
+  assert.equal(b.f.execCalls.at(-1).args[1], UNMARK_SCRIPT);
+  const c = setup();
+  c.f.execReject = new Error("ssh: down");
+  c.f.exec = ((orig) => async (cmd, args, opts) => { if (args?.[1] === OVERLAP_SCRIPT) throw new Error("x"); return orig(cmd, args, opts); })(c.f.exec);
+  const jc = createJobs(c.f.deps());
+  assert.deepEqual(await jc.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), e);
+  assert.equal(c.f.execCalls.at(-1).args[1], UNMARK_SCRIPT);
+});
+const sh = (script, ...args) => spawnSync("sh", ["-c", script, "x", ...args], { encoding: "utf8" });
+test("MARK_SCRIPT never overwrites an existing file", () => {
+  const d = mkTmpSync("fs-mark-");
+  assert.equal(sh(MARK_SCRIPT, d, "k1").status, 0);
+  assert.ok(fs.existsSync(`${d}/.filer-pro-mark-k1`));
+  fs.writeFileSync(`${d}/.filer-pro-mark-k2`, "mine");
+  assert.equal(sh(MARK_SCRIPT, d, "k2").status, 1);
+  assert.equal(fs.readFileSync(`${d}/.filer-pro-mark-k2`, "utf8"), "mine");
+  assert.equal(sh(MARK_SCRIPT, `${d}/nope`, "k3").status, 1);
+  assert.equal(sh(UNMARK_SCRIPT, d, "k1").status, 0);
+  assert.equal(fs.existsSync(`${d}/.filer-pro-mark-k1`), false);
+  assert.equal(sh(UNMARK_SCRIPT, d, "k1").status, 0);
+});
+test("OVERLAP_SCRIPT finds the marker through a symlinked target folder (same)", () => {
+  const d = fs.realpathSync(mkTmpSync("fs-overlap-"));
+  fs.mkdirSync(`${d}/p`);
+  fs.symlinkSync(`${d}/p`, `${d}/alias`);
+  fs.writeFileSync(`${d}/p/.filer-pro-mark-m1`, "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/alias`, "m1", "x").stdout.trim(), "same");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p`, "m1", "x").stdout.trim(), "same");
+});
+test("OVERLAP_SCRIPT: a target below the source folder is inside, a sibling folder is not", () => {
+  const d = fs.realpathSync(mkTmpSync("fs-overlap-"));
+  fs.mkdirSync(`${d}/p/x/deep/er`, { recursive: true });
+  fs.mkdirSync(`${d}/p/other`);
+  fs.writeFileSync(`${d}/p/.filer-pro-mark-m1`, "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/x`, "m1", "x").stdout.trim(), "inside");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/x/deep/er`, "m1", "x").stdout.trim(), "inside");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/other`, "m1", "x").stdout.trim(), "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/other/`, "m1", "x").status, 0);
+  // a link to the source folder is the source folder: cd -P resolves it
+  fs.symlinkSync(`${d}/p/x`, `${d}/p/lnk`);
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/lnk`, "m1", "x").stdout.trim(), "inside");
+});
+test("OVERLAP_SCRIPT: no marker prints nothing, an unreachable folder exits 3", () => {
+  const d = fs.realpathSync(mkTmpSync("fs-overlap-"));
+  fs.mkdirSync(`${d}/p`);
+  const r = sh(OVERLAP_SCRIPT, `${d}/p`, "m9", "x");
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.trim(), "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/missing`, "m9", "x").status, 3);
+});
+
+// ---- #100: move jobs. Every data-loss rule has its own test: the original is deleted only after a verified copy.
+import { MOVE_VERIFY_SCRIPT, KEPT_UNKNOWN, KEPT_MISMATCH, KEPT_CHANGED, KEPT_CANCELLED, KEPT_RESTART, KEPT_RESTART_DELETE, KEPT_NO_ROOT } from "../mods/filer-pro/lib/verify.js";
+
+const MOVE = { root: "/srv", clipAt: 1 };
+const mv = (x = {}) => down({ move: MOVE, ...x });
+const V = `v1 1 0 3 100 ${"a".repeat(64)}`;
+function mvSetup(over) {
+  const f = createFake(over);
+  f.verifies[`box:${SRC}`] = V;
+  f.verifies[`:${DIR}/a.txt`] = V;
+  const states = [], orig = f.setShared;
+  f.setShared = (k, v) => { if (k === "filer-pro.jobs" && v.id1) states.push(v.id1.state); return orig(k, v); };
+  return { f, states, jobs: createJobs(f.deps()) };
+}
+async function finishCopy(f, jobs, status = "state=done\ncode=0\n") {
+  f.terminals["term-fs-id1"] = { state: "finished" };
+  f.files[STATUS] = status;
+  await jobs.tick();
+  await jobs.drain();
+}
+const verifyCalls = (f) => f.execCalls.filter((c) => c.args[1] === MOVE_VERIFY_SCRIPT);
+const kept = (f) => f.jobs().id1;
+
+test("move: verified copy runs verifying, then deleting, then done moved; remove gets the checked path, the Cut root and 600 s", async () => {
+  const { f, states, jobs } = mvSetup();
+  await jobs.start(mv());
+  await finishCopy(f, jobs);
+  const seq = states.filter((s, i) => s !== states[i - 1]);
+  assert.deepEqual(seq, ["running", "verifying", "deleting", "done"]);
+  assert.deepEqual(f.removes(), [{ on: "box", path: SRC, root: "/srv", expect: SRC, timeout: 600000 }]);
+  assert.equal(kept(f).moved, true);
+  assert.equal(kept(f).kept, undefined);
+  assert.deepEqual(f.notifications, [{ title: "Moved", body: "a.txt", level: "success", action: { name: "filer-pro.reveal" } }]);
+  assert.equal(f.store["filer-pro.last_download"], `${DIR}/a.txt`);
+});
+test("move: verify runs with its own script and 600 s, L on the source and P on the target", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  await finishCopy(f, jobs);
+  const v = verifyCalls(f).map((c) => [c.args[3], c.args[4], c.on, c.timeout]);
+  assert.deepEqual(v, [[SRC, "L", "box", 600000], [`${DIR}/a.txt`, "P", null, 600000], [SRC, "L", "box", 600000]]);
+  assert.equal(f.execCalls.some((c) => c.args[1] === SIZE_SCRIPT && c.timeout === 5000), false);
+  const checks = f.fileOpsCalls.filter((c) => c[0] === "check").map((c) => c[1]);
+  assert.equal(checks.length, 2);
+  assert.ok(checks.every((a) => a.timeout === 600000 && a.root === "/srv" && a.on === "box"));
+});
+test("move: a different copy keeps the original", async () => {
+  const { f, jobs } = mvSetup();
+  f.verifies[`:${DIR}/a.txt`] = `v1 0 0 0 100 -`;
+  await jobs.start(mv());
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_MISMATCH);
+  assert.equal(kept(f).moved, undefined);
+  assert.deepEqual(f.removes(), []);
+  assert.deepEqual(f.notifications, [{ title: "Copied, source kept", body: KEPT_MISMATCH, level: "warning" }]);
+});
+test("move: same files and bytes but another content keeps the original", async () => {
+  const { f, jobs } = mvSetup();
+  f.verifies[`:${DIR}/a.txt`] = `v1 1 0 3 100 ${"b".repeat(64)}`;
+  await jobs.start(mv());
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_MISMATCH);
+  assert.deepEqual(f.removes(), []);
+});
+test("move: verify unknown or timed out keeps the original", async () => {
+  for (const target of ["timeout", "partial", "-1", "junk"]) {
+    const { f, jobs } = mvSetup();
+    f.verifies[`:${DIR}/a.txt`] = target;
+    await jobs.start(mv());
+    await finishCopy(f, jobs);
+    assert.equal(kept(f).kept, KEPT_UNKNOWN, target);
+    assert.deepEqual(f.removes(), []);
+  }
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  f.verifyError = new Error("ssh: gone");
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_UNKNOWN);
+  assert.deepEqual(f.removes(), []);
+});
+test("move: an original changed during the copy is kept", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  f.verifies[`box:${SRC}`] = [V.replace(" 100 ", " 101 ")];
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_CHANGED);
+  assert.deepEqual(f.removes(), []);
+});
+test("move: an original that grew during the copy is kept", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  f.verifies[`box:${SRC}`] = [`v1 1 0 4 100 ${"a".repeat(64)}`];
+  f.verifies[`:${DIR}/a.txt`] = [`v1 1 0 4 100 ${"a".repeat(64)}`];
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_CHANGED);
+  assert.deepEqual(f.removes(), []);
+});
+test("move: a guard refusal keeps the original", async () => {
+  const { f, jobs } = mvSetup();
+  f.checkOut = (a, n) => (n === 2 ? { ok: false, error: "Refusing to delete the shown folder" } : undefined);
+  await jobs.start(mv());
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, "Refusing to delete the shown folder");
+  assert.deepEqual(f.removes(), []);
+});
+test("move: a remove that refuses keeps the original with its reason", async () => {
+  const { f, jobs } = mvSetup();
+  f.removeOut = { ok: false, error: "Permission denied" };
+  await jobs.start(mv());
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, "Could not delete the original: Permission denied");
+  assert.equal(kept(f).moved, undefined);
+  assert.equal(f.removes().length, 1);
+});
+test("move: the checked path moved (a link was bent) keeps the original", async () => {
+  const { f, jobs } = mvSetup();
+  f.checkOut = (a, n) => (n === 2 ? { ok: true, path: "/elsewhere/a.txt", name: "a.txt", isDir: false } : undefined);
+  await jobs.start(mv());
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_CHANGED);
+  assert.deepEqual(f.removes(), []);
+});
+test("move: a failed, cancelled or stalled copy never verifies or deletes", async () => {
+  for (const [status, stalled] of [["state=failed\ncode=1\nboom\n", false], ["state=cancelled\ncode=1\n", false], ["state=cancelled\ncode=1\n", true]]) {
+    const { f, jobs } = mvSetup();
+    f.store["filer-pro.clipboard"] = { machine: "box", items: [{ path: SRC, isDir: false }], at: 1, cut: true, root: "/srv" };
+    const clip = JSON.stringify(f.store["filer-pro.clipboard"]);
+    await jobs.start(mv());
+    if (stalled) f.store["filer-pro.jobs"].id1.stalled = true;
+    await finishCopy(f, jobs, status);
+    assert.equal(verifyCalls(f).length, 1, "only the check before the copy");
+    assert.deepEqual(f.removes(), []);
+    assert.equal(f.fileOpsCalls.filter((c) => c[0] === "check").length, 1);
+    assert.equal(JSON.stringify(f.store["filer-pro.clipboard"]), clip);
+    assert.equal(kept(f).moved, undefined);
+  }
+});
+test("move: a copy killed hard (no status) never verifies or deletes", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  f.terminals["term-fs-id1"] = { state: "finished", reason: "killed" };
+  await jobs.tick();
+  await jobs.drain();
+  assert.equal(kept(f).state, "cancelled");
+  assert.equal(verifyCalls(f).length, 1);
+  assert.deepEqual(f.removes(), []);
+});
+test("move: cancel during verifying keeps the original and never dismisses", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  let dismissedDuring = null;
+  f.onVerify = (key, links) => {
+    if (links !== "P") return;
+    jobs.cancel("id1");
+    jobs.dismiss("id1");
+    dismissedDuring = f.jobs().id1?.state;
+  };
+  await finishCopy(f, jobs);
+  assert.equal(dismissedDuring, "verifying");
+  assert.equal(kept(f).kept, KEPT_CANCELLED);
+  assert.deepEqual(f.removes(), []);
+  assert.equal(f.hcCalls.some((a) => a[0] === "kill"), false);
+});
+test("move: cancel during deleting is recorded but the running delete finishes", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  let during = null;
+  f.onRemove = () => {
+    jobs.cancel("id1");
+    jobs.dismiss("id1");
+    during = f.jobs().id1;
+  };
+  await finishCopy(f, jobs);
+  assert.equal(during.state, "deleting");
+  assert.equal(during.cancelRequested, true);
+  assert.equal(kept(f).moved, true);
+  assert.equal(f.hcCalls.some((a) => a[0] === "kill"), false);
+});
+test("recover: a finished move job is kept and never deleted", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  f.getFail = true;
+  f.files[STATUS] = "state=done\ncode=0\n";
+  await jobs.recover();
+  await jobs.drain();
+  assert.equal(kept(f).kept, KEPT_RESTART);
+  assert.equal(verifyCalls(f).length, 1);
+  assert.deepEqual(f.removes(), []);
+  assert.equal(f.notifications.at(-1).title, "Copied, source kept");
+});
+test("recover: a finished terminal of a move job is kept too", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  f.terminals["term-fs-id1"] = { state: "finished" };
+  f.files[STATUS] = "state=done\ncode=0\n";
+  await jobs.recover();
+  await jobs.drain();
+  assert.equal(kept(f).kept, KEPT_RESTART);
+  assert.deepEqual(f.removes(), []);
+});
+test("recover: a live move job is marked and later kept", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(mv());
+  await jobs.recover();
+  assert.equal(f.jobs().id1.state, "running");
+  assert.equal(f.jobs().id1.move.recovered, true);
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_RESTART);
+  assert.equal(verifyCalls(f).length, 1);
+  assert.deepEqual(f.removes(), []);
+});
+test("recover: verifying and deleting snapshots end kept", async () => {
+  const { f, jobs } = mvSetup();
+  const snap = (id, state) => ({ id, state, direction: "down", machine: "box", src: SRC, name: "a.txt", dest: `${DIR}/a.txt`, move: { root: "/srv", clipAt: 1, srcOn: "box", physical: SRC, before: parse(V) } });
+  const parse = () => ({});
+  f.store["filer-pro.jobs"] = { v: snap("v", "verifying"), d: snap("d", "deleting") };
+  await jobs.recover();
+  assert.equal(f.jobs().v.kept, KEPT_RESTART);
+  assert.equal(f.jobs().d.kept, KEPT_RESTART_DELETE);
+  assert.deepEqual(f.removes(), []);
+});
+test("lease change: recover ends a verifying job, the old finishMove does not delete", async () => {
+  const { f, jobs } = mvSetup();
+  const jobs2 = createJobs(f.deps());
+  await jobs.start(mv());
+  f.onVerify = (key, links) => { if (links === "P") jobs2.recover(); };
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_RESTART);
+  assert.equal(kept(f).moved, undefined);
+  assert.deepEqual(f.removes(), []);
+  assert.equal(f.notifications.filter((n) => n.title === "Moved").length, 0);
+});
+test("lease change: a recover during the delete is not overwritten by the late delete result", async () => {
+  const { f, jobs } = mvSetup();
+  const jobs2 = createJobs(f.deps());
+  await jobs.start(mv());
+  f.onRemove = () => { jobs2.recover(); };
+  await finishCopy(f, jobs);
+  assert.equal(kept(f).kept, KEPT_RESTART_DELETE);
+  assert.equal(kept(f).moved, undefined);
+});
+test("an old snapshot without move never deletes", async () => {
+  const { f, jobs } = mvSetup();
+  await jobs.start(down());
+  await finishCopy(f, jobs);
+  assert.deepEqual(f.notifications.map((n) => n.title), ["Downloaded"]);
+  assert.deepEqual(f.fileOpsCalls, []);
+  assert.equal(verifyCalls(f).length, 0);
+});
+test("a move job snapshot without a complete move record never deletes", async () => {
+  for (const cut of ["physical", "before", "root"]) {
+    const { f, jobs } = mvSetup();
+    await jobs.start(mv());
+    const j = f.store["filer-pro.jobs"].id1;
+    delete j.move[cut];
+    await finishCopy(f, jobs);
+    assert.equal(kept(f).kept, KEPT_UNKNOWN, cut);
+    assert.deepEqual(f.removes(), []);
+  }
+});
+test("start move: no root or a refused guard fails before any copy", async () => {
+  for (const [move, over, error] of [
+    [{ clipAt: 1 }, {}, KEPT_NO_ROOT],
+    [{ root: "", clipAt: 1 }, {}, KEPT_NO_ROOT],
+    [MOVE, { checkOut: { ok: false, error: "Refusing to delete the shown folder" } }, "Refusing to delete the shown folder"],
+    [MOVE, { verify: "junk" }, "Could not check the original before the copy"],
+  ]) {
+    const { f, jobs } = mvSetup();
+    if (over.checkOut) f.checkOut = over.checkOut;
+    if (over.verify) f.verifies[`box:${SRC}`] = over.verify;
+    const job = await jobs.start(down({ move }));
+    assert.equal(job.state, "failed");
+    assert.equal(job.error, error);
+    assert.equal(f.hcRuns().length, 0);
+    assert.deepEqual(f.removes(), []);
+  }
+  const f = createFake();
+  const job = await createJobs({ ...f.deps(), fileOps: undefined }).start(mv());
+  assert.deepEqual([job.state, job.error, f.hcRuns().length], ["failed", KEPT_NO_ROOT, 0]);
+});
+test("start move: the source is verified before the copy and its bytes are the total", async () => {
+  const { f, jobs } = mvSetup();
+  const job = await jobs.start(mv());
+  assert.equal(job.total, 3);
+  assert.equal(f.jobs().id1.move.before.bytes, 3);
+  assert.equal(f.jobs().id1.move.physical, SRC);
+  assert.deepEqual(f.jobs().id1.move.srcOn, "box");
+  assert.equal(f.execCalls.some((c) => c.args[1] === SIZE_SCRIPT), false);
+  assert.equal(f.hcRuns().length, 1);
+});
+test("move clipboard: moved drops its item, kept keeps the Cut, copyJobs is not used", async () => {
+  const clip = () => ({ machine: "box", items: [{ path: SRC, isDir: false }, { path: "/srv/data/b.txt", isDir: false }], at: 1, cut: true, root: "/srv", copyJobs: ["id1"] });
+  const a = mvSetup();
+  a.f.store["filer-pro.clipboard"] = clip();
+  await a.jobs.start(mv());
+  await finishCopy(a.f, a.jobs);
+  assert.deepEqual(a.f.store["filer-pro.clipboard"].items, [{ path: "/srv/data/b.txt", isDir: false }]);
+  assert.equal(a.f.store["filer-pro.clipboard"].cut, true);
+  const b = mvSetup();
+  b.f.verifies[`:${DIR}/a.txt`] = "timeout";
+  b.f.store["filer-pro.clipboard"] = clip();
+  await b.jobs.start(mv());
+  await finishCopy(b.f, b.jobs);
+  assert.deepEqual(b.f.store["filer-pro.clipboard"], clip());
+  const c = mvSetup(); // another Cut
+  c.f.store["filer-pro.clipboard"] = { ...clip(), at: 2 };
+  await c.jobs.start(mv());
+  await finishCopy(c.f, c.jobs);
+  assert.deepEqual(c.f.store["filer-pro.clipboard"], { ...clip(), at: 2 });
+  const d = mvSetup(); // the last item: the Cut is empty
+  d.f.store["filer-pro.clipboard"] = { machine: "box", items: [{ path: SRC, isDir: false }], at: 1, cut: true, root: "/srv" };
+  await d.jobs.start(mv());
+  await finishCopy(d.f, d.jobs);
+  assert.equal(d.f.store["filer-pro.clipboard"], null);
+  const e = mvSetup(); // a clipboard on another machine
+  e.f.store["filer-pro.clipboard"] = { ...clip(), machine: "other" };
+  await e.jobs.start(mv());
+  await finishCopy(e.f, e.jobs);
+  assert.equal(e.f.store["filer-pro.clipboard"].items.length, 2);
+});
+test("keep_both move verifies the new name and deletes the source name", async () => {
+  const { f, jobs } = mvSetup();
+  f.listings[DIR] = ["a.txt"];
+  f.verifies[`:${DIR}/a-1.txt`] = V;
+  await jobs.start(mv({ choice: "keep_both" }));
+  await finishCopy(f, jobs);
+  assert.ok(verifyCalls(f).some((c) => c.args[3] === `${DIR}/a-1.txt` && c.args[4] === "P"));
+  assert.equal(f.removes()[0].path, SRC);
+  assert.equal(kept(f).moved, true);
+});
+test("move up: the original goes to the Trash", async () => {
+  const { f, jobs } = mvSetup();
+  f.verifies[":/Users/m/a.txt"] = V;
+  f.verifies["box:/srv/in/a.txt"] = V;
+  await jobs.start({ direction: "up", machine: "box", src: "/Users/m/a.txt", destDir: "/srv/in", choice: "new", move: { root: "/Users/m", clipAt: 1 } });
+  await finishCopy(f, jobs);
+  assert.deepEqual(f.removes(), [{ on: null, path: "/Users/m/a.txt", root: "/Users/m", expect: "/Users/m/a.txt", timeout: 600000 }]);
+  assert.equal(kept(f).trashed, true);
+  assert.deepEqual(f.notifications, [{ title: "Moved", body: "a.txt", level: "success" }]);
+});
+test("move cross: verifies P on the target machine, L on the source machine, deletes on the source machine", async () => {
+  const { f, jobs } = mvSetup({ machines: { machines: [{ name: "box", target: "u@box" }, { name: "other", target: "u@other" }] } });
+  f.verifies["other:/dst/a.txt"] = V;
+  await jobs.start({ direction: "cross", from: "box", machine: "other", src: SRC, destDir: "/dst", choice: "new", move: MOVE });
+  await finishCopy(f, jobs);
+  assert.deepEqual(verifyCalls(f).map((c) => [c.args[3], c.args[4], c.on]), [[SRC, "L", "box"], ["/dst/a.txt", "P", "other"], [SRC, "L", "box"]]);
+  assert.equal(f.removes()[0].on, "box");
+  assert.deepEqual(f.notifications.map((n) => n.title), ["Moved"]);
+  assert.equal(f.notifications[0].action, undefined);
+});

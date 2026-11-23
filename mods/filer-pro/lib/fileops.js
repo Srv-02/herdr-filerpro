@@ -332,7 +332,8 @@ export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
 
   // The guard for delete and rename: normalized path, then the physical check. Nothing is changed here.
   // path in the answer is the checked physical one (physical parent plus name): rm, mv and trash get that.
-  async function check({ on = null, path, root, verb = "delete" }) {
+  async function check({ on = null, path, root, verb = "delete", timeout }) {
+    const lim = timeout !== undefined ? { timeout } : {};
     if (typeof root !== "string" || root === "") return { ok: false, error: "root is required" };
     if (typeof path !== "string" || !path.startsWith("/")) return { ok: false, error: "path must be absolute" };
     if (!root.startsWith("/")) return { ok: false, error: "root must be absolute" };
@@ -342,7 +343,7 @@ export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
     if (early) return { ok: false, error: early };
     let res;
     try {
-      res = await run("sh", ["-c", GUARD_SCRIPT, "x", p, r, nameKey(baseName(p)) === nameKey(baseName(r)) ? "1" : "0", ""], on);
+      res = await run("sh", ["-c", GUARD_SCRIPT, "x", p, r, nameKey(baseName(p)) === nameKey(baseName(r)) ? "1" : "0", ""], on, lim);
     } catch (e) {
       return failure(e, on);
     }
@@ -400,14 +401,15 @@ export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
   // expect: the physical path the user confirmed (check before the dialog). The new check must land on the
   // same entry, else a link in the path was bent while the dialog was open and nothing is deleted.
   async function remove({ on = null, path, root, expect, timeout }) {
-    const c = await check({ on, path, root, verb: "delete" });
+    const c = await check({ on, path, root, verb: "delete", timeout });
     if (!c.ok) return c;
+    const lim = timeout !== undefined ? { timeout } : {};
     if (expect !== undefined && c.path !== expect) return { ok: false, error: "The item changed while the dialog was open" };
     const done = { name: c.name, isDir: c.isDir };
     if (on) {
       let res;
       try {
-        res = await run("sh", ["-c", REMOVE_SCRIPT, "x", c.path, normalizePath(path)], on, timeout !== undefined ? { timeout } : {});
+        res = await run("sh", ["-c", REMOVE_SCRIPT, "x", c.path, normalizePath(path)], on, lim);
       } catch (e) {
         return failure(e, on);
       }
@@ -416,13 +418,13 @@ export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
     // trash has no "--": the path is absolute, so a leading "-" in a name cannot be read as an option.
     let res;
     try {
-      res = await run("sh", ["-c", CONFIRM_SCRIPT, "x", c.path, normalizePath(path)], null);
+      res = await run("sh", ["-c", CONFIRM_SCRIPT, "x", c.path, normalizePath(path)], null, lim);
     } catch (e) {
       return failure(e, null);
     }
     if (res.code !== 0) return { ok: false, error: explainError(res.stderr, null, "The path changed while it was checked") };
     try {
-      res = await run(trashBin, ["-s", "-v", c.path], null);
+      res = await run(trashBin, ["-s", "-v", c.path], null, lim);
     } catch {
       return { ok: false, error: "Moving to the Trash needs macOS 15 or later" };
     }

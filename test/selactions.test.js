@@ -12,8 +12,8 @@ test("#99 download: a machine gets paths and dest_dir, this computer a copy requ
 });
 test("#99 copy and cut: one clip request with the list", () => {
   const list = [{ path: "/srv/a b", is_dir: false }, { path: "/srv/d", is_dir: true }];
-  assert.deepEqual(selectionRequest("copy", { on: "box", root: "/srv", items }), { action: "clip", machine: "box", items: list });
-  assert.deepEqual(selectionRequest("cut", { on: null, root: "/srv", items }), { action: "clip", items: list, cut: true });
+  assert.deepEqual(selectionRequest("copy", { on: "box", root: "/srv", items }), { action: "clip", machine: "box", items: list, root: "/srv" });
+  assert.deepEqual(selectionRequest("cut", { on: null, root: "/srv", items }), { action: "clip", items: list, cut: true, root: "/srv" });
 });
 test("#99 delete: paths and root", () => {
   assert.deepEqual(selectionRequest("delete", { on: "box", root: "/srv", items }), { action: "delete", machine: "box", paths: ["/srv/a b", "/srv/d"], root: "/srv" });

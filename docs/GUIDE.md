@@ -11,7 +11,7 @@ Everything Filer Pro does, in detail. For the overview, see the [README](../READ
 - [Extracting archives](#extracting-archives)
 - [Editing plain text](#editing-plain-text): [Edit mode](#edit-mode), [Which files can be edited](#which-files-can-be-edited), [Saving](#saving), [Files that grow past 1 MiB](#files-that-grow-past-1-mib)
 - [Editors](#editors): [Choosing and adding editors](#choosing-and-adding-editors), [How editor commands run](#how-editor-commands-run), [Remote files](#remote-files)
-- [Transfers](#transfers): [Copy between machines](#copy-between-machines)
+- [Transfers](#transfers): [Copy between machines](#copy-between-machines), [Move between machines](#move-between-machines)
 - [Permissions](#permissions)
 - [Settings](#settings): [Settings dialog](#settings-dialog), [Saving settings](#saving-settings), [Config file](#config-file), [All settings](#all-settings), [SVG check](#svg-check)
 - [Updates](#updates): [Privacy](#privacy)
@@ -316,6 +316,7 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 
 - Drop files from the Finder to upload, right click to download.
 - Every transfer shows progress and can be cancelled.
+- **Cut** on one side and **Paste** on the other moves: see [Move between machines](#move-between-machines).
 - Nothing is overwritten without asking.
 - **Several rows at once:** select rows, then right click one of them or use the selection bar. **Download**, **Copy**, **Cut**, **Paste**, **Copy Paths** and **Delete** act on every selected row in one step. A folder and a file inside it count once, as the folder. A conflict is asked once with **Apply to all**. A move of several items never offers **Merge**. **Delete** asks once and lists the names. On a machine a delete stops after 120 s.
 - Timeouts and how long finished transfers stay visible: **Transfers & connections** in [All settings](#all-settings).
@@ -325,7 +326,18 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 - Copy on one machine and Paste on another copies between the two machines through this computer (`scp -3`): the data travels over your connection twice, and the two machines need no access to each other.
 - A short warning names both machines and the amount first. **Don't show again** in it, or **Warn before copying between machines** in Settings, turns it off.
 - When a folder to copy could not be read completely (or counting took too long), the warning before a copy between machines leaves out the size of the batch and the job shows no percentage.
-- Cut and Paste between two machines is not possible.
+
+### Move between machines
+
+- Cut on this computer or on a machine, Paste on the other side (or on a third machine): Filer Pro copies first, checks the copy, and only then deletes the original.
+- A dialog asks before each paste: **Move from `host-a` to this computer?** An original on a machine is deleted for good (no Trash), the dialog says so in red and the **Move** button is red. A local original goes to the Trash on this computer. **Cancel** starts nothing.
+- The check compares files, folders, bytes and the newest change of the original before and after the copy. Up to 1 GB it also compares a SHA-256 of the content, which needs `sha256sum`, `shasum` or `sha256` on both sides. Larger items count files, folders and bytes only.
+- Every other ending keeps the original and says why in a `Copied, source kept` toast: the copy failed, was cancelled or stalled, the check failed or timed out, the original changed during the copy, a delete guard refused, or Herdr was restarted. The Cut stays, so the item can be pasted again. Only a moved item leaves the Cut.
+- A move never offers **Merge**. **Replace** and **Keep both** work as for a copy.
+- A target that is the original's own folder, or a folder inside the original, is refused. This also catches two machine names that reach the same folder.
+- Two machine names for one SSH host move on that host, without a copy. If Filer Pro cannot tell whether two machines are the same, the paste is refused.
+- A Cut remembers the folder the tree showed. A Cut made without it (older entries) cannot move to another side: Cut it again.
+- The transfers bar marks a move with `✂` and names the phase: `Checking the copy…`, `Deleting the original…`. **✕** during the check keeps the original.
 
 ## Permissions
 
