@@ -10,6 +10,7 @@ import path from "node:path";
 import { mkTmpSync } from "./tmp-helper.js";
 import { PROBE_SCRIPT, COMMIT_SCRIPT, CHECK_TIMEOUT_MS } from "../mods/filer-pro/lib/textedit.js";
 import { numbers } from "../mods/filer-pro/lib/settings.js";
+import { createTree, pinnedContext } from "../mods/filer-pro/lib/treestate.js";
 
 const FAKE_SSH = path.resolve(import.meta.dirname, "fake", "ssh");
 const FAKE_SCP = path.resolve(import.meta.dirname, "fake", "scp");
@@ -1013,4 +1014,82 @@ test("a handover that cannot be taken leaves nothing behind: the dialog reads th
     assert.equal(d.code.value(), "one\n", "read from disk");
     assert.equal(d.editCheck.state, "ok", "the normal edit check");
   });
+});
+
+// #101: a file opened from the lower tree reads, probes and saves under that tree's root, and a focus switch of the upper tree keeps it.
+function withPinned(w, self) {
+  const lower = path.join(w.base, "lower");
+  fs.mkdirSync(lower);
+  self.trees.pinned = Object.assign(createTree("pinned"), { context: pinnedContext(lower), root: lower, on: null });
+  return lower;
+}
+
+test("#101 a file from a second tree reads, probes and saves under that tree's root", async () => {
+  const w = world();
+  const self = await panel(w);
+  const lower = withPinned(w, self);
+  fs.writeFileSync(path.join(lower, "notes.txt"), "one\n");
+  self.show("notes.txt", w.cx, { tree: self.trees.pinned });
+  await settle();
+  assert.ok(w.log.reads.includes(path.join(lower, "notes.txt")));
+  assert.equal(PROBES(w).length, 1);
+  assert.equal(PROBES(w)[0].args.at(-1) === undefined, false);
+  assert.ok(PROBES(w)[0].args.some((a) => a === path.join(lower, "notes.txt")));
+  assert.equal(self.trees.pinned.lastOpened, "notes.txt");
+  assert.equal(self.trees.follow.lastOpened, null);
+  click(render(self, w), "files-edit", w.cx);
+  await settle();
+  type(w, lastState(w), "two\n");
+  click(render(self, w), "files-save", w.cx);
+  await settle();
+  assert.equal(fs.readFileSync(path.join(lower, "notes.txt"), "utf8"), "two\n");
+});
+
+test("#101 a focus switch keeps a file opened from the second tree, also with unsaved edits", async () => {
+  const w = world();
+  const self = await panel(w);
+  const lower = withPinned(w, self);
+  fs.writeFileSync(path.join(lower, "notes.txt"), "one\n");
+  self.show("notes.txt", w.cx, { tree: self.trees.pinned });
+  await settle();
+  click(render(self, w), "files-edit", w.cx);
+  await settle();
+  type(w, lastState(w), "dirty\n");
+  const other = path.join(w.base, "other");
+  fs.mkdirSync(other);
+  const impl = globalThis.__impl, spaces = impl.spaces;
+  impl.spaces = () => [{ active: true, id: "s1", folder: other, machine: null }];
+  try {
+    self.refresh(w.cx);
+    await settle();
+    assert.equal(self.file, "notes.txt");
+    assert.ok(self.edit?.dirty);
+    assert.notEqual(self.trees.follow.context.key, undefined);
+    assert.equal(self.trees.follow.root, other);
+  } finally { impl.spaces = spaces; }
+});
+
+test("#101 the upper tree's saved file is not restored over a file of the second tree", async () => {
+  const w = world();
+  w.put("a.md", "a\n");
+  const self = await panel(w);
+  const lower = withPinned(w, self);
+  fs.writeFileSync(path.join(lower, "notes.txt"), "one\n");
+  await opened(w, self, "a.md");
+  const first = self.context.key;
+  const other = path.join(w.base, "other");
+  fs.mkdirSync(other);
+  const impl = globalThis.__impl, spaces = impl.spaces;
+  try {
+    impl.spaces = () => [{ active: true, id: "s1", folder: other, machine: null }];
+    self.refresh(w.cx);
+    await settle();
+    self.show("notes.txt", w.cx, { tree: self.trees.pinned });
+    await settle();
+    impl.spaces = spaces;
+    self.refresh(w.cx);
+    await settle();
+    assert.equal(self.file, "notes.txt");
+    assert.equal(self.saved.get(first).file, "a.md");
+  } finally { impl.spaces = spaces; }
 });

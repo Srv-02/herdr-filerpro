@@ -141,10 +141,11 @@ export default class FilerPro extends View {
       }
       if (props().view === "file") {
         // The fullscreen copy of one file: reads it itself with the panel's show(), under a fixed context.
-        this.context = { key: null, cwd: props().root, on: props().machine ?? null, fixed: true };
+        this.context = { key: null, cwd: props().root, on: props().machine ?? null, fixed: true, tree: "follow" };
         this.root = this.context.cwd; this.on = this.context.on;
         this.fullView = true; this.pdfFocus = cx.focus_handle(); this.spread = false; // the dialog always starts with Single page
         bindZoomKeys(cx, shared, setShared, Date.now);
+        this.fileTree = this.trees.follow;
         this.show(props().path, cx, { mode: props().mode, page: props().page, pages: props().pages, force: props().force });
         this.startFullscreen(cx);
       }
@@ -212,6 +213,16 @@ export default class FilerPro extends View {
   // The trees of this copy: follow is the upper one (the terminal's folder), pinned the lower one on this computer.
   // Lazy: tests build views with Object.create(FilerPro.prototype).
   get trees() { return (this._trees ??= { follow: createTree("follow"), pinned: null }); }
+
+  // The tree the open file came from (show opts.tree) and its place: a file of the lower tree stays readable while the
+  // upper tree follows the focus elsewhere. Without an open file (or in tests that never set it) the upper tree.
+  fileSide() {
+    const tree = this.fileTree ?? this.trees.follow;
+    return { tree, root: tree.root, on: tree.on, context: tree.context };
+  }
+
+  // Does the open file belong to this tree (or is none open)? Only then a tree switch may touch the file and its buffer.
+  ownsFile(tree) { return !this.file || this.fileSide().tree === tree; }
 
   // The current settings of this copy: the config read last, or the defaults before the first read.
   get conf() { return this.cfg ?? DEFAULTS; }
@@ -773,8 +784,12 @@ export default class FilerPro extends View {
 
   // An overlay copy has a fixed context: the focused terminal may change while it is open.
   current(context) {
-    return this.context === context && (context.fixed || this.target().key === context.key);
+    const tree = this.treeOf(context);
+    return Boolean(tree) && tree.context === context && (context.fixed || this.target().key === context.key);
   }
+
+  // The tree a context belongs to (the lower tree's context says so; every other one is the upper tree's).
+  treeOf(context) { return context?.tree === "pinned" ? this.trees.pinned : this.trees.follow; }
 
   // The focused terminal's location ({ cwd, on, space }) and the root shown for it: its folder, or the folder navigated
   // to from there with Up or Go to / (issue #59), until Back to the terminal's folder (a cd there does not end it). key: the context key
@@ -791,9 +806,10 @@ export default class FilerPro extends View {
   // the new root (lib/navigate.js carry). Refused while the open file has unsaved changes.
   navigate(root, cx) {
     if (!root || !this.context || root === this.root) return;
-    if (this.edit?.dirty) { notify({ title: "Filer Pro", body: "Unsaved changes in the open file", level: "error" }); return; }
+    const own = this.ownsFile(this.trees.follow);
+    if (own && this.edit?.dirty) { notify({ title: "Filer Pro", body: "Unsaved changes in the open file", level: "error" }); return; }
     if (!setRoot(this.nav ??= new Map(), paneId(focused()), location(), root)) return;
-    const state = carry({ folders: this.folders, packages: this.packages, selected: this.selected, file: this.file, lastOpened: this.lastOpened }, this.root, root);
+    const state = carry({ folders: this.folders, packages: this.packages, selected: this.selected, file: own ? this.file : null, lastOpened: this.lastOpened }, this.root, root);
     this.carried = { key: this.target().key, ...state, selecting: this.selecting === true }; // the anchor is not carried
     this.refresh(cx);
     cx.notify();
@@ -828,16 +844,18 @@ export default class FilerPro extends View {
     // cwd: the shown root (the terminal's folder or the one navigated to); listing, git and the watch use it.
     const { root: cwd, on, key: next } = this.target();
     if (next !== this.context?.key) {
-      if (this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
-      if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, selected: this.selected, selecting: this.selecting === true, file: this.file, lastOpened: this.lastOpened });
+      // A file opened from the other tree is not touched by a switch of this one.
+      const own = this.ownsFile(this.trees.follow);
+      if (own && this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
+      if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, selected: this.selected, selecting: this.selecting === true, file: own ? this.file : this.saved.get(this.context.key)?.file ?? null, lastOpened: this.lastOpened });
       // A navigation carries the tree along (navigate); a switch of terminal or folder restores what was left there.
       const saved = this.carried?.key === next ? this.carried : this.saved.get(next);
       this.carried = null;
-      this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.realFolders = new Map(); this.fileReal = null; this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
-      this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.gitWatch = null; this.error = null; this.limited = false;
+      this.context = { key: next, cwd, on, tree: "follow" }; this.root = cwd; this.on = on; this.entries = new Map(); this.realFolders = new Map(); this.fileReal = null; this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
+      this.pending = new Set(); this.marks = {}; if (own) this.show(null); this.watched = null; this.gitWatch = null; this.error = null; this.limited = false;
       this.loading = false; this.again = false; this.fileWanted = 0; this.fileForce = false; this.lastOpened = saved?.lastOpened ?? null;
       this.setSelection({ selected: new Set(saved?.selected) }); this.selecting = saved?.selecting === true; // anchor and base are not restored
-      if (saved?.file) this.show(saved.file, cx); // read fresh: no file reload needed
+      if (own && saved?.file) this.show(saved.file, cx, { tree: this.trees.follow }); // read fresh: no file reload needed
       file = 0; force = false;
     }
     this.fileWanted = Math.max(this.fileWanted ?? 0, file === true ? FILE_ALL : file || 0);
@@ -1062,7 +1080,7 @@ export default class FilerPro extends View {
       this.navigate(parentOf(r.path), cx);
       if (this.root !== parentOf(r.path)) { notify({ title: "Filer Pro", body: `Cannot show ${r.path}`, level: "error" }); return; }
     }
-    this.show(rel ?? baseName(r.path), cx);
+    this.show(rel ?? baseName(r.path), cx, { tree: this.trees.follow });
     cx.notify();
   }
 
@@ -1074,35 +1092,37 @@ export default class FilerPro extends View {
     this.showSeen = s.id;
     if (this.target().key !== this.context?.key) this.refresh(cx);
     const bus = { getShared: shared, setShared };
+    const side = this.fileSide();
     const plan = panelPlan({ on: this.on, root: this.root, file: this.file }, s);
     if (!plan.hit) { answerShow(bus, s.id, false, { ok: false, error: plan.error }); return; }
     if (s.action === "mode" && this.edit) { answerShow(bus, s.id, true, { ok: false, error: "Leave edit mode first" }); return; }
     if (s.action !== "mode" && this.edit?.dirty) { answerShow(bus, s.id, true, { ok: false, error: "Unsaved changes in the open file" }); return; }
     if (s.action === "mode") {
       if (this.doc?.kind === "image" || this.doc?.kind === "pdf") { answerShow(bus, s.id, true, { ok: false, error: this.doc.kind === "pdf" ? "PDFs have no source view" : "Images have no source view", mode: "preview" }); return; }
-      const out = modeResult(joinPath(this.root, this.file), s.mode, Boolean(this.previewer && this.doc));
+      const out = modeResult(joinPath(side.root, this.file), s.mode, Boolean(this.previewer && this.doc));
       if (out.ok) { this.mode = out.mode; cx.notify(); }
       answerShow(bus, s.id, true, out);
       return;
     }
     answerShow(bus, s.id, true, null); // taken, the file is loading
-    this.show(plan.rel, cx, { mode: s.mode, onDone: (state) => answerShow(bus, s.id, true, openResult(s.path, s.mode, state)) });
+    this.show(plan.rel, cx, { tree: this.trees.follow, mode: s.mode, onDone: (state) => answerShow(bus, s.id, true, openResult(s.path, s.mode, state)) });
     cx.notify();
   }
 
   // opts (request action open): mode "source" keeps the source although a preview exists; onDone(state)
   // gets { error, mode, preview } once the file is on screen (or could not be shown).
   show(path, cx, opts = {}) {
+    if (opts.tree) this.fileTree = opts.tree;
     this.leaveEdit(); this.editCheck = null; this.bigSaved = null;
     if (path !== this.file || !this.zoom) this.zoom = this.fullView ? "page" : "width"; // the zoom stays while the same file is shown again; a new file starts at Page (dialog) or Width (panel)
     this.doc2 = null; this.sharp = new Map();
     this.code?.release(); this.code = null; this.file = path; this.fileError = null; this.openable = false; this.shownText = null; this.docText = null; this.waiting = null;
-    if (path) this.lastOpened = path; // marked in the tree after back (show(null) keeps it)
+    if (path) this.fileSide().tree.lastOpened = path; // marked in the tree after back (show(null) keeps it)
     this.doc = null; this.mode = "source"; this.previewer = null; this.previewWidth = 0; this.previewHeight = 0; this.colorKey = null;
     this.page = opts.page ?? 1; this.pages = opts.pages ?? null; this.force = Boolean(opts.force); this.loader = null; this.loadKey = null; this.loadName = null;
     if (!path || !cx) return;
     // A macOS package is a folder: the viewer never reads it as a file (a double click opens it, see rows()).
-    if (this.entryAt(path)?.bundle) {
+    if (this.entryAt(path, this.fileSide().tree)?.bundle) {
       this.fileError = "This is a package: use Open, or Show Package Contents";
       cx.notify();
       opts.onDone?.({ error: this.fileError, mode: "source" });
@@ -1111,12 +1131,12 @@ export default class FilerPro extends View {
     // A known binary extension (lib/binary.js) is never read: no 1 MiB over SSH, no launch either. Locally the
     // message has an Open button; whoever wants to start an app does it before show() (clickFile).
     if (isBinaryName(path)) {
-      this.fileError = BINARY_MESSAGE; this.openable = !this.on;
+      this.fileError = BINARY_MESSAGE; this.openable = !this.fileSide().on;
       cx.notify();
       opts.onDone?.({ error: this.fileError, mode: "source" });
       return;
     }
-    const context = this.context, root = this.root, on = this.on;
+    const { context, root, on } = this.fileSide();
     cx.spawn(async cx => {
       try {
         // Read at every click: "preview": false works from the next file on, without a restart.
@@ -1192,7 +1212,7 @@ export default class FilerPro extends View {
   // the shown one only while the file and the text on screen are still the ones it was made from; this.docText is that
   // text, so a preview never lags behind the source (own save, reload of a clean edit buffer). mode: set with it.
   async preparePreview(path, text, previewer, cx, mode = null) {
-    const context = this.context, cfg = this.fileCfg ?? DEFAULTS;
+    const { context } = this.fileSide(), cfg = this.fileCfg ?? DEFAULTS;
     const alive = () => this.file === path && this.current(context) && this.shownText === text;
     const doc = await previewer.prepareAsync(text, { kind: previewKind(path), mermaid: cfg.mermaid, maxChars: cfg.preview_max_chars, maxDiagrams: cfg.max_diagrams }, {
       sleep: () => cx.sleep(1), alive, now: Date.now, onStep: (ms) => this.perf?.sample("preview.prepare", ms, { file: path }),
@@ -1238,7 +1258,7 @@ export default class FilerPro extends View {
   // The edit decision that came with the read (no second probe). A fullscreen handover is taken first.
   applyEdit(path, edit, cx) {
     if (this.takeHandover(path, cx)) return;
-    if (!this.on && window()?.platform === "windows") { this.editCheck = { state: "refused", reason: "Editing is not available on Windows" }; return; }
+    if (!this.fileSide().on && window()?.platform === "windows") { this.editCheck = { state: "refused", reason: "Editing is not available on Windows" }; return; }
     this.editCheck = edit.ok ? { state: "ok", info: edit.info } : { state: "refused", reason: edit.reason };
   }
 
@@ -1262,7 +1282,7 @@ export default class FilerPro extends View {
   // Probes the open file in the background (lib/textedit.js): this.editCheck says whether Edit is possible and why not.
   checkEdit(path, cfg, cx) {
     if (this.takeHandover(path, cx)) return;
-    const context = this.context, root = this.root, on = this.on;
+    const { context, root, on } = this.fileSide();
     if (!on && window()?.platform === "windows") { this.editCheck = { state: "refused", reason: "Editing is not available on Windows" }; return; }
     const check = this.editCheck = { state: "checking" };
     cx.spawn(async (cx) => {
@@ -1293,9 +1313,9 @@ export default class FilerPro extends View {
     history.reset(info.text);
     if (text !== info.text) history.record(text, 0); // one Undo step back to the file's text
     const e = this.edit = { state, history, info, dirty: text !== info.text, applying: null, prompt: null, message: null, modeBefore: null, busy: false, copy: null,
-      mirrored: null, mirrorAt: 0, wroteFile: Boolean(from?.wroteFile), id: from?.id ?? this.newId(), context: this.context, wasFixed: Boolean(this.context?.fixed) };
+      mirrored: null, mirrorAt: 0, wroteFile: Boolean(from?.wroteFile), id: from?.id ?? this.newId(), context: this.fileSide().context, wasFixed: Boolean(this.fileSide().context?.fixed) };
     e.mirrorPath = from?.mirrorPath ?? `${appHome()}/filer-pro/unsaved/${mirrorName(e.id, baseName(this.file))}`;
-    if (this.context) this.context.fixed = true; // the file stays open while the focus moves
+    if (this.fileSide().context) this.fileSide().context.fixed = true; // the file stays open while the focus moves
     state.on("change", (_ev, cx) => this.editChanged(cx));
     // The dialog has no other timer (it stays passive until editing starts): this one runs the mirror for it.
     if (props()?.overlay && !this.mirrorTimer) { this.mirrorTimer = true; cx.timer.every(2000, (cx) => this.mirrorUnsaved(cx)); }
@@ -1319,8 +1339,8 @@ export default class FilerPro extends View {
     const id = this.newId(), path = this.file;
     let mode = this.doc ? this.mode : "preview";
     // wasFixed: the pin from before edit mode (edit mode pins the panel itself)
-    this.full = { id, path, at: Date.now(), took: false, handing: Boolean(e), wasFixed: e ? e.wasFixed : Boolean(this.context?.fixed) };
-    if (this.context) this.context.fixed = true; // the panel stays on the file while the dialog is open
+    this.full = { id, path, at: Date.now(), took: false, handing: Boolean(e), wasFixed: e ? e.wasFixed : Boolean(this.fileSide().context?.fixed) };
+    if (this.fileSide().context) this.fileSide().context.fixed = true; // the panel stays on the file while the dialog is open
     if (e) {
       mode = "source";
       if (e.dirty) await this.mirrorUnsaved(null, true); // the unsaved text is on disk before it changes hands
@@ -1329,7 +1349,7 @@ export default class FilerPro extends View {
         info: { b64: bytesToBase64(i.bytes), hash: i.hash ?? null, text: i.text, eol: i.eol, mode: i.mode, size: i.size } });
     }
     setShared("filer-pro.fullscreen", { id, state: "opening", at: Date.now() });
-    openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.on, root: this.root, path, mode, page: this.page, pages: this.pages, force: this.force, full: id }, kind: "dialog", width: 0.86, height: 0.9 });
+    openOverlay({ mod: "filer-pro", props: { view: "file", machine: this.fileSide().on, root: this.fileSide().root, path, mode, page: this.page, pages: this.pages, force: this.force, full: id }, kind: "dialog", width: 0.86, height: 0.9 });
     cx.notify();
   }
 
@@ -1342,12 +1362,12 @@ export default class FilerPro extends View {
       f.took = true;
       const e = this.edit;
       if (e) { this.edit = null; this.releaseEdit(e); } // the mirror file now belongs to the dialog
-      if (this.context) this.context.fixed = true; // still pinned while the dialog is open
+      if (this.fileSide().context) this.fileSide().context.fixed = true; // still pinned while the dialog is open
       cx.notify();
     }
     if (mine?.state === "closed" || Date.now() - (mine?.at ?? f.at) > 8000) {
       this.full = null;
-      if (this.context) this.context.fixed = f.wasFixed || Boolean(this.edit);
+      if (this.fileSide().context) this.fileSide().context.fixed = f.wasFixed || Boolean(this.edit);
       if (shared("filer-pro.handover")?.id === f.id) setShared("filer-pro.handover", null);
       const saved = mine?.saved;
       if (!this.edit && this.file === f.path && saved?.path === f.path && typeof saved.text === "string") {
@@ -1416,7 +1436,7 @@ export default class FilerPro extends View {
   // shows the file when it ends. One read at a time: a call meanwhile runs once afterwards. The Markdown or HTML preview
   // always follows the text on screen (syncPreview).
   reloadOpen(cx, { force = false, textOnly = false, named = false } = {}) {
-    const path = this.file, context = this.context, cfg = this.fileCfg, e = this.edit, code = this.code, doc = this.doc;
+    const path = this.file, context = this.fileSide().context, cfg = this.fileCfg, e = this.edit, code = this.code, doc = this.doc;
     const busy = (e) => Boolean(e && (e.dirty || e.busy || e.prompt || e.copy));
     if (!path || !context || this.full || busy(e) || this.waiting) return; // the save's hash check guards unsaved text
     if (this.fileLoading) {
@@ -1429,7 +1449,7 @@ export default class FilerPro extends View {
     if (!code && !doc) return; // the first read still runs
     const image = !e && (doc?.kind === "image" || doc?.kind === "pdf");
     if (image && textOnly) return;
-    const root = this.root, on = this.on;
+    const root = this.fileSide().root, on = this.fileSide().on;
     // Anything that changed the view meanwhile (another file, edit mode, the dialog, a new show) ends this reload.
     const still = () => this.file === path && this.current(context) && !this.full && this.edit === e && !busy(e) && this.code === code && this.doc === doc && !this.loader;
     const retry = () => { if (this.file === path && this.current(context)) this.fileAgain ??= { force, textOnly, named }; };
@@ -1577,7 +1597,7 @@ export default class FilerPro extends View {
     if (!bytes) { e.message = { text: "Text contains characters that cannot be saved as UTF-8", error: true }; cx.notify(); return; }
     e.busy = true; e.message = null; e.prompt = null;
     cx.notify();
-    const file = this.file, full = joinPath(this.root, file), on = this.on;
+    const file = this.file, full = joinPath(this.fileSide().root, file), on = this.fileSide().on;
     cx.spawn(async (cx) => {
       let r;
       try { r = await saveFile({ exec, on, path: full, info: e.info, bytes, stage: (b64) => this.stageLocal(b64), send: this.sender(), pause: pauseOf(cx), localPlatform: window()?.platform }); }
@@ -1678,7 +1698,7 @@ export default class FilerPro extends View {
   submitCopy(name, cx) {
     const e = this.edit, c = e?.copy;
     if (!c || c.busy) return;
-    const bytes = bufferBytes(e.state.value(), e.info), dir = parentOf(joinPath(this.root, this.file)), on = this.on;
+    const bytes = bufferBytes(e.state.value(), e.info), dir = parentOf(joinPath(this.fileSide().root, this.file)), on = this.fileSide().on;
     c.busy = true; c.error = null;
     cx.notify();
     cx.spawn(async (cx) => {
@@ -1778,12 +1798,12 @@ export default class FilerPro extends View {
   }
 
   // Does Load run as a transfer job? Everything from a machine and every local image; a local PDF is rastered from the file itself.
-  viaJob(name) { return Boolean(this.on) || extOf(name ?? "") !== "pdf"; }
+  viaJob(name) { return Boolean(this.fileSide().on) || extOf(name ?? "") !== "pdf"; }
 
   // The Load button: lifts the size limit for the shown file. Other loads go first (a running preview job keeps its
   // folder); a local PDF is shown with force, anything else the transfer job copies (fetchLoad).
   loadLarge(cx) {
-    const previewer = this.loader, key = this.loadKey, name = this.loadName, path = this.file, context = this.context;
+    const previewer = this.loader, key = this.loadKey, name = this.loadName, path = this.file, context = this.fileSide().context;
     if (!previewer || !key) return;
     this.loader = null; cx.notify();
     cx.spawn(async (cx) => {
@@ -1797,7 +1817,7 @@ export default class FilerPro extends View {
   // The Load job (panel only): joins a running job for the folder, shows a file that is already there, else starts
   // the transfer job into loads/<key>/<name> (transfers bar, progress, ✕ cancels) and waits. Quiet job: no toast.
   fetchLoad(previewer, key, name, path, cx) {
-    const context = this.context, root = this.root, on = this.on, destDir = `${appHome()}/${previewer.loadDir(key)}`, dest = `${destDir}/${name}`;
+    const { context, root, on } = this.fileSide(), destDir = `${appHome()}/${previewer.loadDir(key)}`, dest = `${destDir}/${name}`;
     this.fileError = "Loading… · progress in the transfers bar"; this.loader = null; cx.notify();
     cx.spawn(async (cx) => {
       const running = previewer.previewJob(shared("filer-pro.jobs"), destDir);
@@ -1815,7 +1835,7 @@ export default class FilerPro extends View {
   // error with the Load button again.
   // One wait at a time (this.waiting): a newer one or show() ends the older loop, so a job's end shows the file once.
   waitLoad(previewer, id, path, cx) {
-    const context = this.context, wait = this.waiting = { id, path };
+    const context = this.fileSide().context, wait = this.waiting = { id, path };
     this.fileError = "Loading… · progress in the transfers bar"; this.loader = null; cx.notify();
     cx.spawn(async (cx) => {
       let j = shared("filer-pro.jobs")?.[id];
@@ -1846,7 +1866,7 @@ export default class FilerPro extends View {
   // toggled, the dialog just opened). A newer turn (turnGen) drops an older one. Both pages of a spread land together;
   // when only the second fails, the first is shown alone.
   showPages(n, cx, again) {
-    const path = this.file, context = this.context, on = this.on, previewer = this.previewer;
+    const path = this.file, context = this.fileSide().context, on = this.fileSide().on, previewer = this.previewer;
     if (!this.pdfs || !this.pages || n < 1 || n > this.pages) return;
     const two = Boolean(this.fullView && this.spread);
     if (two) n = previewer.spreadStart(n);
@@ -1855,7 +1875,7 @@ export default class FilerPro extends View {
     const gen = this.turnGen = (this.turnGen ?? 0) + 1;
     const list = two ? previewer.spreadPages(n, this.pages) : [n];
     cx.spawn(async (cx) => {
-      const docs = await Promise.all(list.map((page) => this.pdfs.load({ on, path: joinPath(this.root, path), page, pages: this.pages, force: this.force, ...this.loadLimits() })));
+      const docs = await Promise.all(list.map((page) => this.pdfs.load({ on, path: joinPath(this.fileSide().root, path), page, pages: this.pages, force: this.force, ...this.loadLimits() })));
       if (this.file !== path || this.page !== n || gen !== this.turnGen || !this.current(context)) return;
       const bad = docs.find((d) => d.load) ?? (docs[0].error ? docs[0] : null);
       if (bad?.load) this.showHint(previewer, bad, path, cx); // the loaded copy was cleared meanwhile
@@ -1884,7 +1904,7 @@ export default class FilerPro extends View {
   }
 
   sharpNow(cx) {
-    const previewer = this.previewer, path = this.file, context = this.context, on = this.on, root = this.root;
+    const previewer = this.previewer, path = this.file, context = this.fileSide().context, on = this.fileSide().on, root = this.fileSide().root;
     if (this.doc?.kind !== "pdf" || !previewer || !this.pdfs) return;
     const docs = this.shownPdf(), lay = this.pdfLayout();
     this.sharp ??= new Map(); this.sharpening ??= new Set();
@@ -1959,9 +1979,9 @@ export default class FilerPro extends View {
   previewTools(t) {
     if (!this.previewer || !this.doc || !this.file || this.edit) return [];
     const full = Boolean(this.fullView), pdf = this.doc.kind === "pdf";
-    return this.previewer.tools(this.doc, { mode: this.mode, canOpen: !this.on, page: this.page, pages: this.pages, full, spread: Boolean(this.spread), percent: pdf ? this.pdfLayout().percent : 100, preset: this.previewer.presetOf(this.zoom) }, t, {
+    return this.previewer.tools(this.doc, { mode: this.mode, canOpen: !this.fileSide().on, page: this.page, pages: this.pages, full, spread: Boolean(this.spread), percent: pdf ? this.pdfLayout().percent : 100, preset: this.previewer.presetOf(this.zoom) }, t, {
       onToggle: (cx) => { this.mode = this.mode === "preview" ? "source" : "preview"; cx.notify(); },
-      onOpen: (cx) => cx.spawn(async () => { await openRegularFile(joinPath(this.root, this.file), { exec, notify, platform }); }),
+      onOpen: (cx) => cx.spawn(async () => { await openRegularFile(joinPath(this.fileSide().root, this.file), { exec, notify, platform }); }),
       onPage: (n, cx) => this.turnPage(n, cx),
       onZoom: (dir, cx) => this.zoomBy(dir, cx),
       onLayout: (spread, cx) => this.setLayout(spread, cx),
@@ -2113,11 +2133,11 @@ export default class FilerPro extends View {
     if (!bundle && !this.on && isBinaryName(path)) {
       const a = fileClick(event, this.conf.double_click_apps);
       if (a === "open") { this.lastOpened = path; cx.notify(); this.openBinary(path); }
-      else if (a) this.show(path, cx);
+      else if (a) this.show(path, cx, { tree: this.trees.follow });
       return;
     }
     const action = fileClick(event, bundle ? this.conf.double_click_apps : this.conf.double_click_files);
-    if (action === "open" && !bundle) { this.show(path, cx); return; }
+    if (action === "open" && !bundle) { this.show(path, cx, { tree: this.trees.follow }); return; }
     if (!action) return;
     this.lastOpened = path; cx.notify();
     if (action === "open") openBundle(joinPath(this.root, path), { exec, notify, platform }).catch(() => {});
