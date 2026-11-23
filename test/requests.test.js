@@ -1540,3 +1540,9 @@ test("paste cut: a second item with a failing check is reported, the first one m
   assert.deepEqual(r.errors, [{ path: "/srv/b", error: "Refusing to delete the home folder" }]);
   assert.equal(d.asked[0].item.count, 1);
 });
+test("same-side move: the source guard uses the Cut root, not the target tree's root", async () => {
+  const d = deps({ store: { "filer-pro.clipboard": { machine: null, path: "/Users/me/up/a", isDir: false, at: 1, cut: true, root: "/Users/me/up" } }, inspect: found({ src: "/Users/me/up/a" }) });
+  await handleRequest({ action: "paste", folder: "/Users/me/low", root: "/Users/me/low" }, d);
+  assert.equal(d.fileOpsCalls.find((c) => c[0] === "inspectMove")[1].root, "/Users/me/up");
+  assert.equal(d.fileOpsCalls.find((c) => c[0] === "move")[1].root, "/Users/me/up");
+});
