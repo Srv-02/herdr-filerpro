@@ -17,6 +17,7 @@ const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action
 // Show Package Contents, or Hide Package Contents while contents is true; a folder that is not a package gets Show as Root (issue #90) in its place; windows: this computer is Windows, where Permissions… is
 // dimmed because there is no chmod; on a machine it works; size: the text at the right of Calculate Size on a folder
 // (lib/sizes.js sizeDetail), sizeTitle: its tooltip (lib/sizes.js sizeNote, set when the sum is incomplete), sizing: that calculation runs, the entry is dimmed; dimmed on local Windows too, no sh there)
+// upload (#27): the host offers pickFiles, the entry Upload File… shows (row menu after Download to…, free area above New Folder…, not in the short menu).
 // count (>= 2, #99): several rows are selected, the short menu with the actions that apply to all of them.
 export function rowMenuItems(state) {
   if (state.count >= 2) return multiMenuItems(state);
@@ -37,6 +38,7 @@ export function rowMenuItems(state) {
     SEPARATOR,
     entry("download", "Download"),
     entry("download_to", "Download to…"),
+    ...(state.upload === true ? [entry("upload", "Upload File…")] : []),
     SEPARATOR,
     ...(archive ? [entry("extract_here", "Extract Here"), entry("extract_to", extractToLabel(archive.stem)), SEPARATOR] : []),
     entry("copy", "Copy"),
@@ -79,7 +81,7 @@ export function rowMenuState({ name, isDir, machine, platform, bundle, contents,
 }
 
 export function rootMenuItems(state) {
-  return [entry("open_editor", openIn(state.editor), state.editorFolder !== false), SEPARATOR, entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), ...(state.selecting === true ? [] : [entry("select_files", "Select Files")]), SEPARATOR, entry("settings", "Settings…")];
+  return [entry("open_editor", openIn(state.editor), state.editorFolder !== false), SEPARATOR, ...(state.upload === true ? [entry("upload", "Upload File…")] : []), entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), ...(state.selecting === true ? [] : [entry("select_files", "Select Files")]), SEPARATOR, entry("settings", "Settings…")];
 }
 
 export function menuHeight(items) {

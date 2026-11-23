@@ -2,6 +2,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, v_resizable, resizable_panel, Editor, EditorState } from "gpui-base";
 import { spaces, panes, focused, exec, hc, readTextFile, writeTextFile, watchFolder, theme, settings, window, shared, setShared, notify, props, appHome, home, nextCommand, openOverlay, closeOverlay, pickFolder, run, layout } from "herdr";
+import * as herdr from "herdr";
 import * as fs from "fs/promises";
 import { createJobs } from "./lib/jobs.js";
 import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
@@ -22,7 +23,7 @@ import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
-import { dropRequest, dropTarget } from "./lib/droptarget.js";
+import { dropRequest, dropTarget, uploadRequest } from "./lib/droptarget.js";
 import { createFileOps, successToast, deleteErrorToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
@@ -120,6 +121,9 @@ async function directory(path, on, perFolder, hide, real = false, sizes = false)
 function live(cx) {
   try { cx.phase(); return true; } catch { return false; }
 }
+
+// Herdr releases after 0.1.17 offer pickFiles; read from the namespace, a named import of a missing export fails at link time.
+const canUpload = () => typeof herdr.pickFiles === "function";
 
 export default class FilerPro extends View {
   init(_props, cx) {
@@ -475,7 +479,7 @@ export default class FilerPro extends View {
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
       const ed = p.editor ?? editorMenu(null);
-      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting, count: p.count }),
+      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), upload: canUpload(), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting, count: p.count }),
         size: sizeDetail(sized, Date.now()), sizeTitle: sizeNote(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -519,6 +523,8 @@ export default class FilerPro extends View {
         package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true, ...(p.tree ? { tree: p.tree } : {}) }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
+        // p.folder is the drop target of the row (its folder, or the tree's root); the request is the one a drop sends. Cancel sends nothing.
+        upload: () => { Promise.resolve(herdr.pickFiles({ prompt: "Upload", multiple: true })).then((paths) => { const r = uploadRequest({ on: p.machine ?? null, folder: p.folder, paths }); if (r) this.request(r); close(); }).catch(close); },
         extract_here: () => act({ action: "extract", path: p.path, how: "here" }),
         extract_to: () => act({ action: "extract", path: p.path, how: "to" }),
         copy: () => act({ action: "clip", path: p.path, is_dir: p.isDir === true, root: p.root }),
@@ -2289,7 +2295,7 @@ export default class FilerPro extends View {
           const items = picked ? this.selectedItems(tree) : [];
           const multi = items.length >= 2 ? { items, count: items.length } : {};
           const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: tree.on, platform: window()?.platform, bundle, contents, selecting: tree.selecting === true, count: multi.count }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", tree: tree.id, machine: tree.on, root: tree.root, path: joinPath(tree.root, path), isDir: entry.dir, bundle, contents, selecting: tree.selecting === true, folder: dropTarget(tree.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+          openOverlay({ mod: "filer-pro", props: { view: "menu", tree: tree.id, machine: tree.on, root: tree.root, path: joinPath(tree.root, path), isDir: entry.dir, bundle, contents, selecting: tree.selecting === true, folder: dropTarget(tree.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems({ ...menuState, upload: canUpload() })) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir, tree))
         .when(boxes, el => el.child(checkBox(t, picked)).when(depth > 0, e => e.child(div().w(depth * 18).flex_none().ml(-7))))
@@ -2383,7 +2389,7 @@ export default class FilerPro extends View {
         cx.stop_propagation();
         if (!tree.root) return;
         if (this.dropOtherSelection(tree)) cx.notify();
-        openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", tree: tree.id, machine: tree.on, root: tree.root, folder: tree.root, selecting: tree.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: tree.selecting === true })) });
+        openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", tree: tree.id, machine: tree.on, root: tree.root, folder: tree.root, selecting: tree.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: tree.selecting === true, upload: canUpload() })) });
       })
       .when(Boolean(tree.error) || !tree.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(tree.error || (tree.entries.get("")?.denied ? NO_LIST_MESSAGE : tree.loading ? "Loading files…" : tree.root ? "No files" : "No folder"))))
       .when(tree.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total))));

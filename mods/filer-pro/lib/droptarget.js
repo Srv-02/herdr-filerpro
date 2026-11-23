@@ -16,3 +16,8 @@ export function dropRequest({ on, root, rowPath, rowIsDir, paths }) {
   const folder = dropTarget(root, rowPath, rowIsDir);
   return on ? { action: "upload", machine: on, paths, folder } : { action: "copy", paths, folder };
 }
+
+// Upload File… (the file picker): the same request as a drop onto `folder`, the folder the menu names. Null on cancel.
+export function uploadRequest({ on, folder, paths }) {
+  return dropRequest({ on, root: folder, rowPath: null, rowIsDir: false, paths });
+}

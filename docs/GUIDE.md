@@ -325,7 +325,7 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 
 ## Transfers
 
-- Drop files from the Finder to upload, right click to download.
+- Drop files from the Finder to upload, right click to download. **Upload File…** in the row menu (next to Download to…) and in the free-area menu (above New Folder…) opens the file picker and sends the chosen files like a drop: into the folder of the row, or the root of the tree the menu belongs to; a local tree copies. It is hidden with several rows selected and needs a Herdr version with `pickFiles` (newer than 0.1.17); on 0.1.17 the entry does not show.
 - Every transfer shows progress and can be cancelled.
 - **Cut** on one side and **Paste** on the other moves: see [Move between machines](#move-between-machines).
 - Nothing is overwritten without asking.
