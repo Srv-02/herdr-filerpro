@@ -388,3 +388,60 @@ test("#101 Calculate Size in the lower tree: claimed once, shown in both trees w
   assert.equal(a, b);
   assert.notEqual(a, "—");
 });
+
+// A selection is in one tree at a time, also after a switch of terminal restores the upper tree's saved selection.
+const MULTI = { multi_select: true, select_toggle_click: "cmd", select_range_click: "shift" };
+const CMD = { modifiers: { platform: true }, click_count: 1 };
+async function twoTrees(cfg = {}) {
+  const h = host({ store: { [KEY]: { shown: true, root: null, sizes: null } }, listings: { [UP]: list("a.txt"), [LOW]: list("p.txt"), "/srv": list("c.txt") } });
+  const cx = fakeCx(), self = panel({ ...MULTI, ...cfg });
+  self.refresh(cx);
+  await show(self, cx);
+  return { ...h, cx, self };
+}
+const names = (tree) => [...(tree.selected ?? [])].sort();
+const barOf = (root) => byId(root, "files-selection-count")?.kids;
+
+test("#103 after a terminal switch the lower tree's live selection stays the only one; the bar follows it", async () => {
+  const { self, cx, state } = await twoTrees();
+  handler(byId(self.render(cx), "file-a.txt"), "on_click")(CMD, cx);
+  state.folder = "/srv"; await show(self, cx);
+  handler(byId(self.render(cx), "local-file-p.txt"), "on_click")(CMD, cx);
+  assert.deepEqual(names(self.trees.pinned), ["p.txt"]);
+  state.folder = UP; const root = await show(self, cx);
+  assert.deepEqual(names(self.trees.follow), []);
+  assert.deepEqual(names(self.trees.pinned), ["p.txt"]);
+  assert.equal(self.selectionTree(), self.trees.pinned);
+  assert.deepEqual(barOf(root), ["1 selected"]);
+});
+
+test("#103 a restored selection or checkbox mode of the upper tree gives way to the lower tree's live one", async () => {
+  const { self, cx, state } = await twoTrees();
+  handler(byId(self.render(cx), "file-a.txt"), "on_click")(CMD, cx);
+  state.folder = "/srv"; await show(self, cx);
+  self.trees.pinned.selecting = true;
+  state.folder = UP; await show(self, cx);
+  assert.equal(self.trees.pinned.selecting, true);
+  assert.deepEqual(names(self.trees.follow), []);
+  assert.equal(self.selectionTree(), self.trees.pinned);
+  // checkbox mode saved in the upper tree, a selection in the lower one
+  self.trees.pinned.selecting = false;
+  self.trees.follow.selecting = true; self.clearSelected(self.trees.follow);
+  state.folder = "/srv"; await show(self, cx);
+  handler(byId(self.render(cx), "local-file-p.txt"), "on_click")(CMD, cx);
+  state.folder = UP; await show(self, cx);
+  assert.equal(self.trees.follow.selecting, false);
+  assert.deepEqual(names(self.trees.pinned), ["p.txt"]);
+  assert.equal(self.selectionTree(), self.trees.pinned);
+});
+
+test("#103 bar in the lower tree: count and Clear act on the lower tree", async () => {
+  const { self, cx } = await twoTrees();
+  handler(byId(self.render(cx), "local-file-p.txt"), "on_click")(CMD, cx);
+  const root = self.render(cx);
+  assert.deepEqual(barOf(root), ["1 selected"]);
+  assert.equal(self.selectionTree(), self.trees.pinned);
+  handler(byId(root, "files-selection-clear"), "on_click")({}, cx);
+  assert.deepEqual(names(self.trees.pinned), []);
+  assert.equal(barOf(self.render(cx)), undefined);
+});
