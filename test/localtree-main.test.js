@@ -445,3 +445,24 @@ test("#103 bar in the lower tree: count and Clear act on the lower tree", async 
   assert.deepEqual(names(self.trees.pinned), []);
   assert.equal(barOf(self.render(cx)), undefined);
 });
+
+test("#101 a changed local_tree_folder resets the lower tree's root, also after navigating; an unchanged one does not", async () => {
+  const { store } = host({ store: { [KEY]: { shown: true, root: null, sizes: null } }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt"), [INBOX]: list("c.txt"), "/Users/example": list("x/") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  await show(self, cx);
+  assert.equal(store[KEY].seed, LOW);
+  self.navigate("/Users/example", cx, self.trees.pinned);
+  await show(self, cx);
+  assert.equal(self.trees.pinned.root, "/Users/example");
+  await show(self, cx);
+  assert.equal(self.trees.pinned.root, "/Users/example", "the same setting keeps the navigated root");
+  self.cfg.local_tree_folder = INBOX;
+  await show(self, cx);
+  assert.equal(self.trees.pinned.root, INBOX);
+  assert.equal(store[KEY].root, null);
+  assert.equal(store[KEY].seed, INBOX);
+  self.navigate("/Users/example", cx, self.trees.pinned);
+  await show(self, cx);
+  assert.equal(self.trees.pinned.root, "/Users/example", "navigating again sticks");
+});

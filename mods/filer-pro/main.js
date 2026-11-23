@@ -2360,7 +2360,14 @@ export default class FilerPro extends View {
       return;
     }
     if (this.cfgPending === true) return;
-    const root = state.root ?? startFolder(this.conf);
+    const start = startFolder(this.conf);
+    // The setting changed since the root was taken from it: the lower tree goes back to the new start folder.
+    if (start && state.seed !== start) {
+      const reset = state.seed != null || state.root == null;
+      setShared(LOCAL_TREE_KEY, writeLocalTree(state, reset ? { seed: start, root: null } : { seed: start }));
+      if (reset) state.root = null;
+    }
+    const root = state.root ?? start;
     if (!root) return;
     const tree = this.trees.pinned ??= createTree("pinned");
     if (tree.context?.key !== pinnedContext(root).key) { tree.want = root; this.refresh(cx, {}, tree); }

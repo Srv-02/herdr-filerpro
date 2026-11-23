@@ -16,9 +16,9 @@ test("pinnedContext is fixed, local and keyed by its root", () => {
 });
 
 test("readLocalTree drops wrong types", () => {
-  assert.deepEqual(readLocalTree(null), { shown: false, root: null, sizes: null });
-  assert.deepEqual(readLocalTree({ shown: "yes", root: "rel/x", sizes: [1] }), { shown: false, root: null, sizes: null });
-  assert.deepEqual(readLocalTree({ shown: true, root: "/x", sizes: [300, 200] }), { shown: true, root: "/x", sizes: [300, 200] });
+  assert.deepEqual(readLocalTree(null), { shown: false, root: null, sizes: null, seed: null });
+  assert.deepEqual(readLocalTree({ shown: "yes", root: "rel/x", sizes: [1] }), { shown: false, root: null, sizes: null, seed: null });
+  assert.deepEqual(readLocalTree({ shown: true, root: "/x", sizes: [300, 200] }), { shown: true, root: "/x", sizes: [300, 200], seed: null });
   assert.equal(readLocalTree({ sizes: [0, 5] }).sizes, null);
   assert.equal(readLocalTree({ sizes: [NaN, 5] }).sizes, null);
 });
@@ -26,7 +26,7 @@ test("readLocalTree drops wrong types", () => {
 test("writeLocalTree keeps the reference when nothing changes", () => {
   const s = readLocalTree({ shown: true, root: "/x" });
   assert.equal(writeLocalTree(s, { shown: true }), s);
-  assert.deepEqual(writeLocalTree(s, { root: "/y" }), { shown: true, root: "/y", sizes: null });
+  assert.deepEqual(writeLocalTree(s, { root: "/y" }), { shown: true, root: "/y", sizes: null, seed: null });
   const z = readLocalTree({ sizes: [1, 2] });
   assert.equal(writeLocalTree(z, { sizes: [1, 2] }), z);
 });

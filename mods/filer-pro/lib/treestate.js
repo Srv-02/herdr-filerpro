@@ -24,16 +24,17 @@ export function pinnedContext(root) {
 
 const sizesOf = (v) => (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isFinite(n) && n > 0) ? [v[0], v[1]] : null);
 
+// seed: the start folder (setting) the root was last taken from; a changed setting resets the root (syncPinned).
 // raw: the shared value, anything. Wrong types give the defaults.
 export function readLocalTree(raw) {
   const r = raw && typeof raw === "object" ? raw : {};
-  return { shown: r.shown === true, root: typeof r.root === "string" && r.root.startsWith("/") ? r.root : null, sizes: sizesOf(r.sizes) };
+  return { shown: r.shown === true, root: typeof r.root === "string" && r.root.startsWith("/") ? r.root : null, sizes: sizesOf(r.sizes), seed: typeof r.seed === "string" && r.seed !== "" ? r.seed : null };
 }
 
 // The state with patch merged in; the same reference when nothing changes, so a caller skips setShared.
 export function writeLocalTree(state, patch) {
   const next = readLocalTree({ ...state, ...patch });
-  const same = next.shown === state.shown && next.root === state.root && (next.sizes === state.sizes || (next.sizes && state.sizes && next.sizes[0] === state.sizes[0] && next.sizes[1] === state.sizes[1]));
+  const same = next.shown === state.shown && next.root === state.root && next.seed === state.seed && (next.sizes === state.sizes || (next.sizes && state.sizes && next.sizes[0] === state.sizes[0] && next.sizes[1] === state.sizes[1]));
   return same ? state : next;
 }
 
