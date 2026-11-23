@@ -16,7 +16,7 @@ export function selectionRequest(action, { on = null, root, items, dest }) {
         : { action: "copy", paths, ...(dest ? { folder: dest } : {}) };
     case "copy":
     case "cut":
-      return { action: "clip", ...machine, items: items.map((i) => ({ path: i.path, is_dir: i.isDir === true })), ...(action === "cut" ? { cut: true } : {}) };
+      return { action: "clip", ...machine, items: items.map((i) => ({ path: i.path, is_dir: i.isDir === true })), ...(action === "cut" ? { cut: true } : {}), ...(root ? { root } : {}) };
     case "delete":
       return { action: "delete", ...machine, paths, root };
     default:

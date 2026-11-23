@@ -739,10 +739,10 @@ test("clip with cut stores the mark, clip without clears it", async () => {
   await handleRequest({ action: "clip", machine: "box", path: "/srv/a", is_dir: false }, d);
   assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/a", isDir: false }], at: 777 });
 });
-test("paste after cut on another machine is refused and starts nothing", async () => {
+test("paste after a Cut without root on another side is refused and starts nothing", async () => {
   for (const [store, extra] of [[cut("box", "/srv/a"), { machine: undefined }], [cut("box", "/srv/a"), { machine: "other" }], [cut(null, "/Users/me/a"), { machine: "box" }]]) {
     const d = deps({ store });
-    assert.deepEqual(await handleRequest(paste(extra), d), { ok: false, error: "Cut and Paste work only within one machine" });
+    assert.deepEqual(await handleRequest(paste(extra), d), { ok: false, error: "Cut it again to move it to another machine" });
     assert.deepEqual(d.calls, []); assert.deepEqual(d.fileOpsCalls, []);
   }
 });
@@ -1049,9 +1049,9 @@ test("paste cross: no warning when every path errors in inspect", async () => {
   assert.equal(d.asked.length, 0);
 });
 
-test("paste cross: Cut across machines still errors; same-machine paste has no warning and no from", async () => {
+test("paste cross: a Cut across machines without root errors; same-machine paste has no warning and no from", async () => {
   const d = deps({ store: crossClip({ cut: true }) });
-  assert.deepEqual(await handleRequest(crossPaste(), d), { ok: false, error: "Cut and Paste work only within one machine" });
+  assert.deepEqual(await handleRequest(crossPaste(), d), { ok: false, error: "Cut it again to move it to another machine" });
   const e = deps({ store: crossClip() });
   await handleRequest(crossPaste({ machine: "box" }), e);
   assert.equal(e.asked.length, 0);
@@ -1406,4 +1406,15 @@ test("#99 a single delete passes the timeout too", async () => {
   const d = deps({ answers: [{ choice: "delete" }] });
   await handleRequest({ action: "delete", machine: "box", path: "/srv/a", root: "/srv" }, d);
   assert.equal(d.fileOpsCalls.find((c) => c[0] === "remove")[1].timeout, 120000);
+});
+
+// ---- #100: the root of a Cut
+test("clip: root is optional, absolute, spelled cleanly, and stored in the entry", async () => {
+  assert.equal(parseRequest(JSON.stringify({ action: "clip", machine: "box", path: "/srv/a", cut: true, root: "/srv" })).root, "/srv");
+  assert.equal(parseRequest(JSON.stringify({ action: "clip", machine: "box", items: [{ path: "/srv/a" }], cut: true, root: "/srv" })).root, "/srv");
+  assert.deepEqual(parseRequest(JSON.stringify({ action: "clip", path: "/srv/a", root: "srv" })), { error: "root must be absolute" });
+  assert.deepEqual(parseRequest(JSON.stringify({ action: "clip", path: "/srv/a", root: "/srv/../x" })), { error: 'Path must not contain ".", ".." or "//"' });
+  const d = deps();
+  await handleRequest({ action: "clip", machine: "box", path: "/srv/a", is_dir: false, cut: true, root: "/srv" }, d);
+  assert.equal(d.store["filer-pro.clipboard"].root, "/srv");
 });

@@ -3,12 +3,15 @@
 
 import { parentOf } from "./names.js";
 
-const CUT_ERROR = "Cut and Paste work only within one machine";
+// A Cut across two sides deletes the original afterwards (#100): the delete guards need the folder shown at Cut time.
+export const MOVE_ROOT_ERROR = "Cut it again to move it to another machine";
 
 // machine: null is this computer. cut: true marks a Cut entry; a Copy entry has no cut field at all.
-export function clipEntry({ on, items, at, cut }) {
+// root: the folder the tree showed at Cut time, kept only when it is a non-empty absolute path.
+export function clipEntry({ on, items, at, cut, root }) {
   const entry = { machine: on ?? null, items: (items ?? []).map((i) => ({ path: i.path, isDir: i.isDir === true })), at };
   if (cut === true) entry.cut = true;
+  if (typeof root === "string" && root.startsWith("/")) entry.root = root;
   return entry;
 }
 
@@ -32,8 +35,11 @@ export function pastePlan(clip, { on, folder }) {
   if (srcs.length === 0) return { error: "Nothing to paste" };
   const from = clip.machine ?? null, to = on ?? null;
   if (clip.cut === true) {
-    if (from !== to) return { error: CUT_ERROR };
-    return { direction: from === null ? "local" : "remote", machine: from, srcs, destDir: folder, move: true };
+    if (from === to) return { direction: from === null ? "local" : "remote", machine: from, srcs, destDir: folder, move: true };
+    // Across sides: the copy directions plus move. Without the Cut's root nothing is moved: the delete would have no guard.
+    if (typeof clip.root !== "string" || !clip.root.startsWith("/")) return { error: MOVE_ROOT_ERROR };
+    const direction = from !== null && to !== null ? "cross" : from === null ? "up" : "down";
+    return { direction, ...(direction === "cross" ? { from } : {}), machine: direction === "cross" ? to : from ?? to, srcs, destDir: folder, move: true, root: clip.root };
   }
   // A copy from one machine to another runs through this computer (scp -3); machine is the one that holds the target.
   if (from !== null && to !== null && from !== to) return { direction: "cross", from, machine: to, srcs, destDir: folder };
@@ -45,7 +51,7 @@ export function pastePlan(clip, { on, folder }) {
 export function pasteState(clip, on, folder) {
   const plan = pastePlan(clip, { on, folder: folder ?? "/" });
   if (plan.error) return { enabled: false, reason: plan.error };
-  if (plan.move && typeof folder === "string") {
+  if (plan.move && (plan.direction === "local" || plan.direction === "remote") && typeof folder === "string") {
     const here = folder.replace(/\/+$/, "") || "/";
     if (plan.srcs.every((s) => parentOf(s) === here)) return { enabled: false, reason: "Already in this folder" };
   }

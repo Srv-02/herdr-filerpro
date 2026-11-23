@@ -111,6 +111,12 @@ export function parseRequest(text) {
     case "clip": {
       const m = machineOf();
       if (m.error) return m;
+      // root: the shown folder at Cut time (#100), the guard of the delete after a move across sides.
+      if (o.root !== undefined) {
+        const re = pathError("root", o.root, true);
+        if (re) return { error: re };
+      }
+      const rootField = o.root !== undefined ? { root: o.root } : {};
       if (o.items !== undefined) {
         if (o.path !== undefined) return { error: "Use path or items, not both" };
         if (!Array.isArray(o.items) || o.items.length === 0 || !o.items.every((i) => i && typeof i === "object" && !Array.isArray(i))) return { error: "items is required" };
@@ -118,11 +124,11 @@ export function parseRequest(text) {
           const e = pathError("path", i.path, false, '"/" cannot be copied or cut');
           if (e) return { error: e };
         }
-        return { action: "clip", ...m, items: o.items.map((i) => ({ path: i.path, is_dir: i.is_dir === true })), ...(o.cut === true ? { cut: true } : {}) };
+        return { action: "clip", ...m, items: o.items.map((i) => ({ path: i.path, is_dir: i.is_dir === true })), ...(o.cut === true ? { cut: true } : {}), ...rootField };
       }
       const pe = pathError("path", o.path, false, '"/" cannot be copied or cut');
       if (pe) return { error: pe };
-      return { action: "clip", ...m, path: o.path, is_dir: o.is_dir === true, ...(o.cut === true ? { cut: true } : {}) };
+      return { action: "clip", ...m, path: o.path, is_dir: o.is_dir === true, ...(o.cut === true ? { cut: true } : {}), ...rootField };
     }
     case "paste": {
       const m = machineOf();
@@ -596,7 +602,7 @@ export async function handleRequest(req, deps) {
       return runExtract(req, deps);
     case "clip":
       setShared("filer-pro.clipboard", clipEntry({
-        on: req.machine, at: now(), cut: req.cut,
+        on: req.machine, at: now(), cut: req.cut, root: req.root,
         items: req.items ? req.items.map(({ path, is_dir }) => ({ path, isDir: is_dir })) : [{ path: req.path, isDir: req.is_dir }],
       }));
       return { ok: true };
