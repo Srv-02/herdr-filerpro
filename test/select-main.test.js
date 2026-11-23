@@ -451,3 +451,78 @@ test("#99 right click: a folder and its child count as one item, an unselected r
   assert.equal(log.overlays.at(-1).props.count, undefined);
   assert.equal(self.selected.size, 0);
 });
+
+const written = (log) => log.writes.filter((w) => String(w.p).includes("/requests/ui-")).map((w) => JSON.parse(w.text));
+const multiMenu = (extra = {}) => menuFor({ count: 2, items: [{ path: `${ROOT}/a.txt`, isDir: false }, { path: `${ROOT}/src`, isDir: true }], ...extra });
+const menuClick = (id) => { const m = Object.create(FilerPro.prototype); handler(byId(m.overlayView(fakeCx()), id), "on_click")({}, fakeCx()); return m; };
+
+test("#99 multi menu: Copy, Cut, Delete and Download write one request with the list", async () => {
+  const { log } = host({ props: multiMenu() });
+  const list = [{ path: `${ROOT}/a.txt`, is_dir: false }, { path: `${ROOT}/src`, is_dir: true }];
+  menuClick("filer-pro-menu-copy");
+  menuClick("filer-pro-menu-cut");
+  menuClick("filer-pro-menu-delete");
+  menuClick("filer-pro-menu-download");
+  await settle();
+  assert.deepEqual(written(log), [
+    { action: "clip", items: list },
+    { action: "clip", items: list, cut: true },
+    { action: "delete", paths: [`${ROOT}/a.txt`, `${ROOT}/src`], root: ROOT },
+    { action: "copy", paths: [`${ROOT}/a.txt`, `${ROOT}/src`] },
+  ]);
+  assert.equal(log.closed.length, 4);
+});
+test("#99 multi menu on a machine: Download is one download request with paths", async () => {
+  const { log } = host({ props: multiMenu({ machine: "box" }) });
+  menuClick("filer-pro-menu-download");
+  await settle();
+  assert.deepEqual(written(log), [{ action: "download", machine: "box", paths: [`${ROOT}/a.txt`, `${ROOT}/src`] }]);
+});
+test("#99 multi menu: Paste keeps today's request, Clear Selection sets the clear request and closes", async () => {
+  const { log, store } = host({ props: multiMenu() });
+  menuClick("filer-pro-menu-clear-selection");
+  assert.equal(store["filer-pro.select"].mode, "clear");
+  assert.equal(store["filer-pro.select"].root, ROOT);
+  assert.deepEqual(log.closed, ["menu1"]);
+  store["filer-pro.clipboard"] = { machine: null, items: [{ path: "/tmp/x", isDir: false }], at: 1 };
+  menuClick("filer-pro-menu-paste");
+  await settle();
+  assert.deepEqual(written(log), [{ action: "paste", folder: `${ROOT}/src`, root: ROOT }]);
+});
+test("#99 multi menu: Copy 2 Paths writes one shell-quoted path per line", async () => {
+  host({ props: multiMenu({ items: [{ path: `${ROOT}/a b.txt`, isDir: false }, { path: `${ROOT}/src`, isDir: true }] }) });
+  const menu = Object.create(FilerPro.prototype);
+  const entry = byId(menu.overlayView(fakeCx()), "filer-pro-menu-copy-path");
+  assert.ok(entry, "the entry is there");
+  assert.deepEqual([...walk(entry)].flatMap((e) => e.kids ?? []).filter((k) => typeof k === "string"), ["Copy 2 Paths"]);
+});
+
+test("#99 bar: four buttons before Clear; a click writes one request with the collapsed selection", async () => {
+  const { self, cx, log } = await multi();
+  clickRow(self, cx, "a.txt", 1, CMD);
+  clickRow(self, cx, "src", 1, CMD);
+  const root = self.render(cx);
+  const order = [...walk(byId(root, "files-selection"))].map(idOf).filter((i) => String(i ?? "").startsWith("files-selection-"));
+  assert.deepEqual(order, ["files-selection-count", "files-selection-download", "files-selection-copy", "files-selection-cut", "files-selection-delete", "files-selection-clear"]);
+  assert.deepEqual(byId(root, "files-selection-download").calls.find((c) => c[0] === "tooltip").slice(1), ["Download 2 Items"]);
+  assert.deepEqual(byId(root, "files-selection-delete").calls.find((c) => c[0] === "tooltip").slice(1), ["Delete 2 Items…"]);
+  assert.ok(byId(root, "files-selection-cut").kids.some((k) => String(k.args?.[0]).endsWith("scissors.svg")));
+  handler(byId(root, "files-selection-copy"), "on_click")({}, cx);
+  handler(byId(root, "files-selection-delete"), "on_click")({}, cx);
+  await settle();
+  assert.deepEqual(written(log), [
+    { action: "clip", items: [{ path: `${ROOT}/src`, is_dir: true }, { path: `${ROOT}/a.txt`, is_dir: false }] },
+    { action: "delete", paths: [`${ROOT}/src`, `${ROOT}/a.txt`], root: ROOT },
+  ]);
+});
+test("#99 bar in the checkbox mode with nothing selected: dimmed buttons without a click", async () => {
+  const { self, cx } = await multi();
+  self.selecting = true;
+  const root = self.render(cx);
+  for (const a of ["download", "copy", "cut", "delete"]) {
+    const b = byId(root, `files-selection-${a}`);
+    assert.ok(b, a);
+    assert.ok(!b.calls.some((c) => c[0] === "on_click"), a);
+  }
+  assert.deepEqual(byId(root, "files-selection-delete").calls.find((c) => c[0] === "tooltip").slice(1), ["Delete…"]);
+});
