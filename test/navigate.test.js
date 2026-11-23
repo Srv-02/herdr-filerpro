@@ -87,6 +87,17 @@ test("carry up keeps expanded folders and the open file, and opens the old root"
   assert.deepEqual(plain(carry(state(["x"]), "/r", "/")), { folders: ["r", "r/x"], packages: [], file: null, lastOpened: null });
 });
 
+test("carry maps the selection like packages and leaves the anchor out", () => {
+  const sel = (paths) => ({ ...state([]), selected: new Set(paths) });
+  const out = (s, a, b) => [...carry(s, a, b).selected].sort();
+  assert.deepEqual(out(sel(["x.txt", "d/y"]), "/r/a", "/r"), ["a/d/y", "a/x.txt"]);
+  assert.deepEqual(out(sel(["a/x.txt", "b.txt"]), "/r", "/r/a"), ["x.txt"]);
+  assert.deepEqual(out(sel(["a/x.txt"]), "/r", "/other"), []);
+  assert.deepEqual(out(state([]), "/r", "/r/a"), []);
+  assert.ok(carry(state([]), "/r", "/r/a").selected instanceof Set);
+  assert.equal("anchor" in carry(sel(["x"]), "/r/a", "/r"), false);
+});
+
 test("carry down keeps what lies inside the new root and drops the rest", () => {
   assert.deepEqual(plain(carry(state(["b", "b/c", "d"], "b/c/f.txt", ["b/Y.app"], "d/g"), "/r", "/r/b")), {
     folders: ["c"], packages: ["Y.app"], file: "c/f.txt", lastOpened: null,

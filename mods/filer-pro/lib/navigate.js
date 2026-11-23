@@ -63,7 +63,7 @@ function below(outer, inner) {
   return i.startsWith(base) ? i.slice(base.length).replace(/\\/g, "/") : null;
 }
 
-// The tree state ({ folders, packages, file, lastOpened }, paths relative to `from`) relative to `to`. Going up keeps
+// The tree state ({ folders, packages, selected, file, lastOpened }, paths relative to `from`) relative to `to`. Going up keeps
 // everything below the old root and expands the old root with its parents, so the same rows stay visible; going down
 // (back to the terminal's folder) keeps what lies inside the new root; an unrelated folder keeps nothing.
 export function carry(state, from, to) {
@@ -77,7 +77,7 @@ export function carry(state, from, to) {
   const parts = up ? up.split("/") : [];
   const folders = new Set([...parts.map((_, n) => parts.slice(0, n + 1).join("/")), ...set(state.folders)]);
   const one = (p) => (p ? map(p) || null : null);
-  return { folders, packages: set(state.packages), file: one(state.file), lastOpened: one(state.lastOpened) };
+  return { folders, packages: set(state.packages), selected: set(state.selected), file: one(state.file), lastOpened: one(state.lastOpened) };
 }
 
 // Whether the local root may be watched: not / and not a folder above the home folder (Up can get there; a recursive
