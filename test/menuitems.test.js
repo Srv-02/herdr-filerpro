@@ -1,15 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rowMenuItems, rootMenuItems, menuHeight, MENU_WIDTH } from "../mods/filer-pro/lib/menuitems.js";
+import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "../mods/filer-pro/lib/menuitems.js";
 const on = { paste: { enabled: true, reason: null } }, off = { paste: { enabled: false, reason: "Nothing to paste" } };
-test("row menu lists sixteen entries in five groups, Open first and Delete last", () => {
+test("row menu lists seventeen entries in five groups, Open first and Delete last", () => {
   const items = rowMenuItems(on);
   assert.deepEqual(items.filter((i) => !i.separator).map((i) => i.label), [
-    "Open", "Open in Preview", "Open in Editor", "Edit in Terminal", "Show in Finder", "Download", "Download to…", "Copy", "Cut", "Paste",
+    "Open", "Open in Preview", "Open in Editor", "Edit in Terminal", "Show in Finder", "Select Files", "Download", "Download to…", "Copy", "Cut", "Paste",
     "Copy Path", "Copy Relative Path", "New Folder…", "Rename…", "Permissions…", "Delete…",
   ]);
   assert.deepEqual(items.map((i) => (i.separator ? "|" : i.action)), [
-    "open", "open_preview", "open_editor", "edit_terminal", "reveal", "|", "download", "download_to", "|", "copy", "cut", "paste", "|",
+    "open", "open_preview", "open_editor", "edit_terminal", "reveal", "select_files", "|", "download", "download_to", "|", "copy", "cut", "paste", "|",
     "copy_path", "copy_relative_path", "|", "new_folder", "rename", "permissions", "delete",
   ]);
   assert.equal(items.find((i) => i.action === "open_preview").id, "filer-pro-menu-open-preview");
@@ -19,11 +19,12 @@ test("row menu lists sixteen entries in five groups, Open first and Delete last"
   assert.equal(items.find((i) => i.action === "edit_terminal").id, "filer-pro-menu-edit-terminal");
   assert.ok(items.filter((i) => !i.separator).every((i) => i.enabled === true));
 });
-test("root menu: Open in <editor> in its own group on top, then New Folder… and Paste, then Settings…", () => {
+test("root menu: Open in <editor> in its own group on top, then New Folder…, Paste and Select Files, then Settings…", () => {
   const map = (items) => items.map((i) => (i.separator ? "|" : [i.id, i.label, i.action, i.enabled]));
   assert.deepEqual(map(rootMenuItems({ ...on, editor: "VS Code" })), [
     ["filer-pro-menu-open-editor", "Open in VS Code", "open_editor", true], "|",
-    ["filer-pro-menu-new-folder", "New Folder…", "new_folder", true], ["filer-pro-menu-paste", "Paste", "paste", true], "|",
+    ["filer-pro-menu-new-folder", "New Folder…", "new_folder", true], ["filer-pro-menu-paste", "Paste", "paste", true],
+    ["filer-pro-menu-select-files", "Select Files", "select_files", true], "|",
     ["filer-pro-menu-settings", "Settings…", "settings", true],
   ]);
   const dim = map(rootMenuItems({ ...on, editor: "VS Code", editorFolder: false }));
@@ -73,14 +74,14 @@ test("Show in Finder is dimmed on a machine for files and folders, Open and Open
     assert.equal(enabled(rowMenuItems({ ...on, isDir, remote: false }), "reveal"), true);
   }
   assert.equal(enabled(rowMenuItems(on), "reveal"), true); // remote absent: local
-  assert.equal(menuHeight(rowMenuItems({ ...on, remote: true })), 488);
+  assert.equal(menuHeight(rowMenuItems({ ...on, remote: true })), 516);
 });
 test("menu height matches the item count", () => {
-  assert.equal(menuHeight(rowMenuItems(on)), 488);
-  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 544, "a folder has Calculate Size (issue #58) and Show as Root (issue #90)");
-  assert.equal(menuHeight(rootMenuItems(on)), 138);
-  assert.equal(menuHeight(rootMenuItems({ ...on, editorFolder: false })), 138);
-  assert.equal(menuHeight(rowMenuItems({ ...on, editorFile: false })), 488);
+  assert.equal(menuHeight(rowMenuItems(on)), 516);
+  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 572, "a folder has Calculate Size (issue #58) and Show as Root (issue #90)");
+  assert.equal(menuHeight(rootMenuItems(on)), 166);
+  assert.equal(menuHeight(rootMenuItems({ ...on, editorFolder: false })), 166);
+  assert.equal(menuHeight(rowMenuItems({ ...on, editorFile: false })), 516);
   assert.equal(MENU_WIDTH, 200);
 });
 
@@ -99,13 +100,13 @@ test("Permissions… is dimmed on this computer when it is Windows (no chmod the
   assert.equal(enabled({ ...on, windows: true }), false);
   assert.equal(enabled({ ...on, windows: true, remote: true }), true);
   assert.equal(enabled({ ...on, windows: false }), true);
-  assert.equal(menuHeight(rowMenuItems({ ...on, windows: true })), 488, "the height does not depend on it");
+  assert.equal(menuHeight(rowMenuItems({ ...on, windows: true })), 516, "the height does not depend on it");
 });
 
 // Issue #58: Calculate Size on folders (packages too), with the result at the right of the entry.
 test("Calculate Size is in the first group for folders and packages only, with its detail", () => {
   const folder = rowMenuItems({ ...on, isDir: true });
-  assert.deepEqual(folder.slice(0, 8).map((i) => (i.separator ? "|" : i.action)), ["open", "open_preview", "open_editor", "edit_terminal", "reveal", "show_as_root", "calculate_size", "|"]);
+  assert.deepEqual(folder.slice(0, 8).map((i) => (i.separator ? "|" : i.action)), ["open", "open_preview", "open_editor", "edit_terminal", "reveal", "show_as_root", "calculate_size", "select_files"]);
   const calc = folder.find((i) => i.action === "calculate_size");
   assert.deepEqual([calc.id, calc.label, calc.enabled, calc.detail], ["filer-pro-menu-calculate-size", "Calculate Size", true, null]);
   assert.equal(rowMenuItems(on).some((i) => i.action === "calculate_size"), false, "not on a file");
@@ -155,4 +156,26 @@ test("extract entries: menuHeight counts two entries and one separator more", ()
   const plain = menuHeight(rowMenuItems({ ...on, isDir: false, name: "a.txt" }));
   const arch = menuHeight(rowMenuItems({ ...on, isDir: false, name: "a.zip" }));
   assert.equal(arch - plain, 2 * 28 + 7);
+});
+
+test("Select Files closes the first group of the row menu and follows Paste in the free area menu", () => {
+  const actions = (items) => items.map((i) => (i.separator ? "|" : i.action));
+  const folder = actions(rowMenuItems({ ...on, isDir: true }));
+  assert.equal(folder[folder.indexOf("calculate_size") + 1], "select_files");
+  assert.equal(folder[folder.indexOf("select_files") + 1], "|");
+  const pkg = actions(rowMenuItems({ ...on, isDir: true, bundle: true }));
+  assert.equal(pkg[pkg.indexOf("calculate_size") + 1], "select_files");
+  assert.deepEqual(actions(rootMenuItems(on)), ["open_editor", "|", "new_folder", "paste", "select_files", "|", "settings"]);
+  assert.equal(rowMenuItems(on).find((i) => i.action === "select_files").id, "filer-pro-menu-select-files");
+  assert.equal(rowMenuItems(on).find((i) => i.action === "select_files").enabled, true);
+});
+
+test("no Select Files entry while the mode is on, and the menus shrink by one row", () => {
+  for (const [items, off2] of [[rowMenuItems, {}], [rowMenuItems, { isDir: true }], [rootMenuItems, {}]]) {
+    const with_ = items({ ...on, ...off2 }), without = items({ ...on, ...off2, selecting: true });
+    assert.equal(without.some((i) => i.action === "select_files"), false);
+    assert.equal(menuHeight(with_) - menuHeight(without), 28);
+  }
+  assert.equal(rowMenuState({ name: "a", selecting: true }).selecting, true);
+  assert.equal(rowMenuState({ name: "a" }).selecting, false);
 });

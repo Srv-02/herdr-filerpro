@@ -449,7 +449,7 @@ export default class FilerPro extends View {
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
       const ed = p.editor ?? editorMenu(null);
-      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents }),
+      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting }),
         size: sizeDetail(sized, Date.now()), sizeTitle: sizeNote(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -486,6 +486,8 @@ export default class FilerPro extends View {
         calculate_size: () => { setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), p.machine, p.path, this.newId(), Date.now())); close(); },
         // The panel that shows the folder makes it the root (pollGoto).
         show_as_root: () => { setShared("filer-pro.goto", { id: this.newId(), machine: p.machine ?? null, path: p.path }); close(); },
+        // The panel that shows the root turns the mode on (pollSelect); a free area start (scope root) has no row.
+        select_files: () => { setShared("filer-pro.select", { id: this.newId(), mode: "start", machine: p.machine ?? null, root: p.root, path: p.scope === "root" ? null : p.path }); close(); },
         package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
@@ -2064,8 +2066,8 @@ export default class FilerPro extends View {
         .on_click((e, cx) => e.modifiers.platform && !(this.on && !dir && isBinaryName(path)) ? this.reveal(path) : dir ? this.clickFolder(path, bundle, e, cx) : this.clickFile(path, bundle, e, cx))
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
-          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents, selecting: this.selecting === true }) };
+          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))
         .child(dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
@@ -2137,7 +2139,7 @@ export default class FilerPro extends View {
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           if (!this.root) return;
-          openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
+          openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root, selecting: this.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: this.selecting === true })) });
         })
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.entries.get("")?.denied ? NO_LIST_MESSAGE : this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total)))))
