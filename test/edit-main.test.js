@@ -38,7 +38,7 @@ const make = (names) => names.map((n) => `export const ${n} = (...a) => { const 
 const STUBS = {
   herdr: stub(["spaces", "panes", "focused", "exec", "hc", "readTextFile", "writeTextFile", "watchFolder", "theme", "settings", "window", "shared", "setShared", "notify", "props", "appHome", "home", "nextCommand", "openOverlay", "closeOverlay", "pickFolder", "run", "layout"]),
   "gpui-kit": `export class View {}; ${make(["div", "svg", "image"])}`,
-  "gpui-base": `${make(["v_flex", "h_flex", "TextView"])} export const Input = { new: (s) => { const e = globalThis.__make("input"); e.state = s; return e; } }, Scrollbar = { vertical: () => globalThis.__make("scrollbar") };
+  "gpui-base": `${make(["v_flex", "h_flex", "v_resizable", "resizable_panel", "TextView"])} export const Input = { new: (s) => { const e = globalThis.__make("input"); e.state = s; return e; } }, Scrollbar = { vertical: () => globalThis.__make("scrollbar") };
 export class Editor { static new(s) { const e = globalThis.__make("editor"); e.state = s; return e; } }
 export class EditorState { static new(o) { return globalThis.__impl.editorNew(o); } }
 export class InputState { static new(o) { return globalThis.__impl.inputNew(o); } }`,
@@ -1021,6 +1021,7 @@ function withPinned(w, self) {
   const lower = path.join(w.base, "lower");
   fs.mkdirSync(lower);
   self.trees.pinned = Object.assign(createTree("pinned"), { context: pinnedContext(lower), root: lower, on: null });
+  w.store["filer-pro.localtree"] = { shown: true, root: lower };
   return lower;
 }
 

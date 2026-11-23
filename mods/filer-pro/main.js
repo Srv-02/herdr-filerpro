@@ -1,6 +1,6 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
+import { v_flex, h_flex, v_resizable, resizable_panel, Editor, EditorState } from "gpui-base";
 import { spaces, panes, focused, exec, hc, readTextFile, writeTextFile, watchFolder, theme, settings, window, shared, setShared, notify, props, appHome, home, nextCommand, openOverlay, closeOverlay, pickFolder, run, layout } from "herdr";
 import * as fs from "fs/promises";
 import { createJobs } from "./lib/jobs.js";
@@ -185,8 +185,10 @@ export default class FilerPro extends View {
     this.packageSeen = shared("filer-pro.package")?.id ?? null; // an old Show Package Contents request is not applied again
     this.selectSeen = shared("filer-pro.select")?.id ?? null; // an old Select Files request is not applied again
     this.selected = new Set(); this.anchor = null; this.base = null; this.selecting = false; // the selection (lib/selection.js)
+    this.cfgPending = true; // the lower tree waits for the config: its start folder is a setting
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
+      this.cfgPending = false;
       // The first listing ran with the defaults: other list settings reload the tree once more (no timer to wait for).
       if (["list_per_folder", "list_total", "tree_depth", "hide_system_files", "hide_dotfiles", "show_sizes"].some((k) => cfg[k] !== DEFAULTS[k])) this.refreshAll(cx);
       this.version = await this.readVersion();
@@ -510,10 +512,10 @@ export default class FilerPro extends View {
         // The panel that shows the folder runs it (pollSizes); the result shows in the size column and here.
         calculate_size: () => { setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), p.machine, p.path, this.newId(), Date.now())); close(); },
         // The panel that shows the folder makes it the root (pollGoto).
-        show_as_root: () => { setShared("filer-pro.goto", { id: this.newId(), machine: p.machine ?? null, path: p.path }); close(); },
+        show_as_root: () => { setShared("filer-pro.goto", { id: this.newId(), machine: p.machine ?? null, path: p.path, ...(p.tree ? { tree: p.tree } : {}) }); close(); },
         // The panel that shows the root turns the mode on (pollSelect); a free area start (scope root) has no row.
-        select_files: () => { setShared("filer-pro.select", { id: this.newId(), mode: "start", machine: p.machine ?? null, root: p.root, path: p.scope === "root" ? null : p.path }); close(); },
-        package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true }); close(); },
+        select_files: () => { setShared("filer-pro.select", { id: this.newId(), mode: "start", machine: p.machine ?? null, root: p.root, path: p.scope === "root" ? null : p.path, ...(p.tree ? { tree: p.tree } : {}) }); close(); },
+        package_contents: () => { setShared("filer-pro.package", { id: this.newId(), machine: p.machine ?? null, path: p.path, show: p.contents !== true, ...(p.tree ? { tree: p.tree } : {}) }); close(); },
         download: () => send({}),
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
         extract_here: () => act({ action: "extract", path: p.path, how: "here" }),
@@ -538,7 +540,7 @@ export default class FilerPro extends View {
           cut: () => runSelection("cut"),
           delete: () => runSelection("delete"),
           copy_path: (cx) => toClipboard(pathsText(p.items), cx),
-          clear_selection: () => { setShared("filer-pro.select", { id: this.newId(), mode: "clear", machine: p.machine ?? null, root: p.root }); close(); },
+          clear_selection: () => { setShared("filer-pro.select", { id: this.newId(), mode: "clear", machine: p.machine ?? null, root: p.root, ...(p.tree ? { tree: p.tree } : {}) }); close(); },
         } : {}),
       });
     }
@@ -2135,13 +2137,13 @@ export default class FilerPro extends View {
 
   // The file actions of the selection bar (#99): icon buttons that run the same requests as the menu for several rows.
   // Dimmed and without a click while nothing is selected (the Select Files mode).
-  selectionButtons(t) {
-    const items = this.selectedItems();
+  selectionButtons(t, tree = this.trees.follow) {
+    const items = this.selectedItems(tree);
     return [["download", "download.svg"], ["copy", "copy.svg"], ["cut", "scissors.svg"], ["delete", "trash.svg"]].map(([action, glyph]) => {
       const label = barLabel(action, items.length);
       const on = items.length > 0;
       return div().id(`files-selection-${action}`).w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6)
-        .when(on, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.request(selectionRequest(action, { on: this.on, root: this.root, items })); cx.notify(); }))
+        .when(on, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.request(selectionRequest(action, { on: tree.on, root: tree.root, items })); cx.notify(); }))
         .when(!on, (el) => el.opacity(0.4))
         .tooltip(label).accessibility_label(label)
         .child(svg(`${BASE}/${glyph}`).size(14).text_color(t.muted));
@@ -2310,6 +2312,79 @@ export default class FilerPro extends View {
     if (this.context && this.reload.take(this.anyLoading())) this.refreshAll(cx);
   }
 
+  // The lower tree follows the shared state (filer-pro.localtree): shown or not, and its root. It never looks at the focus.
+  // Hidden, its context is dropped, which ends its watch loops. While the config is not read, nothing is listed (the start
+  // folder is a setting). A file open from it keeps the tree until the file is closed.
+  syncPinned(cx) {
+    const state = this.localTree(), pinned = this.trees.pinned;
+    if (!state.shown) {
+      if (!pinned?.context) return;
+      if (this.file && this.fileSide().tree === pinned) { if (this.edit?.dirty) return; this.show(null); }
+      this.clearSelected(pinned); pinned.selecting = false;
+      pinned.context = null; pinned.watched = null; pinned.gitWatch = null; pinned.loading = false;
+      return;
+    }
+    if (this.cfgPending === true) return;
+    const root = state.root ?? startFolder(this.conf);
+    if (!root) return;
+    const tree = this.trees.pinned ??= createTree("pinned");
+    if (tree.context?.key !== pinnedContext(root).key) { tree.want = root; this.refresh(cx, {}, tree); }
+  }
+
+  // The header toggle for the lower tree (Show This Mac / Hide This Mac): a button in the frame of the navigation buttons.
+  localToggle(t) {
+    const on = this.localTree().shown, label = on ? "Hide This Mac" : "Show This Mac";
+    return div().id("files-local-toggle").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(on ? t.selected : t.hover)).tooltip(label).accessibility_label(label)
+      .on_click((_e, cx) => { const state = this.localTree(); setShared(LOCAL_TREE_KEY, writeLocalTree(state, { shown: !state.shown })); cx.notify(); })
+      .child(svg(`${BASE}/panel-bottom.svg`).size(14).text_color(on ? t.foreground : t.muted));
+  }
+
+  // One tree's scroll container: its rows, the free-area menu and the drop target. It stays mounted while a file is open, at
+  // zero height with a spacer of the same content height: GPUI keeps a scroll offset only for elements rendered every frame (issue #5).
+  treeView(t, dark, tree) {
+    const pinned = tree.id === "pinned";
+    return v_flex().id(pinned ? "files-tree-local" : "files-tree").min_h(0).overflow_y_scrollbar()
+      .when(!this.file, el => el.flex_1().p(TREE_PAD).children(this.rows(t, dark, tree)))
+      .when(Boolean(this.file), el => el.flex_none().h(0).p(0).child(div().flex_none().h(this.visible(tree).length * ROW_H + 2 * TREE_PAD)))
+      .on_drop((e, cx) => this.drop(e.paths, null, false, tree))
+      .on_click((_e, cx) => {
+        if (this.dropOtherSelection(tree)) cx.notify();
+        if (tree.selecting !== true && (tree.selected?.size || tree.anchor)) { this.clearSelected(tree); cx.notify(); }
+      })
+      .on_mouse_down("right", (_e, cx) => {
+        cx.stop_propagation();
+        if (!tree.root) return;
+        if (this.dropOtherSelection(tree)) cx.notify();
+        openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", tree: tree.id, machine: tree.on, root: tree.root, folder: tree.root, selecting: tree.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: tree.selecting === true })) });
+      })
+      .when(Boolean(tree.error) || !tree.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(tree.error || (tree.entries.get("")?.denied ? NO_LIST_MESSAGE : tree.loading ? "Loading files…" : tree.root ? "No files" : "No folder"))))
+      .when(tree.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total))));
+  }
+
+  // The two trees in a vertical split: a frame that measures the height, the resizable group inside. The group is drawn
+  // once the height or the stored sizes are known (its panels need a start size). With a file open the frame has no
+  // height but keeps its structure, so each tree keeps its scroll offset.
+  splitView(t, dark, trees, local) {
+    const frame = v_flex().id("files-split-frame").min_h(0).on_size_change((size, cx) => {
+      const h = Math.floor(size.height);
+      if (h > 0 && h !== this.splitHeight) { this.splitHeight = h; cx.notify(); }
+    }).when(Boolean(this.file), el => el.flex_none().h(0).overflow_hidden()).when(!this.file, el => el.flex_1());
+    const first = local.sizes ? local.sizes[0] : this.splitHeight ? Math.round(this.splitHeight * DEFAULT_SPLIT) : null;
+    if (first === null) return frame;
+    const panel = (tree, size) => {
+      const el = resizable_panel().size_range(MIN_TREE_PX);
+      return (size ? el.size(size) : el).child(v_flex().size_full().min_h(0).child(this.treeView(t, dark, tree)));
+    };
+    return frame.child(v_resizable("files-split").size_full()
+      .on_resize((sizes, cx) => {
+        const state = this.localTree(), next = writeLocalTree(state, { sizes: [sizes[0], sizes[1]] });
+        if (next !== state) setShared(LOCAL_TREE_KEY, next);
+      })
+      .child(panel(trees[0], first))
+      .child(panel(trees[1], null)));
+  }
+
   render(cx) {
     if (props()?.overlay) return this.overlayView(cx);
     if (this.button) return this.toolbar(theme());
@@ -2319,15 +2394,17 @@ export default class FilerPro extends View {
     this.pollPackage(cx);
     this.pollGoto(cx);
     this.pollSelect(cx);
+    this.syncPinned(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
     // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
     const update = this.conf.update_check ? updateHint(shared("filer-pro.update"), this.version) : null;
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
-    const sel = this.file ? null : selectionBar(t, { count: this.selected?.size ?? 0, selecting: this.selecting === true }, {
-      onDone: (cx) => { this.selecting = false; this.clearSelected(); cx.notify(); },
-      onClear: (cx) => { this.clearSelected(); cx.notify(); },
-      actions: this.selectionButtons(t),
+    const trees = this.shownTrees(), local = this.localTree(), selTree = this.selectionTree() ?? this.trees.follow;
+    const sel = this.file ? null : selectionBar(t, { count: selTree.selected?.size ?? 0, selecting: selTree.selecting === true }, {
+      onDone: (cx) => { selTree.selecting = false; this.clearSelected(selTree); cx.notify(); },
+      onClear: (cx) => { this.clearSelected(selTree); cx.notify(); },
+      actions: this.selectionButtons(t, selTree),
     });
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
@@ -2337,25 +2414,13 @@ export default class FilerPro extends View {
         .child(this.fileTitle(t, dark, true))
         .when(!this.file, el => el.children(this.navButtons(t)))
         .child(this.refreshButton(t))
+        .when(!this.file, el => el.child(this.localToggle(t)))
         .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
         .children(this.editTools(t))
         .when(Boolean(this.file) && Boolean(this.full), el => el.child(div().id("files-full").px(7).py(2).rounded(6).text_color(t.dim).tooltip("Open in full screen").child(svg(`${BASE}/maximize.svg`).size(13))))
         .when(Boolean(this.file) && !this.full, el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t, (cx) => this.openFull(cx)))))
-      // The tree stays mounted while a file is open, at zero height with a spacer of the same content height:
-      // GPUI keeps a scroll offset only for elements rendered every frame (issue #5).
-      .child(v_flex().id("files-tree").min_h(0).overflow_y_scrollbar()
-        .when(!this.file, el => el.flex_1().p(TREE_PAD).children(this.rows(t, dark)))
-        .when(Boolean(this.file), el => el.flex_none().h(0).p(0).child(div().flex_none().h(this.visible().length * ROW_H + 2 * TREE_PAD)))
-        .on_drop((e, cx) => this.drop(e.paths, null, false))
-        .on_click((_e, cx) => { if (this.selecting !== true && (this.selected?.size || this.anchor)) { this.clearSelected(); cx.notify(); } })
-        .on_mouse_down("right", (_e, cx) => {
-          cx.stop_propagation();
-          if (!this.root) return;
-          openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root, selecting: this.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: this.selecting === true })) });
-        })
-        .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.entries.get("")?.denied ? NO_LIST_MESSAGE : this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
-        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total)))))
+      .child(trees.length > 1 ? this.splitView(t, dark, trees, local) : this.treeView(t, dark, this.trees.follow))
       .when(Boolean(sel), el => el.child(sel))
       .when(Boolean(bar), el => el.child(bar))
       .when(Boolean(this.file), el => el.child(this.viewer(t)));

@@ -11,7 +11,7 @@ const stub = (names) => names.map((n) => `export const ${n} = (...a) => globalTh
 const STUBS = {
   herdr: stub(["spaces", "panes", "focused", "exec", "hc", "readTextFile", "writeTextFile", "watchFolder", "theme", "settings", "window", "shared", "setShared", "notify", "props", "appHome", "home", "nextCommand", "openOverlay", "closeOverlay", "pickFolder", "run", "layout"]),
   "gpui-kit": "export class View {}; export const div = () => ({}), svg = div, image = div;",
-  "gpui-base": "export const v_flex = () => ({}), h_flex = v_flex; export class Editor {}; export class EditorState {}; export class InputState {}; export const Input = v_flex, TextView = v_flex, Scrollbar = { vertical: v_flex };",
+  "gpui-base": "export const v_flex = () => ({}), h_flex = v_flex, v_resizable = v_flex, resizable_panel = v_flex; export class Editor {}; export class EditorState {}; export class InputState {}; export const Input = v_flex, TextView = v_flex, Scrollbar = { vertical: v_flex };",
   "fs/promises": "export const exists = async () => false, readFile = async () => \"\", writeFile = readFile, mkdir = readFile, unlink = readFile, stat = readFile; export const readdir = (...a) => globalThis.__impl.readdir(...a);",
 };
 const hooks = `export async function resolve(s, c, next) { return s in ${JSON.stringify(STUBS)} ? { url: "stub:" + s, shortCircuit: true } : next(s, c); }
