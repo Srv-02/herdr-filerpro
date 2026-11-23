@@ -16,6 +16,7 @@ import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick, folderClick, rowClick } from "./lib/clicks.js";
+import { TREE_FIELDS, createTree } from "./lib/treestate.js";
 import { applyClick, clearSelection, collapse, prune } from "./lib/selection.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
@@ -207,6 +208,10 @@ export default class FilerPro extends View {
     cx.timer.every(250, cx => { this.checkShow(cx); this.pollLink(cx); this.pollReload(cx); this.pollSizes(cx); this.checkConfig(cx); this.mirrorUnsaved(cx); this.pollFull(cx); });
     this.drive(cx);
   }
+
+  // The trees of this copy: follow is the upper one (the terminal's folder), pinned the lower one on this computer.
+  // Lazy: tests build views with Object.create(FilerPro.prototype).
+  get trees() { return (this._trees ??= { follow: createTree("follow"), pinned: null }); }
 
   // The current settings of this copy: the config read last, or the defaults before the first read.
   get conf() { return this.cfg ?? DEFAULTS; }
@@ -2275,4 +2280,10 @@ export default class FilerPro extends View {
     if (this.perf) this.perf.sample("render", Date.now() - t0);
     return root;
   }
+}
+
+// The upper tree's state stays reachable as plain fields of the view (this.root, this.entries, ...): many callers and
+// tests read and assign them, and they all mean the tree that follows the terminal.
+for (const name of TREE_FIELDS) {
+  Object.defineProperty(FilerPro.prototype, name, { get() { return this.trees.follow[name]; }, set(v) { this.trees.follow[name] = v; }, configurable: true });
 }
