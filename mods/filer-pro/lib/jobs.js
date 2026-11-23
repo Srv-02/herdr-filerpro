@@ -72,6 +72,33 @@ export const STOP_REMOVE_SCRIPT = `case $2 in ""|*[!a-z0-9]*) ;; *)
 esac
 rm -rf -- "$1"`;
 
+// A move across sides must never delete the folder it copies into (#100). Two names can reach one folder (an alias, a
+// localhost machine, another spelling of one SSH host, a shared mount): so a marker file goes into the source's parent folder
+// on the source side, and the target folder and its parents are searched for it on the target side.
+// `x <dir> <id>`: creates <dir>/.filer-pro-mark-<id> and never overwrites a file (set -C); exit 0 on success, 1 otherwise.
+export const MARK_SCRIPT = 'set -C; : > "$1/.filer-pro-mark-$2" 2>/dev/null || exit 1; exit 0';
+// `x <dir> <id>`: removes the marker, always exit 0.
+export const UNMARK_SCRIPT = 'rm -f -- "$1/.filer-pro-mark-$2" 2>/dev/null; exit 0';
+// `x <destDir> <id> <srcName>`: from the physical <destDir> up to /, the first folder F that holds the marker decides:
+// "same" when F is <destDir> itself, "inside" when the first component of the way down from F is the entry F/<srcName>
+// (-ef: the same entry, also under another spelling), else nothing. No marker: nothing. Exit 3 when <destDir> cannot be entered.
+export const OVERLAP_SCRIPT = `d=$1 id=$2 n=$3
+cd -P -- "$d" 2>/dev/null || exit 3
+c=$(pwd -P) b=
+while :; do
+  if [ -e "$c/.filer-pro-mark-$id" ]; then
+    if [ -z "$b" ]; then echo same
+    else
+      f=\${b%%/*}
+      if [ "$c/$f" -ef "$c/$n" ]; then echo inside; fi
+    fi
+    exit 0
+  fi
+  [ "$c" = / ] && exit 0
+  b=\${c##*/}\${b:+/$b}
+  c=\${c%/*}; [ -n "$c" ] || c=/
+done`;
+
 const okOut = (r) => (r && r.code === 0 ? r.stdout : null);
 
 // The line transfer.sh writes when a Replace on a machine could not remove the set-aside old copy (the job stays done).
@@ -215,14 +242,48 @@ export function createJobs(deps) {
     return into === from || into.startsWith(from === "/" ? "/" : `${from}/`);
   }
 
-  // True when both machine names resolve to the identical SSH target string. A failed lookup counts as false: the paste is not blocked on that basis.
-  async function sameSshTarget(a, b) {
+  // true when both machine names resolve to the identical SSH target string, false when they differ, null when the lookup
+  // failed or a name has no target (#100: a move does not guess).
+  async function sameMachine(a, b) {
     try {
-      const ls = okOut(await hc(["machine", "ls", "--json"])) ?? "";
-      const ta = sshTarget(ls, a), tb = sshTarget(ls, b);
-      return !ta.error && !tb.error && ta.target === tb.target;
+      const out = okOut(await hc(["machine", "ls", "--json"]));
+      if (out === null) return null;
+      const ta = sshTarget(out, a), tb = sshTarget(out, b);
+      return ta.error || tb.error ? null : ta.target === tb.target;
     } catch {
-      return false;
+      return null;
+    }
+  }
+  // A failed lookup counts as false: a copy is not blocked on that basis.
+  const sameSshTarget = async (a, b) => (await sameMachine(a, b)) === true;
+
+  // Before a move deletes anything: is the target folder the original's own folder, or below the original? The marker is
+  // always removed again. Returns { ok: true } or { error }.
+  async function overlap({ direction, machine, from, src, destDir }) {
+    const id = newId(), srcSide = srcOn(direction, machine, from), destSide = destOn(direction, machine);
+    const refuse = { error: "Could not check whether the target is the original's folder" };
+    const parent = parentOf(src);
+    try {
+      let r;
+      try {
+        r = await exec("sh", ["-c", MARK_SCRIPT, "x", parent, id], { on: srcSide });
+      } catch {
+        return refuse;
+      }
+      if (r.code !== 0) return refuse;
+      let p;
+      try {
+        p = await exec("sh", ["-c", OVERLAP_SCRIPT, "x", destDir, id, baseName(src)], { on: destSide });
+      } catch {
+        return refuse;
+      }
+      if (p.code !== 0) return refuse;
+      const word = String(p.stdout ?? "").trim();
+      if (word === "same") return { error: "The target is the original's own folder" };
+      if (word === "inside") return { error: "Cannot move a folder into itself" };
+      return { ok: true };
+    } finally {
+      await exec("sh", ["-c", UNMARK_SCRIPT, "x", parent, id], { on: srcSide }).catch(() => {});
     }
   }
 
@@ -602,5 +663,5 @@ export function createJobs(deps) {
     setShared(KEY, rest);
   }
 
-  return { inspect, inspectArchive, startExtract, sourceSize, start, tick, cancel, recover, clearFinished, dismiss };
+  return { inspect, sameMachine, overlap, inspectArchive, startExtract, sourceSize, start, tick, cancel, recover, clearFinished, dismiss };
 }

@@ -3,7 +3,8 @@ import { SIZE_SCRIPT } from "../../mods/filer-pro/lib/sizes.js";
 import { LINKS_SCRIPT } from "../../mods/filer-pro/lib/links.js";
 import { PROBE_SCRIPT, READ_SCRIPT } from "../../mods/filer-pro/lib/textedit.js";
 import { ARCHIVE_PROBE_SCRIPT, ARCHIVE_SIZE_SCRIPT, EXTRACT_STOP_SCRIPT } from "../../mods/filer-pro/lib/archives.js";
-import { EXISTS_SCRIPT, LIST_SCRIPT, RESOLVE_SCRIPT, REPLACE_CHECK_SCRIPT } from "../../mods/filer-pro/lib/jobs.js";
+import { VERIFY_SCRIPT } from "../../mods/filer-pro/lib/verify.js";
+import { EXISTS_SCRIPT, LIST_SCRIPT, RESOLVE_SCRIPT, REPLACE_CHECK_SCRIPT, MARK_SCRIPT, UNMARK_SCRIPT, OVERLAP_SCRIPT } from "../../mods/filer-pro/lib/jobs.js";
 
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 
@@ -34,6 +35,11 @@ export function createFake(over = {}) {
     links: "total=0 outside=0 loop=0\n", // stdout of LINKS_SCRIPT
     linksCode: 0,
     linksReject: false,
+    verifies: {}, // `${on ?? ""}:${path}` -> stdout of VERIFY_SCRIPT, or an array whose first element is shifted per call (absent: -1)
+    verifyError: null, // Error to throw from the verify script
+    overlapOut: "", // stdout of OVERLAP_SCRIPT ("same", "inside" or nothing)
+    overlapCode: 0, // exit code of OVERLAP_SCRIPT
+    markFail: false, // MARK_SCRIPT exits 1
     machineReject: null, // Error thrown by `hc machine ls`
     execCode: null, // {code, stderr} returned by the exists probe instead of its normal answer
     execReject: null, // Error thrown by every other exec
@@ -78,6 +84,17 @@ export function createFake(over = {}) {
         f.onSize?.();
         return ok(`${f.sizes[path] ?? -1}${f.sizes[path] !== undefined && f.sizeFlags[path] ? ` ${f.sizeFlags[path]}` : ""}\n`);
       }
+      if (script === VERIFY_SCRIPT) {
+        if (f.verifyError) throw f.verifyError;
+        const key = `${opts.on ?? ""}:${path}`;
+        f.onVerify?.(key, args[4]);
+        const v = f.verifies[key];
+        const out = Array.isArray(v) ? (v.length > 1 ? v.shift() : v[0]) : v;
+        return ok(`${out ?? -1}\n`);
+      }
+      if (script === MARK_SCRIPT) return { code: f.markFail ? 1 : 0, stdout: "", stderr: "" };
+      if (script === UNMARK_SCRIPT) return ok();
+      if (script === OVERLAP_SCRIPT) return { code: f.overlapCode, stdout: f.overlapOut, stderr: "" };
       if (script === ARCHIVE_PROBE_SCRIPT) return { stdout: "", stderr: "", ...(f.archives[args[5]] ?? { code: 4, stderr: "not an archive" }) };
       if (script === ARCHIVE_SIZE_SCRIPT) { const r = f.archiveSizes[args[4]] ?? ""; return typeof r === "string" ? ok(r) : { stdout: "", stderr: "", ...r }; }
       if (script === EXTRACT_STOP_SCRIPT) return ok();

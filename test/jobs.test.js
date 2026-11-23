@@ -1811,3 +1811,102 @@ test("inspectArchive: an encrypted zip is refused before anything is asked or st
   assert.deepEqual(r, { error: "Encrypted archives are not supported" });
   assert.equal(f.hcRuns().length, 0);
 });
+
+// ---- #100: same machine, marker probe
+import { MARK_SCRIPT, UNMARK_SCRIPT, OVERLAP_SCRIPT } from "../mods/filer-pro/lib/jobs.js";
+
+test("sameMachine: true for one SSH target under two names, false for two, null when the list fails or a name is unknown", async () => {
+  const { f, jobs } = setup({ machines: { machines: [{ name: "box", target: "user@box" }, { name: "alias", target: "user@box" }, { name: "other", target: "user@other" }, { name: "cmd", via: true }] } });
+  assert.equal(await jobs.sameMachine("box", "alias"), true);
+  assert.equal(await jobs.sameMachine("box", "other"), false);
+  assert.equal(await jobs.sameMachine("box", "nope"), null);
+  assert.equal(await jobs.sameMachine("box", "cmd"), null);
+  f.machineReject = new Error("boom");
+  assert.equal(await jobs.sameMachine("box", "alias"), null);
+});
+test("overlap: the marker goes into the source's folder on the source side, the probe runs on the target side, the marker is removed", async () => {
+  const { f, jobs } = setup();
+  assert.deepEqual(await jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), { ok: true });
+  const scripts = f.execCalls.filter((c) => [MARK_SCRIPT, UNMARK_SCRIPT, OVERLAP_SCRIPT].includes(c.args[1]));
+  assert.deepEqual(scripts.map((c) => [c.args[1], c.on]), [[MARK_SCRIPT, "box"], [OVERLAP_SCRIPT, null], [UNMARK_SCRIPT, "box"]]);
+  assert.equal(scripts[0].args[3], "/srv/data");
+  assert.deepEqual(scripts[1].args.slice(3, 3), []);
+  assert.equal(scripts[1].args[3], DIR);
+  assert.equal(scripts[1].args[5], "a.txt");
+  assert.equal(scripts[0].args[4], scripts[1].args[4]);
+  assert.equal(scripts[2].args[4], scripts[0].args[4]);
+  const up = setup();
+  await up.jobs.overlap({ direction: "up", machine: "box", src: "/Users/m/a.txt", destDir: "/srv/in" });
+  const sc = up.f.execCalls.filter((c) => [MARK_SCRIPT, OVERLAP_SCRIPT, UNMARK_SCRIPT].includes(c.args[1]));
+  assert.deepEqual(sc.map((c) => [c.args[1], c.on]), [[MARK_SCRIPT, null], [OVERLAP_SCRIPT, "box"], [UNMARK_SCRIPT, null]]);
+  const cross = setup({ machines: { machines: [{ name: "a", target: "u@a" }, { name: "b", target: "u@b" }] } });
+  await cross.jobs.overlap({ direction: "cross", machine: "b", from: "a", src: "/s/x", destDir: "/d" });
+  assert.deepEqual(cross.f.execCalls.filter((c) => [MARK_SCRIPT, OVERLAP_SCRIPT, UNMARK_SCRIPT].includes(c.args[1])).map((c) => c.on), ["a", "b", "a"]);
+});
+test("overlap: same folder and into itself are refused", async () => {
+  const { f, jobs } = setup();
+  f.overlapOut = "same\n";
+  assert.deepEqual(await jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), { error: "The target is the original's own folder" });
+  f.overlapOut = "inside\n";
+  assert.deepEqual(await jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), { error: "Cannot move a folder into itself" });
+});
+test("overlap: a failing mark or probe refuses and still removes the marker", async () => {
+  const e = { error: "Could not check whether the target is the original's folder" };
+  const a = setup();
+  a.f.markFail = true;
+  assert.deepEqual(await a.jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), e);
+  assert.equal(a.f.execCalls.at(-1).args[1], UNMARK_SCRIPT);
+  assert.equal(a.f.execCalls.some((c) => c.args[1] === OVERLAP_SCRIPT), false);
+  const b = setup();
+  b.f.overlapCode = 3;
+  assert.deepEqual(await b.jobs.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), e);
+  assert.equal(b.f.execCalls.at(-1).args[1], UNMARK_SCRIPT);
+  const c = setup();
+  c.f.execReject = new Error("ssh: down");
+  c.f.exec = ((orig) => async (cmd, args, opts) => { if (args?.[1] === OVERLAP_SCRIPT) throw new Error("x"); return orig(cmd, args, opts); })(c.f.exec);
+  const jc = createJobs(c.f.deps());
+  assert.deepEqual(await jc.overlap({ direction: "down", machine: "box", src: SRC, destDir: DIR }), e);
+  assert.equal(c.f.execCalls.at(-1).args[1], UNMARK_SCRIPT);
+});
+const sh = (script, ...args) => spawnSync("sh", ["-c", script, "x", ...args], { encoding: "utf8" });
+test("MARK_SCRIPT never overwrites an existing file", () => {
+  const d = mkTmpSync("fs-mark-");
+  assert.equal(sh(MARK_SCRIPT, d, "k1").status, 0);
+  assert.ok(fs.existsSync(`${d}/.filer-pro-mark-k1`));
+  fs.writeFileSync(`${d}/.filer-pro-mark-k2`, "mine");
+  assert.equal(sh(MARK_SCRIPT, d, "k2").status, 1);
+  assert.equal(fs.readFileSync(`${d}/.filer-pro-mark-k2`, "utf8"), "mine");
+  assert.equal(sh(MARK_SCRIPT, `${d}/nope`, "k3").status, 1);
+  assert.equal(sh(UNMARK_SCRIPT, d, "k1").status, 0);
+  assert.equal(fs.existsSync(`${d}/.filer-pro-mark-k1`), false);
+  assert.equal(sh(UNMARK_SCRIPT, d, "k1").status, 0);
+});
+test("OVERLAP_SCRIPT finds the marker through a symlinked target folder (same)", () => {
+  const d = fs.realpathSync(mkTmpSync("fs-overlap-"));
+  fs.mkdirSync(`${d}/p`);
+  fs.symlinkSync(`${d}/p`, `${d}/alias`);
+  fs.writeFileSync(`${d}/p/.filer-pro-mark-m1`, "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/alias`, "m1", "x").stdout.trim(), "same");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p`, "m1", "x").stdout.trim(), "same");
+});
+test("OVERLAP_SCRIPT: a target below the source folder is inside, a sibling folder is not", () => {
+  const d = fs.realpathSync(mkTmpSync("fs-overlap-"));
+  fs.mkdirSync(`${d}/p/x/deep/er`, { recursive: true });
+  fs.mkdirSync(`${d}/p/other`);
+  fs.writeFileSync(`${d}/p/.filer-pro-mark-m1`, "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/x`, "m1", "x").stdout.trim(), "inside");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/x/deep/er`, "m1", "x").stdout.trim(), "inside");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/other`, "m1", "x").stdout.trim(), "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/other/`, "m1", "x").status, 0);
+  // a link to the source folder is the source folder: cd -P resolves it
+  fs.symlinkSync(`${d}/p/x`, `${d}/p/lnk`);
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/p/lnk`, "m1", "x").stdout.trim(), "inside");
+});
+test("OVERLAP_SCRIPT: no marker prints nothing, an unreachable folder exits 3", () => {
+  const d = fs.realpathSync(mkTmpSync("fs-overlap-"));
+  fs.mkdirSync(`${d}/p`);
+  const r = sh(OVERLAP_SCRIPT, `${d}/p`, "m9", "x");
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.trim(), "");
+  assert.equal(sh(OVERLAP_SCRIPT, `${d}/missing`, "m9", "x").status, 3);
+});
