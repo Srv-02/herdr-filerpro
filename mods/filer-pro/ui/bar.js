@@ -3,10 +3,16 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { barFill } from "../lib/progress.js";
+import { MOVE_MARK, moveDetail } from "../lib/movetext.js";
 import { formatBytes, formatRate } from "../lib/sizes.js";
 import { barHeight, BAR_BORDER, ROW_PAD_Y, ROW_GAP, NAME_LINE_H, TRACK_LINE_H, SMALL_LINE_H } from "../lib/barsize.js";
 
 function detail(job) {
+  if (job.move) return moveDetail(job, baseDetail(job));
+  return baseDetail(job);
+}
+
+function baseDetail(job) {
   if (job.state === "running") {
     const done = job.total != null ? `${formatBytes(job.bytes)} / ${formatBytes(job.total)}` : formatBytes(job.bytes);
     return `${done} · ${formatRate(job.rate)}`;
@@ -25,14 +31,16 @@ function track(job, t) {
 
 function row(job, t, { onCancel, onDismiss }) {
   const running = job.state === "running";
-  const percent = running ? (job.percent == null ? "" : `${job.percent}%`) : job.state === "done" ? "100%" : "";
+  const active = running || job.state === "verifying" || job.state === "deleting"; // ✕ cancels while active, else dismisses
+  const percent = running ? (job.percent == null ? "" : `${job.percent}%`) : active || job.state === "done" ? "100%" : "";
   const small = `${SMALL_LINE_H}px`;
   return v_flex().id(`job-${job.id}`).flex_none().gap(ROW_GAP).px(10).py(ROW_PAD_Y)
     .child(h_flex().h(NAME_LINE_H).line_height(`${NAME_LINE_H}px`).flex_none().gap(6).items_center()
       .child(div().w(12).flex_none().text_color(t.muted).child(job.kind === "extract" ? "↘" : { down: "↓", up: "↑", local: "→", remote: "→", cross: "↔" }[job.direction]))
+      .when(Boolean(job.move), el => el.child(div().flex_none().text_size(11).text_color(t.muted).child(MOVE_MARK)))
       .child(div().flex_1().min_w(0).truncate().child(job.name))
       .child(div().id(`job-x-${job.id}`).w(20).flex_none().text_center().cursor_pointer().text_color(t.muted).hover(s => s.text_color(t.foreground))
-        .on_click((_e, cx) => { running ? onCancel(job.id) : onDismiss(job.id); cx.notify(); }).child("✕")))
+        .on_click((_e, cx) => { active ? onCancel(job.id) : onDismiss(job.id); cx.notify(); }).child("✕")))
     .child(h_flex().h(TRACK_LINE_H).flex_none().gap(6).items_center()
       .child(track(job, t))
       .child(div().w(34).flex_none().text_right().text_size(11).line_height(small).text_color(t.dim).child(percent)))

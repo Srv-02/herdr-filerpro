@@ -26,6 +26,7 @@ export function progressOf(prev, bytes, total, now, stallMs = STALL_MS) {
 export function barFill(job) {
   if (job.state === "failed") return { width: "100%", tone: "error", pulse: false };
   if (job.state === "done") return { width: "100%", tone: "accent", pulse: false };
+  if (job.state === "verifying" || job.state === "deleting") return { width: "100%", tone: "accent", pulse: true }; // a move (#100): the copy is done
   if (job.state === "running" && job.percent == null) return { width: "40%", tone: "accent", pulse: true };
   const pct = Math.max(0, Math.min(100, job.percent ?? 0));
   return { width: `${pct}%`, tone: "accent", pulse: false };

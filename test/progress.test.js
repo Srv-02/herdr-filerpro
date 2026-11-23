@@ -68,3 +68,8 @@ test("stallMs from the settings replaces the 120 s default", () => {
   assert.equal(progressOf(a, 50, 100, 30_001, 30_000).stalled, true);
   assert.equal(progressOf(a, 50, 100, 30_000, 30_000).stalled, false);
 });
+
+test("barFill pulses a full bar while verifying or deleting", () => {
+  for (const state of ["verifying", "deleting"]) assert.deepEqual(barFill({ state, percent: 100 }), { width: "100%", tone: "accent", pulse: true });
+  assert.deepEqual(barFill({ state: "done", percent: 100 }), { width: "100%", tone: "accent", pulse: false });
+});

@@ -425,7 +425,7 @@ export default class FilerPro extends View {
       setShared("filer-pro.answer", null);
       setShared("filer-pro.pending", pending);
       // The warning before a copy between machines has a route strip and a footer checkbox: a little taller.
-      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: pending.choices?.includes("copy") ? 270 : pending.choices?.includes("delete") && pending.item?.count >= 2 ? 330 : 240 });
+      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: pending.choices?.includes("move") ? 290 : pending.choices?.includes("copy") ? 270 : pending.choices?.includes("delete") && pending.item?.count >= 2 ? 330 : 240 });
       this.waiter = { batch: pending.batch, overlay, at: Date.now(), resolve };
     }));
     this.asking = turn.catch(() => {});
