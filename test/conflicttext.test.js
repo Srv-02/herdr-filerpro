@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { conflictText, conflictHint, crossTitle, crossText, CROSS_DONT_SHOW } from "../mods/filer-pro/lib/conflicttext.js";
+import { conflictText, conflictHint, crossTitle, crossText, CROSS_DONT_SHOW, deleteText } from "../mods/filer-pro/lib/conflicttext.js";
 import { handleRequest } from "../mods/filer-pro/lib/requests.js";
 
 const f = (o = {}) => ({ name: "a.txt", isDir: false, ...o });
@@ -83,4 +83,19 @@ test("cross: the warning names both machines by their herdr names, the amount, a
 
 test("cross: Replace deletes on the target machine", () => {
   assert.equal(conflictHint(f({ direction: "cross", from: "a", machine: "b" })), "Replace deletes the existing file on b permanently.");
+});
+
+test("#99 deleteText: one item keeps today's texts", () => {
+  assert.deepEqual(deleteText({ name: "a.txt", isDir: false, path: "/Users/m/a.txt", machine: null, trash: true }),
+    { title: "Delete file?", body: 'Move "a.txt" to the Trash?', lines: ["/Users/m/a.txt"] });
+  assert.deepEqual(deleteText({ name: "d", isDir: true, path: "/srv/d", machine: "box", trash: false }),
+    { title: "Delete folder?", body: 'Delete "d" on box? This cannot be undone.', lines: ["/srv/d"] });
+});
+test("#99 deleteText: several items list the names, at most what the item carries, then and N more", () => {
+  const names = ["a", "b", "c", "d", "e"];
+  assert.deepEqual(deleteText({ count: 7, names, more: 2, trash: true, machine: null }),
+    { title: "Delete 7 items?", body: "Move 7 items to the Trash?", lines: [...names, "and 2 more"] });
+  assert.deepEqual(deleteText({ count: 3, names: ["a", "b", "c"], more: 0, trash: false, machine: "box" }),
+    { title: "Delete 3 items?", body: "Delete 3 items on box? This cannot be undone.", lines: ["a", "b", "c"] });
+  assert.equal(deleteText({ count: 1200, names: [], more: 1200, trash: true }).title, "Delete 1,200 items?");
 });

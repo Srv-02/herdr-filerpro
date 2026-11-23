@@ -1,14 +1,15 @@
 // Request files: other programs (herdr-app do ... cannot pass arguments) drop <id>.json into
 // appHome()/filer-pro/requests/; the lease holder claims, handles and answers with <id>.result.json.
 import { createBatch } from "./batch.js";
-import { clipEntry, pastePlan } from "./clipboard.js";
-import { badSpelling, normalizePath } from "./fileops.js";
+import { clipEntry, clipItems, pastePlan, sameClip } from "./clipboard.js";
+import { badSpelling, normalizePath, REMOVE_TIMEOUT_MS } from "./fileops.js";
 import { baseName, joinPath, keepBothName, nameKey } from "./names.js";
 
 const CONFLICTS = ["replace", "merge", "keep_both", "cancel"];
 const REVEALS = [true, "open", "preview"];
 const MODES = ["preview", "source"];
 
+const VERB = { upload: "uploaded", download: "downloaded", delete: "deleted" };
 const SPELLING_ERROR = 'Path must not contain ".", ".." or "//"';
 
 // A request path is refused with a "." or ".." component or an empty one from "//" (badSpelling): ".." behind
@@ -46,7 +47,7 @@ export function parseRequest(text) {
     if (!o.paths.every((p) => p.startsWith("/"))) return "paths must be absolute";
     if (o.folder !== undefined && (!str(o.folder) || !o.folder.startsWith("/"))) return "folder must be absolute";
     for (const p of o.paths) {
-      const e = spellingError(p, false, `"/" cannot be ${o.action === "upload" ? "uploaded" : "copied"}`);
+      const e = spellingError(p, false, `"/" cannot be ${VERB[o.action] ?? "copied"}`);
       if (e) return e;
     }
     if (o.folder !== undefined && spellingError(o.folder, true)) return SPELLING_ERROR;
@@ -67,7 +68,9 @@ export function parseRequest(text) {
   switch (o.action) {
     case "download": {
       if (!str(o.machine)) return { error: "machine is required" };
-      const pe = pathError("path", o.path, false, '"/" cannot be downloaded');
+      const list = o.paths !== undefined;
+      if (list && o.path !== undefined) return { error: "Use path or paths, not both" };
+      const pe = list ? pathsError() : pathError("path", o.path, false, '"/" cannot be downloaded');
       if (pe) return { error: pe };
       // dest_dir: absent or null means download_folder; anything else must be an absolute folder (#33).
       const hasDest = o.dest_dir !== undefined && o.dest_dir !== null;
@@ -77,7 +80,7 @@ export function parseRequest(text) {
       }
       const c = common();
       if (c.error) return c;
-      return { action: "download", machine: o.machine, path: o.path, ...(hasDest ? { dest_dir: o.dest_dir } : {}), ...c };
+      return { action: "download", machine: o.machine, ...(list ? { paths: o.paths } : { path: o.path }), ...(hasDest ? { dest_dir: o.dest_dir } : {}), ...c };
     }
     case "upload": {
       if (!str(o.machine)) return { error: "machine is required" };
@@ -108,6 +111,15 @@ export function parseRequest(text) {
     case "clip": {
       const m = machineOf();
       if (m.error) return m;
+      if (o.items !== undefined) {
+        if (o.path !== undefined) return { error: "Use path or items, not both" };
+        if (!Array.isArray(o.items) || o.items.length === 0 || !o.items.every((i) => i && typeof i === "object" && !Array.isArray(i))) return { error: "items is required" };
+        for (const i of o.items) {
+          const e = pathError("path", i.path, false, '"/" cannot be copied or cut');
+          if (e) return { error: e };
+        }
+        return { action: "clip", ...m, items: o.items.map((i) => ({ path: i.path, is_dir: i.is_dir === true })), ...(o.cut === true ? { cut: true } : {}) };
+      }
       const pe = pathError("path", o.path, false, '"/" cannot be copied or cut');
       if (pe) return { error: pe };
       return { action: "clip", ...m, path: o.path, is_dir: o.is_dir === true, ...(o.cut === true ? { cut: true } : {}) };
@@ -144,6 +156,12 @@ export function parseRequest(text) {
     case "delete": {
       const m = machineOf();
       if (m.error) return m;
+      if (o.paths !== undefined) {
+        if (o.path !== undefined) return { error: "Use path or paths, not both" };
+        const le = pathsError() ?? absError("root", o.root);
+        if (le) return { error: le };
+        return { action: "delete", ...m, paths: o.paths, root: o.root, confirm: o.confirm === true };
+      }
       const pe = absError("path", o.path) ?? absError("root", o.root);
       if (pe) return { error: pe };
       return { action: "delete", ...m, path: o.path, root: o.root, confirm: o.confirm === true };
@@ -182,11 +200,12 @@ export async function claim(dir, id, writeTextFile) {
   }
 }
 
-export function resultText({ ok, job, jobs, path, trashed, trash_path, moved, noop, warning, shown, mode, errors, error }) {
+export function resultText({ ok, job, jobs, path, removed, trashed, trash_path, moved, noop, warning, shown, mode, errors, error }) {
   const o = { ok: !!ok };
   if (job !== undefined) o.job = job;
   if (jobs !== undefined) o.jobs = jobs;
   if (path !== undefined) o.path = path;
+  if (removed !== undefined) o.removed = removed;
   if (trashed !== undefined) o.trashed = trashed;
   if (trash_path !== undefined) o.trash_path = trash_path;
   if (moved !== undefined) o.moved = moved;
@@ -346,18 +365,18 @@ export async function runExtract({ machine, path, how, conflict }, deps) {
 
 // Paste after Cut: inspect, ask (replace / keep both / cancel; or copy instead on another volume), move.
 // Replace is the confirmation, there is no second dialog. conflict answers the dialog up front;
-// merge counts as replace. Another volume is never answered up front: it is Copy instead or Cancelled.
+// merge counts as cancel (#99: it used to delete the target folder like replace). Another volume is never answered up front: it is Copy instead or Cancelled.
 // deps: as handleRequest; fileOps.inspectMove / fileOps.move (move.js).
 export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) {
   const { getShared, setShared } = deps;
   const now = deps.now ?? Date.now;
   if (typeof root !== "string" || root === "") return { ok: false, error: "root is required" };
-  const i = await deps.fileOps.inspectMove({ on, src: plan.src, destDir: plan.destDir, root });
+  const src = plan.srcs[0];
+  const i = await deps.fileOps.inspectMove({ on, src, destDir: plan.destDir, root });
   if (!i.ok) return i;
   if (i.noop) return { ok: true, noop: true };
   const clearClipboard = () => {
-    const cur = getShared("filer-pro.clipboard");
-    if (cur && cur.path === clip.path && cur.at === clip.at && (cur.machine ?? null) === (clip.machine ?? null)) setShared("filer-pro.clipboard", null);
+    if (sameClip(getShared("filer-pro.clipboard"), clip)) setShared("filer-pro.clipboard", null);
   };
   const batch = `${deps.newBatchId()}#1`;
   const item = {
@@ -368,13 +387,13 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
   if (i.crossVolume) {
     const a = await deps.ask({ batch, item, choices: ["copy_instead", "cancel"], remaining: 1 });
     if (a?.choice !== "copy_instead") return cancelled;
-    const r = await runTransfers({ direction: plan.direction, machine: plan.machine, paths: [plan.src], destDir: plan.destDir, conflict, reveal }, deps);
+    const r = await runTransfers({ direction: plan.direction, machine: plan.machine, paths: [src], destDir: plan.destDir, conflict, reveal }, deps);
     // The copy only started: the Cut clipboard stays until it succeeds. jobs.js empties it when a job named in
     // copyJobs ends as done (a failed copy leaves the Cut intact).
     if (r.ok) {
       const ids = r.jobs.map((j) => j.id);
       const cur = getShared("filer-pro.clipboard");
-      if (cur && cur.path === clip.path && cur.at === clip.at && (cur.machine ?? null) === (clip.machine ?? null)) {
+      if (sameClip(cur, clip)) {
         setShared("filer-pro.clipboard", { ...cur, copyJobs: ids });
         const jobsNow = getShared("filer-pro.jobs") || {};
         if (ids.length > 0 && ids.every((id) => jobsNow[id]?.state === "done")) clearClipboard();
@@ -384,7 +403,7 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
   }
   let choice = "new";
   if (i.exists) {
-    if (conflict !== undefined) choice = conflict === "merge" ? "replace" : conflict;
+    if (conflict !== undefined) choice = conflict === "merge" ? "cancel" : conflict;
     else {
       const a = await deps.ask({ batch, item, choices: ["replace", "keep_both", "cancel"], remaining: 1 });
       choice = a?.choice ?? "cancel";
@@ -399,10 +418,137 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
     const target = j.direction === "up" || j.direction === "remote" || j.direction === "cross" ? j.machine : null;
     if ((target ?? null) === on && typeof j.dest === "string") reserved.push(baseName(j.dest));
   }
-  const out = await deps.fileOps.move({ on, src: plan.src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
+  const out = await deps.fileOps.move({ on, src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
   if (out.ok) clearClipboard();
   changedAfter(setShared, now); // a failed move may have moved the old entry aside already
   return out;
+}
+
+// Paste after Cut of several items (#99): one conflict pass without Merge (Apply to all), one Another volume question per
+// item, then the moves in clipboard order. An item that moved leaves the clipboard; cancelled, failed and no-op items stay.
+// Returns { ok, moved: number, names, jobs?, errors?, warnings? }; deps as runMove.
+export async function runMoves({ on, plan, clip, root, conflict, reveal }, deps) {
+  const { getShared, setShared } = deps;
+  const now = deps.now ?? Date.now;
+  if (typeof root !== "string" || root === "") return { ok: false, error: "root is required" };
+  const errors = [], batchItems = [], infoOf = new Map(), volume = [], seen = new Map();
+  for (const src of plan.srcs) {
+    const i = await deps.fileOps.inspectMove({ on, src, destDir: plan.destDir, root });
+    if (!i.ok) { errors.push({ path: src, error: i.error }); continue; }
+    if (i.noop) continue;
+    const shown = {
+      name: i.name, isDir: i.isDir, path: i.src, machine: on, trash: on === null, action: "move", direction: plan.direction, destDir: plan.destDir,
+      ...(i.destIsDir !== undefined ? { destIsDir: i.destIsDir } : {}),
+    };
+    if (i.crossVolume) { volume.push({ src, shown }); continue; }
+    // Like runTransfers: a later source with the name of an earlier one is kept both, or cancelled with it.
+    const key = String(batchItems.length), first = seen.get(nameKey(i.name));
+    if (first === undefined) seen.set(nameKey(i.name), key);
+    batchItems.push({ ...shown, key, exists: first === undefined ? i.exists === true : false, ...(first !== undefined ? { first } : {}) });
+    infoOf.set(key, { src, i });
+  }
+  const id = deps.newBatchId();
+  let n = 0;
+  const batch = createBatch(batchItems, { merge: false });
+  batch.preset({ conflict });
+  for (let item = batch.next(); item; item = batch.next()) {
+    const { first: _first, key: _key, exists: _exists, ...dialog } = item;
+    const a = await deps.ask({ batch: `${id}#${++n}`, item: dialog, choices: batch.choices(item), remaining: batch.remaining(item) });
+    batch.answer(a?.choice ?? "cancel", a?.apply_to_all === true);
+  }
+  // Another volume is never answered up front: Copy instead or cancelled; Apply to all (an answer request) covers the rest.
+  const copyInstead = [];
+  const volumeChoice = new Map();
+  for (let k = 0; k < volume.length; k++) {
+    if (volumeChoice.has(k)) continue;
+    const a = await deps.ask({ batch: `${id}#${++n}`, item: volume[k].shown, choices: ["copy_instead", "cancel"], remaining: volume.length - volumeChoice.size });
+    const choice = a?.choice === "copy_instead" ? "copy_instead" : "cancel";
+    volumeChoice.set(k, choice);
+    if (a?.apply_to_all === true) for (let j = k + 1; j < volume.length; j++) if (!volumeChoice.has(j)) volumeChoice.set(j, choice);
+  }
+  volume.forEach((v, k) => { if (volumeChoice.get(k) === "copy_instead") copyInstead.push(v.src); });
+  // Names a running job already claims in the target folder (target side: up and remote write to a machine).
+  const reserved = [];
+  for (const j of Object.values(getShared("filer-pro.jobs") || {})) {
+    if (j.state !== "running" || typeof j.destDir !== "string" || normalizePath(j.destDir) !== normalizePath(plan.destDir)) continue;
+    const target = j.direction === "up" || j.direction === "remote" || j.direction === "cross" ? j.machine : null;
+    if ((target ?? null) === on && typeof j.dest === "string") reserved.push(baseName(j.dest));
+  }
+  const movedSrcs = [], names = [], warnings = [];
+  let ran = false;
+  for (const item of batchItems) {
+    let choice = batch.decision(item.key);
+    if (item.first !== undefined) choice = batch.decision(item.first) === "cancel" ? "cancel" : choice && "keep_both";
+    if (!choice || choice === "cancel") continue;
+    const { src, i } = infoOf.get(item.key);
+    if (choice === "replace" && i.replaceError) { errors.push({ path: src, error: i.replaceError }); continue; }
+    ran = true;
+    const out = await deps.fileOps.move({ on, src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
+    if (!out.ok) { errors.push({ path: src, error: out.error }); continue; }
+    if (out.noop) continue;
+    movedSrcs.push(src);
+    names.push(out.name ?? baseName(out.path ?? src));
+    if (out.warning) warnings.push(out.warning);
+  }
+  let jobs = [];
+  if (copyInstead.length > 0) {
+    const r = await runTransfers({ direction: plan.direction, machine: plan.machine, paths: copyInstead, destDir: plan.destDir, conflict, reveal }, deps);
+    ran = true;
+    if (r.ok) jobs = r.jobs;
+    for (const e of r.errors ?? []) errors.push(e);
+  }
+  // The clipboard, only while it is still this entry: moved items leave it; a started copy waits for its job (jobs.js end).
+  const cur = getShared("filer-pro.clipboard");
+  if (sameClip(cur, clip) && (movedSrcs.length > 0 || jobs.length > 0)) {
+    const now_ = getShared("filer-pro.jobs") || {};
+    const gone = new Set(movedSrcs);
+    const copyJobs = [];
+    jobs.forEach((j, k) => {
+      const path = j.src ?? (jobs.length === copyInstead.length ? copyInstead[k] : undefined);
+      if (path === undefined) return;
+      if (now_[j.id]?.state === "done") gone.add(path);
+      else copyJobs.push({ id: j.id, path });
+    });
+    const items = clipItems(cur).filter((i) => !gone.has(i.path));
+    const { path: _path, isDir: _isDir, items: _items, copyJobs: _old, ...base } = cur;
+    setShared("filer-pro.clipboard", items.length === 0 ? null : { ...base, items, ...(copyJobs.length > 0 ? { copyJobs } : {}) });
+  }
+  if (ran) changedAfter(setShared, now); // a failed move may have moved the old entry aside already
+  const result = { moved: movedSrcs.length, names, ...(jobs.length > 0 ? { jobs } : {}), ...(errors.length > 0 ? { errors } : {}), ...(warnings.length > 0 ? { warnings } : {}) };
+  if (movedSrcs.length > 0 || jobs.length > 0) return { ok: true, ...result };
+  if (errors.length > 0) return { ok: false, error: errors[0].error, errors };
+  return ran || volume.length > 0 || batchItems.length > 0 ? { ok: false, error: "Cancelled" } : { ok: true, noop: true };
+}
+
+// Delete of several items (#99): check each (a refused one is listed), one question for the rest, then one delete per item.
+// deps: as handleRequest. Result: { ok, removed, trashed, errors? }.
+async function runDeletes({ on, paths, root, confirm }, deps) {
+  const found = [], errors = [];
+  for (const path of [...new Set(paths)]) {
+    const c = await deps.fileOps.check({ on, path, root });
+    if (c.ok) found.push({ path, c });
+    else errors.push({ path, error: c.error });
+  }
+  if (found.length === 0) return { ok: false, error: errors[0].error, errors };
+  if (confirm !== true) {
+    const names = found.map((f) => f.c.name);
+    // Only the answer "delete" deletes: everything else, also a closed dialog, is Cancelled.
+    const a = await deps.ask({
+      batch: `${deps.newBatchId()}#1`,
+      item: { count: found.length, names: names.slice(0, 5), more: Math.max(0, names.length - 5), isDir: false, machine: on, trash: on === null, path: found[0].c.path },
+      choices: ["delete", "cancel"], remaining: 1,
+    });
+    if (a?.choice !== "delete") return { ok: false, error: "Cancelled" };
+  }
+  let removed = 0;
+  for (const { path, c } of found) {
+    const out = await deps.fileOps.remove({ on, path, root, expect: c.path, timeout: REMOVE_TIMEOUT_MS });
+    if (out.ok) removed++;
+    else errors.push({ path, error: out.error });
+  }
+  changedAfter(deps.setShared, deps.now ?? Date.now); // a failed delete of a folder may have removed part of it
+  if (removed === 0) return { ok: false, error: errors[0].error, errors };
+  return { ok: true, removed, trashed: on === null, ...(errors.length > 0 ? { errors } : {}) };
 }
 
 // filer-pro.changed after an operation ran, whether it succeeded or not: a failure on a machine (a dropped connection,
@@ -437,8 +583,9 @@ export async function handleRequest(req, deps) {
     case "download": {
       const destDir = req.dest_dir || (await deps.loadConfig()).download_folder;
       const r = await runTransfers({
-        direction: "down", machine: req.machine, paths: [req.path], destDir, conflict: req.conflict, links: req.links, reveal: req.reveal,
+        direction: "down", machine: req.machine, paths: req.paths ?? [req.path], destDir, conflict: req.conflict, links: req.links, reveal: req.reveal,
       }, deps);
+      if (req.paths) return r;
       return r.ok ? { ok: true, job: r.jobs[0] } : { ok: false, error: r.error };
     }
     case "copy": {
@@ -448,18 +595,21 @@ export async function handleRequest(req, deps) {
     case "extract":
       return runExtract(req, deps);
     case "clip":
-      setShared("filer-pro.clipboard", clipEntry({ on: req.machine, path: req.path, isDir: req.is_dir, at: now(), cut: req.cut }));
+      setShared("filer-pro.clipboard", clipEntry({
+        on: req.machine, at: now(), cut: req.cut,
+        items: req.items ? req.items.map(({ path, is_dir }) => ({ path, isDir: is_dir })) : [{ path: req.path, isDir: req.is_dir }],
+      }));
       return { ok: true };
     case "paste": {
       const clip = getShared("filer-pro.clipboard");
       const plan = pastePlan(clip, { on: req.machine ?? null, folder: req.folder });
       if (plan.error) return { ok: false, error: plan.error };
-      if (plan.move) return runMove({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
+      if (plan.move) return (plan.srcs.length === 1 ? runMove : runMoves)({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
       // A copy between two machines runs through this computer: one warning per paste unless the setting is off.
       const warn = plan.direction === "cross" && (await deps.loadConfig())?.warn_cross_copy !== false
-        ? { item: { name: baseName(plan.src), isDir: clip.isDir === true, path: plan.src, from: plan.from, machine: plan.machine, direction: "cross" } } : null;
+        ? { item: { name: baseName(plan.srcs[0]), isDir: clipItems(clip)[0].isDir, path: plan.srcs[0], from: plan.from, machine: plan.machine, direction: "cross" } } : null;
       return runTransfers({
-        direction: plan.direction, machine: plan.machine, ...(plan.from ? { from: plan.from } : {}), paths: [plan.src], destDir: plan.destDir,
+        direction: plan.direction, machine: plan.machine, ...(plan.from ? { from: plan.from } : {}), paths: plan.srcs, destDir: plan.destDir,
         conflict: req.conflict, links: req.links, reveal: req.reveal, warn,
       }, deps);
     }
@@ -477,6 +627,7 @@ export async function handleRequest(req, deps) {
     }
     case "delete": {
       const on = req.machine ?? null;
+      if (req.paths) return runDeletes({ on, paths: req.paths, root: req.root, confirm: req.confirm }, deps);
       const found = await deps.fileOps.check({ on, path: req.path, root: req.root });
       if (!found.ok) return { ok: false, error: found.error };
       if (req.confirm !== true) {
@@ -489,7 +640,7 @@ export async function handleRequest(req, deps) {
         if (a?.choice !== "delete") return { ok: false, error: "Cancelled" };
       }
       // expect: the physical path shown in the dialog; remove checks again and refuses another one.
-      const out = await deps.fileOps.remove({ on, path: req.path, root: req.root, expect: found.path });
+      const out = await deps.fileOps.remove({ on, path: req.path, root: req.root, expect: found.path, timeout: REMOVE_TIMEOUT_MS });
       changedAfter(setShared, now); // a failed delete of a folder may have removed part of it
       return out;
     }

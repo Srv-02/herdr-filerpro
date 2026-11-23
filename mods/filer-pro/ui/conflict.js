@@ -3,7 +3,7 @@
 // or the confirmation before a delete (choices "delete" and "cancel").
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { conflictText, crossTitle, crossText, THIS_COMPUTER, CROSS_DONT_SHOW } from "../lib/conflicttext.js";
+import { conflictText, deleteText, crossTitle, crossText, THIS_COMPUTER, CROSS_DONT_SHOW } from "../lib/conflicttext.js";
 import { checkBox } from "./checkbox.js";
 
 const LABEL = { replace: "Replace", merge: "Merge", keep_both: "Keep both", copy_instead: "Copy instead", copy: "Copy", cancel: "Cancel", transfer_anyway: "Transfer anyway", ok: "OK" };
@@ -21,16 +21,15 @@ function button(choice, t, onChoose, item) {
     .hover(s => s.bg(t.hover)).on_click((_e, cx) => onChoose(choice, cx)).child(label(choice, item));
 }
 
-// The delete question: name, kind and place; the final delete on a machine says so.
+// The delete question: name, kind and place; the final delete on a machine says so. Several items (#99): the names as lines.
 function deleteView(t, pending, handlers) {
   const item = pending.item ?? {};
-  const kind = item.isDir ? "folder" : "file";
-  const text = item.trash ? `Move "${item.name}" to the Trash?` : `Delete "${item.name}" on ${item.machine}? This cannot be undone.`;
+  const text = deleteText(item), several = item.count >= 2;
   return v_flex().id("filer-pro-conflict").size_full().p(16).gap(12).bg(t.background).text_color(t.foreground).text_size(13)
-    .child(div().font_semibold().child(`Delete ${kind}?`))
+    .child(div().font_semibold().child(text.title))
     .child(v_flex().flex_1().min_h(0).gap(6)
-      .child(div().text_color(t.muted).child(text))
-      .child(div().text_size(11).text_color(t.dim).truncate().child(item.path ?? "")))
+      .child(div().text_color(t.muted).child(text.body))
+      .children(text.lines.map((line, n) => div().text_size(several ? 12 : 11).text_color(several && n >= (item.names?.length ?? 0) ? t.dim : several ? t.foreground : t.dim).truncate().child(line))))
     .child(h_flex().gap(8).justify_end().children((pending.choices ?? []).map(c => button(c, t, handlers.onChoose, item))));
 }
 

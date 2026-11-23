@@ -16,13 +16,13 @@ import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick, folderClick, rowClick } from "./lib/clicks.js";
-import { applyClick, clearSelection, prune } from "./lib/selection.js";
+import { applyClick, clearSelection, collapse, prune } from "./lib/selection.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
-import { createFileOps, successToast, validateName } from "./lib/fileops.js";
+import { createFileOps, successToast, deleteErrorToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
@@ -46,6 +46,7 @@ import { renameSpec, newFolderSpec } from "./lib/namespecs.js";
 import { transfersBar } from "./ui/bar.js";
 import { checkBox } from "./ui/checkbox.js";
 import { selectionBar } from "./ui/selbar.js";
+import { selectionRequest, pathsText, barLabel } from "./lib/selactions.js";
 import { menuView } from "./ui/menu.js";
 import { conflictView } from "./ui/conflict.js";
 import { editTools, promptBar, statusBar } from "./ui/edit.js";
@@ -304,7 +305,8 @@ export default class FilerPro extends View {
                   throw e;
                 }
                 if (ui && out.errors) {
-                  for (const e of out.errors) notify({ title: failed, body: e.error, level: "error" });
+                  if (req.action === "delete" && out.errors.length > 1) notify(deleteErrorToast(out.errors)); // one toast for a delete of several items (#99)
+                  else for (const e of out.errors) notify({ title: failed, body: e.error, level: "error" });
                 } else if (ui && !out.ok && out.error !== "Cancelled") notify({ title: failed ?? "Request failed", body: out.error, level: "error" });
                 const toast = ui && out.ok ? successToast(req, out) : null;
                 if (toast) notify(toast);
@@ -423,7 +425,7 @@ export default class FilerPro extends View {
       setShared("filer-pro.answer", null);
       setShared("filer-pro.pending", pending);
       // The warning before a copy between machines has a route strip and a footer checkbox: a little taller.
-      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: pending.choices?.includes("copy") ? 270 : 240 });
+      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: pending.choices?.includes("copy") ? 270 : pending.choices?.includes("delete") && pending.item?.count >= 2 ? 330 : 240 });
       this.waiter = { batch: pending.batch, overlay, at: Date.now(), resolve };
     }));
     this.asking = turn.catch(() => {});
@@ -454,7 +456,7 @@ export default class FilerPro extends View {
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
       const ed = p.editor ?? editorMenu(null);
-      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting }),
+      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting, count: p.count }),
         size: sizeDetail(sized, Date.now()), sizeTitle: sizeNote(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -466,6 +468,8 @@ export default class FilerPro extends View {
         this.request({ machine: p.machine, path: p.path, reveal: app === "preview" ? "preview" : "open" });
         close();
       };
+      const many = p.count >= 2 && Array.isArray(p.items) && p.items.length >= 2;
+      const runSelection = (action, dest) => { this.request(selectionRequest(action, { on: p.machine ?? null, root: p.root, items: p.items, dest })); close(); };
       const toClipboard = (text, cx) => { writeClipboard(text, { cx, exec, notify, platform }).finally(close); };
       // Open in <editor> and Edit in Terminal (lib/editors.js): the popup closes once the lookup and the start returned. The name
       // comes with the props (an overlay copy never reads the config); the click loads the config itself, so the editor that
@@ -510,6 +514,16 @@ export default class FilerPro extends View {
         delete: () => act({ action: "delete", path: p.path, root: p.root }),
         // The popup closes once the dialog is open (the snapshot is read first, as editor() does).
         settings: () => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })).finally(close); },
+        // The menu for several rows (#99): p.items is the collapsed selection; Paste and the rest above stay as they are.
+        ...(many ? {
+          download: () => runSelection("download"),
+          download_to: () => { pickFolder({ prompt: "Download here" }).then((dir) => { if (dir) runSelection("download_to", dir); else close(); }).catch(close); },
+          copy: () => runSelection("copy"),
+          cut: () => runSelection("cut"),
+          delete: () => runSelection("delete"),
+          copy_path: (cx) => toClipboard(pathsText(p.items), cx),
+          clear_selection: () => { setShared("filer-pro.select", { id: this.newId(), mode: "clear", machine: p.machine ?? null, root: p.root }); close(); },
+        } : {}),
       });
     }
     if (p.view === "settings" && this.settings) {
@@ -887,6 +901,14 @@ export default class FilerPro extends View {
   }
 
   clearSelected() { this.setSelection(clearSelection()); }
+
+  // The selection as actions see it: a folder stands for what lies inside it, in tree order (rows that are not shown last).
+  selectedItems() {
+    const shown = this.visible().filter((r) => !r.entry.note).map((r) => r.path);
+    const rest = [...(this.selected ?? [])].filter((p) => !shown.includes(p)).sort();
+    return collapse([...shown.filter((p) => this.selected?.has(p)), ...rest])
+      .map((p) => ({ path: joinPath(this.root, p), isDir: this.entryAt(p)?.dir === true }));
+  }
 
   // Drops selected rows that the loaded listings no longer hold; the anchor goes with its row.
   pruneSelected() {
@@ -2035,6 +2057,21 @@ export default class FilerPro extends View {
       .child(svg(`${BASE}/refresh-cw.svg`).size(14).text_color(t.muted));
   }
 
+  // The file actions of the selection bar (#99): icon buttons that run the same requests as the menu for several rows.
+  // Dimmed and without a click while nothing is selected (the Select Files mode).
+  selectionButtons(t) {
+    const items = this.selectedItems();
+    return [["download", "download.svg"], ["copy", "copy.svg"], ["cut", "scissors.svg"], ["delete", "trash.svg"]].map(([action, glyph]) => {
+      const label = barLabel(action, items.length);
+      const on = items.length > 0;
+      return div().id(`files-selection-${action}`).w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6)
+        .when(on, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.request(selectionRequest(action, { on: this.on, root: this.root, items })); cx.notify(); }))
+        .when(!on, (el) => el.opacity(0.4))
+        .tooltip(label).accessibility_label(label)
+        .child(svg(`${BASE}/${glyph}`).size(14).text_color(t.muted));
+    });
+  }
+
   // The Settings button in the panel header while no file is open: a gear in a 24px hit area, muted at rest.
   gear(t) {
     return div().id("files-settings").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
@@ -2136,8 +2173,11 @@ export default class FilerPro extends View {
           cx.stop_propagation();
           // A menu on a row outside the selection ends the selection, except in checkbox mode.
           if (this.selecting !== true && this.selected?.size && !this.selected.has(path)) { this.clearSelected(); cx.notify(); }
-          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents, selecting: this.selecting === true }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+          // Several rows (a folder and what lies inside it count once) get the short menu for all of them (#99).
+          const items = picked ? this.selectedItems() : [];
+          const multi = items.length >= 2 ? { items, count: items.length } : {};
+          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents, selecting: this.selecting === true, count: multi.count }) };
+          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))
         .when(boxes, el => el.child(checkBox(t, picked)).when(depth > 0, e => e.child(div().w(depth * 18).flex_none().ml(-7))))
@@ -2200,7 +2240,7 @@ export default class FilerPro extends View {
     const sel = this.file ? null : selectionBar(t, { count: this.selected?.size ?? 0, selecting: this.selecting === true }, {
       onDone: (cx) => { this.selecting = false; this.clearSelected(); cx.notify(); },
       onClear: (cx) => { this.clearSelected(); cx.notify(); },
-      actions: [],
+      actions: this.selectionButtons(t),
     });
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)

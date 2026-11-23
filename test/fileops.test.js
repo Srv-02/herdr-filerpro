@@ -8,7 +8,7 @@ import { after } from "node:test";
 import { joinPath } from "../mods/filer-pro/lib/names.js";
 import { mkTmp, mkTmpSync } from "./tmp-helper.js";
 import {
-  validateName, renameCheck, normalizePath, guardVerdict, parseGuard, createFileOps, successToast,
+  validateName, renameCheck, normalizePath, guardVerdict, parseGuard, createFileOps, successToast, deleteErrorToast, REMOVE_TIMEOUT_MS,
   GUARD_SCRIPT, RENAME_SCRIPT, REMOVE_SCRIPT, CONFIRM_SCRIPT, MKDIR_SCRIPT, SAME_FN,
 } from "../mods/filer-pro/lib/fileops.js";
 
@@ -626,7 +626,7 @@ test("GUARD_SCRIPT: the real home folder and the folder above it are refused (no
 function recorder(over = {}) {
   const calls = [];
   const exec = async (cmd, args, opts = {}) => {
-    calls.push({ cmd, args, on: opts.on ?? null });
+    calls.push({ cmd, args, on: opts.on ?? null, timeout: opts.timeout });
     if (args?.[1] === GUARD_SCRIPT && over.guard) return over.guard(args.slice(3), opts.on ?? null);
     if (args?.[1] === GUARD_SCRIPT) return { ...sh(GUARD_SCRIPT, args.slice(3), over.env ?? {}), code: 0 };
     if (args?.[1] === CONFIRM_SCRIPT) return opts.on ? { code: 0, stdout: "", stderr: "" } : { code: sh(CONFIRM_SCRIPT, args.slice(3)).status, stdout: "", stderr: "" };
@@ -1042,4 +1042,23 @@ test("empty stderr gives the text of the operation", async () => {
   const d = guardTree(), root = `${d}/Users/m/proj`;
   const tr = recorder({ env: { HOME: `${d}/Users/m` }, answer: (cmd) => (cmd === "/usr/bin/trash" ? empty() : undefined) });
   assert.deepEqual(await tr.ops.remove({ on: null, path: `${root}/a.txt`, root }), { ok: false, error: "Could not move to the Trash" });
+});
+
+test("#99 remove on a machine passes the timeout to rm; REMOVE_TIMEOUT_MS is 120 s", async () => {
+  assert.equal(REMOVE_TIMEOUT_MS, 120_000);
+  const remote = recorder({ guard: fakeGuard(guardInfo({ 2: "/home/u/tmp/in" })) });
+  assert.equal((await remote.ops.remove({ on: "box", path: "/home/u/link/a", root: "/home/u/tmp", timeout: REMOVE_TIMEOUT_MS })).ok, true);
+  assert.equal(remote.mutating().at(-1).timeout, 120_000);
+  assert.equal((await remote.ops.remove({ on: "box", path: "/home/u/link/a", root: "/home/u/tmp" })).ok, true);
+  assert.equal(remote.mutating().at(-1).timeout, undefined);
+});
+test("#99 successToast for a delete of several items", () => {
+  assert.deepEqual(successToast({ action: "delete", paths: ["/a", "/b", "/c"] }, { ok: true, removed: 3, trashed: true }), { title: "Moved to Trash", body: "3 items", level: "success" });
+  assert.deepEqual(successToast({ action: "delete", machine: "box", paths: ["/a", "/b"] }, { ok: true, removed: 2, trashed: false }), { title: "Deleted", body: "2 items on box", level: "success" });
+  assert.deepEqual(successToast({ action: "delete", machine: "box", paths: ["/a", "/b"] }, { ok: true, removed: 1200, trashed: false }), { title: "Deleted", body: "1,200 items on box", level: "success" });
+});
+test("#99 deleteErrorToast: one title with the count, a line per item, at most five, then and N more", () => {
+  const e = (n) => ({ path: `/r/d${n}`, error: `err${n}` });
+  assert.deepEqual(deleteErrorToast([e(1), e(2)]), { title: "Could not delete 2 items", body: "d1: err1\nd2: err2", level: "error" });
+  assert.equal(deleteErrorToast([1, 2, 3, 4, 5, 6, 7].map(e)).body, "d1: err1\nd2: err2\nd3: err3\nd4: err4\nd5: err5\nand 2 more");
 });

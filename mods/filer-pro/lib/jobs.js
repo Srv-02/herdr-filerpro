@@ -3,6 +3,7 @@
 // herdr API arrives through `deps` (exec, hc, readTextFile, getShared, setShared, notify, now,
 // newId, appHome, home; optional settings() -> the config of lib/config.js, read at each use, and after(ms, fn), a
 // timer that starts a new QuickJS job: the member check of an archive runs in slices with it). Jobs live in shared("filer-pro.jobs") as a plain object id -> job.
+import { clipItems } from "./clipboard.js";
 import { keepBothName, tempName, joinPath, parentOf, baseName, nameKey } from "./names.js";
 import { sshTarget } from "./machines.js";
 import { explainError as explainRaw, cleanText } from "./errors.js";
@@ -173,9 +174,16 @@ export function createJobs(deps) {
     if (!job.preview) setShared("filer-pro.changed", { at: now() });
     if (job.state === "done") { // a Cut waiting on this copy ("Copy instead", requests.js runMove) is complete now
       const clip = getShared("filer-pro.clipboard");
-      if (Array.isArray(clip?.copyJobs) && clip.copyJobs.includes(id)) {
+      const idOf = (e) => (typeof e === "string" ? e : e?.id);
+      const mine = Array.isArray(clip?.copyJobs) ? clip.copyJobs.find((e) => idOf(e) === id) : undefined;
+      if (typeof mine === "string") { // old entry: every named job done empties the clipboard
         const rest = clip.copyJobs.filter((j) => j !== id && all()[j]?.state !== "done");
         setShared("filer-pro.clipboard", rest.length > 0 ? { ...clip, copyJobs: rest } : null);
+      } else if (mine) { // { id, path } (#99): only that item leaves the Cut list
+        const items = clipItems(clip).filter((i) => i.path !== mine.path);
+        const copyJobs = clip.copyJobs.filter((e) => idOf(e) !== id);
+        const { path: _path, isDir: _isDir, items: _items, copyJobs: _old, ...base } = clip;
+        setShared("filer-pro.clipboard", items.length === 0 ? null : { ...base, items, ...(copyJobs.length > 0 ? { copyJobs } : {}) });
       }
     }
     if (job.state === "done" && (job.direction === "down" || job.direction === "local") && job.reveal) {

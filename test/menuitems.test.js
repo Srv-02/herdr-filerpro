@@ -179,3 +179,24 @@ test("no Select Files entry while the mode is on, and the menus shrink by one ro
   assert.equal(rowMenuState({ name: "a", selecting: true }).selecting, true);
   assert.equal(rowMenuState({ name: "a" }).selecting, false);
 });
+test("#99 several rows: the short menu with eight entries, labels carry the count", () => {
+  const items = rowMenuItems({ ...on, count: 3 });
+  assert.deepEqual(items.map((i) => (i.separator ? "|" : i.action)), [
+    "download", "download_to", "|", "copy", "cut", "paste", "|", "copy_path", "|", "delete", "|", "clear_selection",
+  ]);
+  assert.deepEqual(items.filter((i) => !i.separator).map((i) => i.label), [
+    "Download 3 Items", "Download 3 Items to…", "Copy 3 Items", "Cut 3 Items", "Paste", "Copy 3 Paths", "Delete 3 Items…", "Clear Selection",
+  ]);
+  assert.equal(items.at(-1).id, "filer-pro-menu-clear-selection");
+  assert.equal(menuHeight(items), 264);
+  assert.equal(rowMenuItems({ ...off, count: 3 }).find((i) => i.action === "paste").enabled, false);
+  assert.equal(rowMenuItems({ ...on, count: 3 }).find((i) => i.action === "paste").enabled, true);
+});
+test("#99 a count of one or none gives today's menu; thousands are grouped", () => {
+  assert.deepEqual(rowMenuItems({ ...on, count: 1 }), rowMenuItems(on));
+  assert.equal(menuHeight(rowMenuItems({ ...on, count: 1 })), 516);
+  assert.equal(rowMenuItems({ ...on, count: 1234 })[0].label, "Download 1,234 Items");
+  assert.equal(rowMenuState({ name: "a", count: 3 }).count, 3);
+  assert.equal(rowMenuState({ name: "a" }).count, 1);
+  assert.equal(rowMenuState({ name: "a", count: 0 }).count, 1);
+});

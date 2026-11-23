@@ -228,6 +228,27 @@ test("a finished copy-instead job empties the Cut clipboard, a failed one keeps 
   assert.ok(f.store["filer-pro.clipboard"]);
 });
 
+test("#99 a finished copy-instead job takes only its item out of a Cut list", async () => {
+  const { f, jobs } = setup();
+  await jobs.start(down());
+  f.store["filer-pro.clipboard"] = { machine: "box", items: [{ path: SRC, isDir: false }, { path: "/srv/other", isDir: false }], at: 1, cut: true, copyJobs: [{ id: "id1", path: SRC }] };
+  f.terminals["term-fs-id1"] = { state: "finished", exit_code: 0 };
+  f.files[STATUS] = "state=done\ncode=0\n";
+  await jobs.tick();
+  assert.deepEqual(f.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/other", isDir: false }], at: 1, cut: true });
+});
+test("#99 a finished copy-instead job of the last item empties the clipboard, a failed one keeps it", async () => {
+  for (const [status, kept] of [["state=done\ncode=0\n", false], ["state=failed\ncode=1\nboom\n", true]]) {
+    const { f, jobs } = setup();
+    await jobs.start(down());
+    f.store["filer-pro.clipboard"] = { machine: "box", items: [{ path: SRC, isDir: false }], at: 1, cut: true, copyJobs: [{ id: "id1", path: SRC }] };
+    f.terminals["term-fs-id1"] = { state: "finished", exit_code: 0 };
+    f.files[STATUS] = status;
+    await jobs.tick();
+    assert.equal(f.store["filer-pro.clipboard"] !== null, kept);
+  }
+});
+
 test("upload done toast has no reveal action", async () => {
   const { f, jobs } = setup();
   await jobs.start({ direction: "up", machine: "box", src: "/Users/m/a.txt", destDir: "/srv/in", choice: "new" });
