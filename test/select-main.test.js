@@ -425,3 +425,29 @@ test("#98 bar: not while a file is open; before the transfers bar otherwise", as
   self.file = "a.txt";
   assert.ok(![...walk(self.render(cx))].map(idOf).includes("files-selection"));
 });
+
+// ---- #99: the menu for several rows ----
+test("#99 right click on a selected row with two items: multi menu props in tree order, height 264", async () => {
+  const { self, cx, log } = await multi();
+  self.setSelection({ selected: new Set(["src", "a.txt"]), anchor: "a.txt", base: new Set(["src", "a.txt"]) });
+  handler(byId(self.render(cx), "file-a.txt"), "on_mouse_down", "right")({}, cx);
+  const o = log.overlays.at(-1);
+  assert.deepEqual(o.props.items, [{ path: `${ROOT}/src`, isDir: true }, { path: `${ROOT}/a.txt`, isDir: false }], "folders sort first in the tree");
+  assert.equal(o.props.count, 2);
+  assert.equal(o.height, 264);
+  assert.equal(self.selected.size, 2);
+});
+test("#99 right click: a folder and its child count as one item, an unselected row has the single menu", async () => {
+  const { self, cx, log } = await multi();
+  self.folders.add("src");
+  self.entries.set("src", [{ name: "x.js", dir: false }]);
+  self.setSelection({ selected: new Set(["src", "src/x.js"]), anchor: "src", base: new Set(["src", "src/x.js"]) });
+  handler(byId(self.render(cx), "file-src"), "on_mouse_down", "right")({}, cx);
+  const o = log.overlays.at(-1);
+  assert.equal(o.props.count, undefined);
+  assert.equal(o.props.items, undefined);
+  assert.equal(o.height, menuHeight(rowMenuItems({ paste: { enabled: false }, isDir: true })));
+  handler(byId(self.render(cx), "file-c.txt"), "on_mouse_down", "right")({}, cx);
+  assert.equal(log.overlays.at(-1).props.count, undefined);
+  assert.equal(self.selected.size, 0);
+});

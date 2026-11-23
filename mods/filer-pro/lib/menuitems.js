@@ -1,5 +1,6 @@
 // Entries of the two right-click menus (row and free area). Pure: mods/filer-pro/ui/menu.js only draws them.
 import { archiveOf, extractToLabel } from "./archives.js";
+import { group } from "./numbers.js";
 export const MENU_WIDTH = 200;
 const ITEM_H = 28, SEPARATOR_H = 7, PADDING = 8, RESERVE = 4;
 
@@ -16,7 +17,9 @@ const entry = (action, label, enabled = true) => ({ id: `filer-pro-menu-${action
 // Show Package Contents, or Hide Package Contents while contents is true; a folder that is not a package gets Show as Root (issue #90) in its place; windows: this computer is Windows, where Permissions… is
 // dimmed because there is no chmod; on a machine it works; size: the text at the right of Calculate Size on a folder
 // (lib/sizes.js sizeDetail), sizeTitle: its tooltip (lib/sizes.js sizeNote, set when the sum is incomplete), sizing: that calculation runs, the entry is dimmed; dimmed on local Windows too, no sh there)
+// count (>= 2, #99): several rows are selected, the short menu with the actions that apply to all of them.
 export function rowMenuItems(state) {
+  if (state.count >= 2) return multiMenuItems(state);
   const file = state.isDir !== true;
   const local = state.remote !== true;
   const bundle = state.bundle === true && local;
@@ -50,11 +53,29 @@ export function rowMenuItems(state) {
   ];
 }
 
+function multiMenuItems(state) {
+  const n = group(state.count);
+  return [
+    entry("download", `Download ${n} Items`),
+    entry("download_to", `Download ${n} Items to…`),
+    SEPARATOR,
+    entry("copy", `Copy ${n} Items`),
+    entry("cut", `Cut ${n} Items`),
+    entry("paste", "Paste", state.paste.enabled),
+    SEPARATOR,
+    entry("copy_path", `Copy ${n} Paths`),
+    SEPARATOR,
+    entry("delete", `Delete ${n} Items…`),
+    SEPARATOR,
+    entry("clear_selection", "Clear Selection"),
+  ];
+}
+
 // The row's part of that state, built the same way where the popup is sized (the row's right click in main.js) and where
 // it is drawn (the popup copy): sized from a state without remote and windows, a local Windows archive row left an
 // empty strip where Extract Here and Extract to are not shown (follow-up to #68).
-export function rowMenuState({ name, isDir, machine, platform, bundle, contents, selecting }) {
-  return { isDir: isDir === true, name: typeof name === "string" ? name : "", remote: Boolean(machine), windows: platform === "windows", bundle: bundle === true, contents: contents === true, selecting: selecting === true };
+export function rowMenuState({ name, isDir, machine, platform, bundle, contents, selecting, count }) {
+  return { count: Number.isInteger(count) && count >= 2 ? count : 1, isDir: isDir === true, name: typeof name === "string" ? name : "", remote: Boolean(machine), windows: platform === "windows", bundle: bundle === true, contents: contents === true, selecting: selecting === true };
 }
 
 export function rootMenuItems(state) {

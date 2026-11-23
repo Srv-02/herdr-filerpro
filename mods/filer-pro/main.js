@@ -16,7 +16,7 @@ import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick, folderClick, rowClick } from "./lib/clicks.js";
-import { applyClick, clearSelection, prune } from "./lib/selection.js";
+import { applyClick, clearSelection, collapse, prune } from "./lib/selection.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
@@ -887,6 +887,14 @@ export default class FilerPro extends View {
   }
 
   clearSelected() { this.setSelection(clearSelection()); }
+
+  // The selection as actions see it: a folder stands for what lies inside it, in tree order (rows that are not shown last).
+  selectedItems() {
+    const shown = this.visible().filter((r) => !r.entry.note).map((r) => r.path);
+    const rest = [...(this.selected ?? [])].filter((p) => !shown.includes(p)).sort();
+    return collapse([...shown.filter((p) => this.selected?.has(p)), ...rest])
+      .map((p) => ({ path: joinPath(this.root, p), isDir: this.entryAt(p)?.dir === true }));
+  }
 
   // Drops selected rows that the loaded listings no longer hold; the anchor goes with its row.
   pruneSelected() {
@@ -2136,8 +2144,11 @@ export default class FilerPro extends View {
           cx.stop_propagation();
           // A menu on a row outside the selection ends the selection, except in checkbox mode.
           if (this.selecting !== true && this.selected?.size && !this.selected.has(path)) { this.clearSelected(); cx.notify(); }
-          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents, selecting: this.selecting === true }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+          // Several rows (a folder and what lies inside it count once) get the short menu for all of them (#99).
+          const items = picked ? this.selectedItems() : [];
+          const multi = items.length >= 2 ? { items, count: items.length } : {};
+          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents, selecting: this.selecting === true, count: multi.count }) };
+          openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))
         .when(boxes, el => el.child(checkBox(t, picked)).when(depth > 0, e => e.child(div().w(depth * 18).flex_none().ml(-7))))
