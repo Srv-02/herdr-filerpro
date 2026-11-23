@@ -1,5 +1,5 @@
 // The check before a moved original is deleted (#100). Pure; the script runs as
-// `sh -c VERIFY_SCRIPT verify <path> <L|P> <hashMaxBytes> <seconds>` locally or on a machine (non-login sh, POSIX tools
+// `sh -c MOVE_VERIFY_SCRIPT verify <path> <L|P> <hashMaxBytes> <seconds>` locally or on a machine (non-login sh, POSIX tools
 // only, GNU and BSD/macOS). It counts what a copy must have: files, folders, bytes, plus a SHA-256 over the content.
 //
 // Prints one line, exit code always 0:
@@ -12,7 +12,7 @@
 // "<hash> <relative path>" of its files; "-" over <hashMaxBytes>; "?" when the side has no sha256sum, shasum or sha256.
 // The watchdog is its own process, like in lib/sizes.js: find ends on the machine at the limit even when the caller is gone.
 // The hash walk gets what is left of <seconds>. Status of find travels through fd 3.
-export const VERIFY_SCRIPT = String.raw`p=$1 l=$2 m=$3 n=$4
+export const MOVE_VERIFY_SCRIPT = String.raw`p=$1 l=$2 m=$3 n=$4
 case $p in -*) p=./$p ;; esac
 case $l in P) ;; *) l=L ;; esac
 case $m in ""|*[!0-9]*) m=0 ;; esac
@@ -81,10 +81,10 @@ export const VERIFY_LIMIT_S = 590;
 export const HASH_MAX_BYTES = 1_000_000_000;
 
 // argv after "sh": links is "L" (follow, like scp) or "P" (do not follow). The path stays at args[3], like sizeArgs.
-export const verifyArgs = (path, links) => ["-c", VERIFY_SCRIPT, "verify", path, links, String(HASH_MAX_BYTES), String(VERIFY_LIMIT_S)];
+export const verifyArgs = (path, links) => ["-c", MOVE_VERIFY_SCRIPT, "verify", path, links, String(HASH_MAX_BYTES), String(VERIFY_LIMIT_S)];
 
 // stdout -> { files, dirs, bytes, newest, digest }, or null (missing path, partial, timeout, anything unexpected)
-export function parseVerify(stdout) {
+export function parseMoveVerify(stdout) {
   const m = /^\s*v1 (\d+) (\d+) (\d+) (\d+) (-|\?|[0-9a-f]{64})\s*$/.exec(String(stdout ?? ""));
   return m ? { files: Number(m[1]), dirs: Number(m[2]), bytes: Number(m[3]), newest: Number(m[4]), digest: m[5] } : null;
 }

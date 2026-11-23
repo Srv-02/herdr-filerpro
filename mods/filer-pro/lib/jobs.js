@@ -11,7 +11,7 @@ import { platform } from "./platform.js";
 import { afterDownload } from "./open.js";
 import { sizeArgs, SIZE_GRACE_MS, parseSize, parseSizeOutput } from "./sizes.js";
 import { progressOf } from "./progress.js";
-import { verifyArgs, parseVerify, verdict, VERIFY_MS, KEPT_UNKNOWN, KEPT_CHANGED, KEPT_CANCELLED, KEPT_RESTART, KEPT_RESTART_DELETE, KEPT_NO_ROOT } from "./verify.js";
+import { verifyArgs, parseMoveVerify, verdict, VERIFY_MS, KEPT_UNKNOWN, KEPT_CHANGED, KEPT_CANCELLED, KEPT_RESTART, KEPT_RESTART_DELETE, KEPT_NO_ROOT } from "./verify.js";
 import { LINKS_SCRIPT, parseLinks, linkWarning } from "./links.js";
 import { MOUNT_FN, normalizePath } from "./fileops.js";
 import { numbers } from "./settings.js";
@@ -430,7 +430,7 @@ export function createJobs(deps) {
       try {
         const c = await deps.fileOps.check({ on: sOn, path: src, root: move.root, timeout: VERIFY_MS });
         if (!c.ok) return fail(id, c.error);
-        const before = parseVerify(okOut(await exec("sh", verifyArgs(src, "L"), { on: sOn, timeout: VERIFY_MS })));
+        const before = parseMoveVerify(okOut(await exec("sh", verifyArgs(src, "L"), { on: sOn, timeout: VERIFY_MS })));
         if (!before) return fail(id, "Could not check the original before the copy");
         moveTotal = before.bytes;
         job = update(id, { move: { ...get(id).move, physical: c.path, before } });
@@ -668,7 +668,7 @@ export function createJobs(deps) {
 
   async function measureFor(path, on, links) {
     try {
-      return parseVerify(okOut(await exec("sh", verifyArgs(path, links), { on, timeout: VERIFY_MS })));
+      return parseMoveVerify(okOut(await exec("sh", verifyArgs(path, links), { on, timeout: VERIFY_MS })));
     } catch {
       return null;
     }

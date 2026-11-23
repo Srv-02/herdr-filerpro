@@ -1912,7 +1912,7 @@ test("OVERLAP_SCRIPT: no marker prints nothing, an unreachable folder exits 3", 
 });
 
 // ---- #100: move jobs. Every data-loss rule has its own test: the original is deleted only after a verified copy.
-import { VERIFY_SCRIPT, KEPT_UNKNOWN, KEPT_MISMATCH, KEPT_CHANGED, KEPT_CANCELLED, KEPT_RESTART, KEPT_RESTART_DELETE, KEPT_NO_ROOT } from "../mods/filer-pro/lib/verify.js";
+import { MOVE_VERIFY_SCRIPT, KEPT_UNKNOWN, KEPT_MISMATCH, KEPT_CHANGED, KEPT_CANCELLED, KEPT_RESTART, KEPT_RESTART_DELETE, KEPT_NO_ROOT } from "../mods/filer-pro/lib/verify.js";
 
 const MOVE = { root: "/srv", clipAt: 1 };
 const mv = (x = {}) => down({ move: MOVE, ...x });
@@ -1931,7 +1931,7 @@ async function finishCopy(f, jobs, status = "state=done\ncode=0\n") {
   await jobs.tick();
   await jobs.drain();
 }
-const verifyCalls = (f) => f.execCalls.filter((c) => c.args[1] === VERIFY_SCRIPT);
+const verifyCalls = (f) => f.execCalls.filter((c) => c.args[1] === MOVE_VERIFY_SCRIPT);
 const kept = (f) => f.jobs().id1;
 
 test("move: verified copy runs verifying, then deleting, then done moved; remove gets the checked path, the Cut root and 600 s", async () => {
