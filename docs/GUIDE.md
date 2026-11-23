@@ -23,7 +23,7 @@ Everything Filer Pro does, in detail. For the overview, see the [README](../READ
 
 - Herdr app 0.1.17 or newer, with its shipped `tabs` mod.
 - macOS as the local side. Remote machines: Linux or macOS, added to Herdr as SSH machines with key based login.
-- Optional: Node.js for Mermaid diagrams, macOS 15 or later for `Delete…` on local files.
+- Optional: Node.js for Mermaid diagrams, macOS 15 or later for `Delete…` on local files, a Herdr release newer than 0.1.17 with `pickFiles` for **Upload File…**.
 
 ## Install
 
@@ -128,8 +128,8 @@ Three icons in the header take you above the terminal's folder without leaving t
 
 The button left of the gear in the header (**Show This Mac**) opens a second tree under the first one, on this computer. It works with a local terminal too. The first tree keeps following the terminal. The lower tree is always this computer and does not follow the focus. One lower tree serves all spaces and panel copies.
 
-- **Start folder:** it opens in the folder you set as **Start folder for This Mac** in Settings (Downloads). Empty means the download folder. Up, Go to `/`, **Show as Root** and a double click on a folder move it, and it keeps that folder after a restart.
-- **Same rules:** both trees have the same rows, menus, sizes, git marks and selection. A selection is in one tree at a time: a click in the other tree clears it, and one selection bar sits under both trees.
+- **Start folder:** it opens in the folder you set as **Start folder for This Mac** in Settings (Downloads). Empty means the download folder. If you change the setting later, the lower tree goes back to the new start folder, also after you navigated it. Up, Go to `/`, **Show as Root** and a double click on a folder move it, and it keeps that folder after a restart.
+- **Same rules:** both trees have the same rows, menus, sizes, git marks and selection. A selection is in one tree at a time: a click in the other tree clears it, and a selection that returns with a terminal switch gives way to the lower tree's, and one selection bar sits under both trees.
 - **Between the trees:** **Copy** (or **Cut**) in one tree and **Paste** in a folder of the other moves files between this computer and a machine without the Finder, or between two folders on this computer.
 - **Location lines:** each tree has a line with its place (a server icon and the machine name, or a laptop icon and **This Mac**), its folder and its own Go to `/`, Up and Refresh. **Back to the terminal's folder** is only in the upper line.
 - **The divider:** drag it to resize. Each tree stays at least 120 px high. The sizes, the shown state and the folder are remembered.
@@ -205,6 +205,7 @@ Archives (`zip`, `gz`, `tgz`, `bz2`, `xz`, `zst`, `7z`, `rar`, `tar`) and Office
 Needs Herdr app 0.1.17 or later (terminal link handlers). Older versions ignore it.
 
 - Cmd+click (Ctrl+click on other systems) on a path to an image, PDF, Markdown or HTML file in a terminal shows it in the Filer Pro panel instead of the system app. The panel opens if it is hidden.
+- A Cmd+click on a terminal link always opens the file in the upper tree, also when the lower tree is shown.
 - Paths a coding agent prints work as they are: absolute, relative to the terminal's folder, `~/…`, `file://` links, and with a `:line:column` suffix.
 - It works for terminals on your machines too: the file opens from that machine, where the system app could not reach it.
 - A file below the folder the panel shows opens there; any other file opens with its folder as the root, as with [Show as Root](#show-as-root).
