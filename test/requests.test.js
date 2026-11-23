@@ -1361,3 +1361,49 @@ test("#99 the clipboard is left alone when it changed during the move", async ()
   assert.equal((await handleRequest(paste(), d)).moved, 2);
   assert.deepEqual(d.store["filer-pro.clipboard"].items, [{ path: "/srv/z", isDir: false }]);
 });
+
+// ---- #99: download and delete of several items
+test("#99 download of two paths: one batch, two jobs, the result lists them", async () => {
+  const d = deps();
+  assert.deepEqual(await handleRequest({ action: "download", machine: "box", paths: ["/srv/a", "/srv/b"] }, d), { ok: true, jobs: [{ id: "j1" }, { id: "j1" }] });
+  assert.deepEqual(d.calls.filter((c) => c[0] === "start").map((c) => c[1].src), ["/srv/a", "/srv/b"]);
+  assert.equal(d.calls.filter((c) => c[0] === "start")[0][1].destDir, "/home/u/Downloads");
+});
+test("#99 delete of three items, one refused: one dialog for two, two removals with the timeout, one list of errors", async () => {
+  const d = deps({ answers: [{ choice: "delete" }] });
+  const check = d.fileOps.check;
+  d.fileOps.check = async (a) => (a.path === "/Users/m/x/b" ? (d.fileOpsCalls.push(["check", a]), { ok: false, error: "Refusing to delete the home folder" }) : check(a));
+  const r = await handleRequest({ action: "delete", paths: ["/Users/m/x/a", "/Users/m/x/b", "/Users/m/x/c"], root: "/Users/m/x" }, d);
+  assert.deepEqual(r, { ok: true, removed: 2, trashed: true, errors: [{ path: "/Users/m/x/b", error: "Refusing to delete the home folder" }] });
+  assert.equal(d.asked.length, 1);
+  assert.deepEqual(d.asked[0].item, { count: 2, names: ["a", "c"], more: 0, isDir: false, machine: null, trash: true, path: "/Users/m/x/a" });
+  assert.deepEqual(d.asked[0].choices, ["delete", "cancel"]);
+  const removes = d.fileOpsCalls.filter((c) => c[0] === "remove").map((c) => c[1]);
+  assert.deepEqual(removes.map((x) => [x.path, x.timeout, x.expect]), [["/Users/m/x/a", 120000, "/Users/m/x/a"], ["/Users/m/x/c", 120000, "/Users/m/x/c"]]);
+  assert.deepEqual(d.store["filer-pro.changed"], { at: 777 });
+});
+test("#99 delete of several items: a folder and a file give one question, duplicates are dropped, more than five names say and N more", async () => {
+  const paths = ["/r/1", "/r/2", "/r/3", "/r/4", "/r/5", "/r/6", "/r/7", "/r/1"];
+  const d = deps({ answers: [{ choice: "delete" }] });
+  const r = await handleRequest({ action: "delete", machine: "box", paths, root: "/r" }, d);
+  assert.equal(r.removed, 7); assert.equal(r.trashed, false);
+  assert.deepEqual(d.asked[0].item, { count: 7, names: ["1", "2", "3", "4", "5"], more: 2, isDir: false, machine: "box", trash: false, path: "/r/1" });
+});
+test("#99 delete of several items: Cancel and a closed dialog remove nothing, confirm skips the question", async () => {
+  const c = deps({ answers: [{ choice: "cancel" }] });
+  assert.deepEqual(await handleRequest({ action: "delete", paths: ["/r/a", "/r/b"], root: "/r" }, c), { ok: false, error: "Cancelled" });
+  assert.equal(c.fileOpsCalls.some((x) => x[0] === "remove"), false);
+  const k = deps();
+  assert.equal((await handleRequest({ action: "delete", paths: ["/r/a", "/r/b"], root: "/r", confirm: true }, k)).removed, 2);
+  assert.equal(k.asked.length, 0);
+});
+test("#99 delete of several items that are all refused returns the first error", async () => {
+  const d = deps({ fileOpsError: "nope" });
+  assert.deepEqual(await handleRequest({ action: "delete", paths: ["/r/a", "/r/b"], root: "/r" }, d), { ok: false, error: "nope", errors: [{ path: "/r/a", error: "nope" }, { path: "/r/b", error: "nope" }] });
+  assert.equal(d.asked.length, 0);
+});
+test("#99 a single delete passes the timeout too", async () => {
+  const d = deps({ answers: [{ choice: "delete" }] });
+  await handleRequest({ action: "delete", machine: "box", path: "/srv/a", root: "/srv" }, d);
+  assert.equal(d.fileOpsCalls.find((c) => c[0] === "remove")[1].timeout, 120000);
+});

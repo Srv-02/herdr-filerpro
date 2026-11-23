@@ -1,5 +1,6 @@
 // File operations beside the transfers: new folder, rename and delete. Pure helpers here, the exec-backed ops below.
 import { platform } from "./platform.js";
+import { group } from "./numbers.js";
 import { baseName, parentOf, joinPath, nameKey } from "./names.js";
 import { explainError as explainRaw, cleanText } from "./errors.js";
 import { PROBE_SCRIPT, CHMOD_SCRIPT, COUNT_SCRIPT, chmodArg, parseProbe, parseCount, parseModeOut } from "./perms.js";
@@ -319,13 +320,15 @@ mkdir -- "$t" || { if [ -e "$t" ] || [ -L "$t" ]; then exit 4; fi; exit 1; }
 printf '%s' "$t"`;
 
 const TRASH_BIN = "/usr/bin/trash";
+// A delete on a machine can take long (a big folder over a slow link): a fixed limit for rm, like a job (#99).
+export const REMOVE_TIMEOUT_MS = 120_000;
 
 // exec-backed rename and delete. Every path goes in as an argument, never into a shell string.
 // deps: { exec, trashBin? }. Results: { ok: true, ... } or { ok: false, error }.
 export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
   const explainError = (stderr, host, fallback) => explainRaw(stderr, host, fallback, { localPlatform: localPlatform?.() });
   const failure = (e, on) => ({ ok: false, error: explainError(String(e?.message ?? e), on) });
-  const run = (cmd, args, on) => exec(cmd, args, { on });
+  const run = (cmd, args, on, opts = {}) => exec(cmd, args, { on, ...opts });
 
   // The guard for delete and rename: normalized path, then the physical check. Nothing is changed here.
   // path in the answer is the checked physical one (physical parent plus name): rm, mv and trash get that.
@@ -396,7 +399,7 @@ export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
 
   // expect: the physical path the user confirmed (check before the dialog). The new check must land on the
   // same entry, else a link in the path was bent while the dialog was open and nothing is deleted.
-  async function remove({ on = null, path, root, expect }) {
+  async function remove({ on = null, path, root, expect, timeout }) {
     const c = await check({ on, path, root, verb: "delete" });
     if (!c.ok) return c;
     if (expect !== undefined && c.path !== expect) return { ok: false, error: "The item changed while the dialog was open" };
@@ -404,7 +407,7 @@ export function createFileOps({ exec, trashBin = TRASH_BIN, localPlatform }) {
     if (on) {
       let res;
       try {
-        res = await run("sh", ["-c", REMOVE_SCRIPT, "x", c.path, normalizePath(path)], on);
+        res = await run("sh", ["-c", REMOVE_SCRIPT, "x", c.path, normalizePath(path)], on, timeout !== undefined ? { timeout } : {});
       } catch (e) {
         return failure(e, on);
       }
@@ -491,10 +494,21 @@ export function successToast(req, out) {
   if (!out?.ok) return null;
   if (req.action === "rename") return { title: "Renamed", body: `${baseName(req.path)} → ${baseName(out.path)}`, level: "success" };
   if (req.action === "mkdir") return { title: "Folder created", body: baseName(out.path), level: "success" };
+  if (req.action === "delete" && typeof out.removed === "number") {
+    const what = out.removed === 1 ? "1 item" : `${group(out.removed)} items`;
+    return out.trashed ? { title: "Moved to Trash", body: what, level: "success" } : { title: "Deleted", body: `${what} on ${req.machine}`, level: "success" };
+  }
   if (req.action === "delete") {
     return out.trashed
       ? { title: "Moved to Trash", body: out.name, level: "success" }
       : { title: "Deleted", body: `${out.name} on ${req.machine}`, level: "success" };
   }
   return null;
+}
+
+// One error toast for a delete of several items that left errors: a line per item, at most five, then "and N more".
+export function deleteErrorToast(errors) {
+  const lines = errors.slice(0, 5).map((e) => `${baseName(e.path)}: ${e.error}`);
+  if (errors.length > 5) lines.push(`and ${errors.length - 5} more`);
+  return { title: `Could not delete ${group(errors.length)} items`, body: lines.join("\n"), level: "error" };
 }

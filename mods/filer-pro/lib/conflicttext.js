@@ -1,6 +1,7 @@
 // Texts of the target conflict dialog. Pure, so tests can reach them without the UI kit.
 // item: { name, isDir, action?, destIsDir?, direction?, machine?, mergeError? } as the dialog gets it.
 import { formatBytes } from "./sizes.js";
+import { group } from "./numbers.js";
 
 // Texts of the warning before a copy between two machines (ui/conflict.js crossView). item: { from, machine, count?,
 // size? } with the herdr machine names; count is the number of pasted entries, size their bytes (null: unknown, left out).
@@ -39,4 +40,22 @@ export function conflictHint(item) {
 
 export function conflictText(item) {
   return `A ${conflictKind(item)} named "${item.name}" already exists in the target folder. ${conflictHint(item)}`;
+}
+
+// The delete question. item: { name, isDir, path, machine, trash } for one entry; { count, names, more, machine, trash } for
+// several (#99: the first names, and how many more there are). lines: what the dialog lists under the sentence.
+export function deleteText(item) {
+  if (item.count >= 2) {
+    const n = group(item.count);
+    return {
+      title: `Delete ${n} items?`,
+      body: item.trash ? `Move ${n} items to the Trash?` : `Delete ${n} items on ${item.machine}? This cannot be undone.`,
+      lines: [...(item.names ?? []), ...(item.more > 0 ? [`and ${group(item.more)} more`] : [])],
+    };
+  }
+  return {
+    title: `Delete ${item.isDir ? "folder" : "file"}?`,
+    body: item.trash ? `Move "${item.name}" to the Trash?` : `Delete "${item.name}" on ${item.machine}? This cannot be undone.`,
+    lines: [item.path ?? ""],
+  };
 }

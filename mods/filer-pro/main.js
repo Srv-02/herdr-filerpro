@@ -22,7 +22,7 @@ import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget } from "./lib/droptarget.js";
-import { createFileOps, successToast, validateName } from "./lib/fileops.js";
+import { createFileOps, successToast, deleteErrorToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
@@ -304,7 +304,8 @@ export default class FilerPro extends View {
                   throw e;
                 }
                 if (ui && out.errors) {
-                  for (const e of out.errors) notify({ title: failed, body: e.error, level: "error" });
+                  if (req.action === "delete" && out.errors.length > 1) notify(deleteErrorToast(out.errors)); // one toast for a delete of several items (#99)
+                  else for (const e of out.errors) notify({ title: failed, body: e.error, level: "error" });
                 } else if (ui && !out.ok && out.error !== "Cancelled") notify({ title: failed ?? "Request failed", body: out.error, level: "error" });
                 const toast = ui && out.ok ? successToast(req, out) : null;
                 if (toast) notify(toast);
@@ -423,7 +424,7 @@ export default class FilerPro extends View {
       setShared("filer-pro.answer", null);
       setShared("filer-pro.pending", pending);
       // The warning before a copy between machines has a route strip and a footer checkbox: a little taller.
-      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: pending.choices?.includes("copy") ? 270 : 240 });
+      const overlay = openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: pending.choices?.includes("copy") ? 270 : pending.choices?.includes("delete") && pending.item?.count >= 2 ? 330 : 240 });
       this.waiter = { batch: pending.batch, overlay, at: Date.now(), resolve };
     }));
     this.asking = turn.catch(() => {});

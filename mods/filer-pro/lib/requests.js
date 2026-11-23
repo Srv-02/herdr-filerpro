@@ -2,7 +2,7 @@
 // appHome()/filer-pro/requests/; the lease holder claims, handles and answers with <id>.result.json.
 import { createBatch } from "./batch.js";
 import { clipEntry, clipItems, pastePlan, sameClip } from "./clipboard.js";
-import { badSpelling, normalizePath } from "./fileops.js";
+import { badSpelling, normalizePath, REMOVE_TIMEOUT_MS } from "./fileops.js";
 import { baseName, joinPath, keepBothName, nameKey } from "./names.js";
 
 const CONFLICTS = ["replace", "merge", "keep_both", "cancel"];
@@ -200,11 +200,12 @@ export async function claim(dir, id, writeTextFile) {
   }
 }
 
-export function resultText({ ok, job, jobs, path, trashed, trash_path, moved, noop, warning, shown, mode, errors, error }) {
+export function resultText({ ok, job, jobs, path, removed, trashed, trash_path, moved, noop, warning, shown, mode, errors, error }) {
   const o = { ok: !!ok };
   if (job !== undefined) o.job = job;
   if (jobs !== undefined) o.jobs = jobs;
   if (path !== undefined) o.path = path;
+  if (removed !== undefined) o.removed = removed;
   if (trashed !== undefined) o.trashed = trashed;
   if (trash_path !== undefined) o.trash_path = trash_path;
   if (moved !== undefined) o.moved = moved;
@@ -519,6 +520,37 @@ export async function runMoves({ on, plan, clip, root, conflict, reveal }, deps)
   return ran || volume.length > 0 || batchItems.length > 0 ? { ok: false, error: "Cancelled" } : { ok: true, noop: true };
 }
 
+// Delete of several items (#99): check each (a refused one is listed), one question for the rest, then one delete per item.
+// deps: as handleRequest. Result: { ok, removed, trashed, errors? }.
+async function runDeletes({ on, paths, root, confirm }, deps) {
+  const found = [], errors = [];
+  for (const path of [...new Set(paths)]) {
+    const c = await deps.fileOps.check({ on, path, root });
+    if (c.ok) found.push({ path, c });
+    else errors.push({ path, error: c.error });
+  }
+  if (found.length === 0) return { ok: false, error: errors[0].error, errors };
+  if (confirm !== true) {
+    const names = found.map((f) => f.c.name);
+    // Only the answer "delete" deletes: everything else, also a closed dialog, is Cancelled.
+    const a = await deps.ask({
+      batch: `${deps.newBatchId()}#1`,
+      item: { count: found.length, names: names.slice(0, 5), more: Math.max(0, names.length - 5), isDir: false, machine: on, trash: on === null, path: found[0].c.path },
+      choices: ["delete", "cancel"], remaining: 1,
+    });
+    if (a?.choice !== "delete") return { ok: false, error: "Cancelled" };
+  }
+  let removed = 0;
+  for (const { path, c } of found) {
+    const out = await deps.fileOps.remove({ on, path, root, expect: c.path, timeout: REMOVE_TIMEOUT_MS });
+    if (out.ok) removed++;
+    else errors.push({ path, error: out.error });
+  }
+  changedAfter(deps.setShared, deps.now ?? Date.now); // a failed delete of a folder may have removed part of it
+  if (removed === 0) return { ok: false, error: errors[0].error, errors };
+  return { ok: true, removed, trashed: on === null, ...(errors.length > 0 ? { errors } : {}) };
+}
+
 // filer-pro.changed after an operation ran, whether it succeeded or not: a failure on a machine (a dropped connection,
 // a folder deleted halfway) may still have changed something, and without a timer (issue #31) nothing else reloads the
 // tree. Not sent when the user cancelled before anything ran.
@@ -551,8 +583,9 @@ export async function handleRequest(req, deps) {
     case "download": {
       const destDir = req.dest_dir || (await deps.loadConfig()).download_folder;
       const r = await runTransfers({
-        direction: "down", machine: req.machine, paths: [req.path], destDir, conflict: req.conflict, links: req.links, reveal: req.reveal,
+        direction: "down", machine: req.machine, paths: req.paths ?? [req.path], destDir, conflict: req.conflict, links: req.links, reveal: req.reveal,
       }, deps);
+      if (req.paths) return r;
       return r.ok ? { ok: true, job: r.jobs[0] } : { ok: false, error: r.error };
     }
     case "copy": {
@@ -594,6 +627,7 @@ export async function handleRequest(req, deps) {
     }
     case "delete": {
       const on = req.machine ?? null;
+      if (req.paths) return runDeletes({ on, paths: req.paths, root: req.root, confirm: req.confirm }, deps);
       const found = await deps.fileOps.check({ on, path: req.path, root: req.root });
       if (!found.ok) return { ok: false, error: found.error };
       if (req.confirm !== true) {
@@ -606,7 +640,7 @@ export async function handleRequest(req, deps) {
         if (a?.choice !== "delete") return { ok: false, error: "Cancelled" };
       }
       // expect: the physical path shown in the dialog; remove checks again and refuses another one.
-      const out = await deps.fileOps.remove({ on, path: req.path, root: req.root, expect: found.path });
+      const out = await deps.fileOps.remove({ on, path: req.path, root: req.root, expect: found.path, timeout: REMOVE_TIMEOUT_MS });
       changedAfter(setShared, now); // a failed delete of a folder may have removed part of it
       return out;
     }
