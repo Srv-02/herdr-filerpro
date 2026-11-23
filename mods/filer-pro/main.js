@@ -15,7 +15,8 @@ import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
 import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
-import { fileClick, folderClick } from "./lib/clicks.js";
+import { fileClick, folderClick, rowClick } from "./lib/clicks.js";
+import { applyClick, clearSelection, prune } from "./lib/selection.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
@@ -177,6 +178,8 @@ export default class FilerPro extends View {
     this.configSeen = shared("filer-pro.config")?.at ?? null;
     this.gotoSeen = shared("filer-pro.goto")?.id ?? null; // an old Show as Root request is not applied again
     this.packageSeen = shared("filer-pro.package")?.id ?? null; // an old Show Package Contents request is not applied again
+    this.selectSeen = shared("filer-pro.select")?.id ?? null; // an old Select Files request is not applied again
+    this.selected = new Set(); this.anchor = null; this.base = null; this.selecting = false; // the selection (lib/selection.js)
     cx.spawn(async (cx) => {
       const cfg = this.cfg = await loadConfig(readTextFile, appHome, home);
       // The first listing ran with the defaults: other list settings reload the tree once more (no timer to wait for).
@@ -769,8 +772,8 @@ export default class FilerPro extends View {
     if (!root || !this.context || root === this.root) return;
     if (this.edit?.dirty) { notify({ title: "Filer Pro", body: "Unsaved changes in the open file", level: "error" }); return; }
     if (!setRoot(this.nav ??= new Map(), paneId(focused()), location(), root)) return;
-    const state = carry({ folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened }, this.root, root);
-    this.carried = { key: this.target().key, ...state };
+    const state = carry({ folders: this.folders, packages: this.packages, selected: this.selected, file: this.file, lastOpened: this.lastOpened }, this.root, root);
+    this.carried = { key: this.target().key, ...state, selecting: this.selecting === true }; // the anchor is not carried
     this.refresh(cx);
     cx.notify();
   }
@@ -805,13 +808,14 @@ export default class FilerPro extends View {
     const { root: cwd, on, key: next } = this.target();
     if (next !== this.context?.key) {
       if (this.edit?.dirty) return; // the buffer stays with its file until it is saved or discarded
-      if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, file: this.file, lastOpened: this.lastOpened });
+      if (this.context) this.saved.set(this.context.key, { folders: this.folders, packages: this.packages, selected: this.selected, selecting: this.selecting === true, file: this.file, lastOpened: this.lastOpened });
       // A navigation carries the tree along (navigate); a switch of terminal or folder restores what was left there.
       const saved = this.carried?.key === next ? this.carried : this.saved.get(next);
       this.carried = null;
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.realFolders = new Map(); this.fileReal = null; this.folders = new Set(saved?.folders); this.packages = new Set(saved?.packages);
       this.pending = new Set(); this.marks = {}; this.show(null); this.watched = null; this.gitWatch = null; this.error = null; this.limited = false;
       this.loading = false; this.again = false; this.fileWanted = 0; this.fileForce = false; this.lastOpened = saved?.lastOpened ?? null;
+      this.setSelection({ selected: new Set(saved?.selected) }); this.selecting = saved?.selecting === true; // anchor and base are not restored
       if (saved?.file) this.show(saved.file, cx); // read fresh: no file reload needed
       file = 0; force = false;
     }
@@ -846,6 +850,7 @@ export default class FilerPro extends View {
         }
         if (!this.current(context)) return;
         this.marks = marks; this.error = null; this.watch(cwd, cx); this.watchGit(place, cx);
+        this.pruneSelected(); // a row deleted or renamed outside the panel leaves the selection
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally {
         if (this.context === context) this.loading = false;
@@ -872,6 +877,38 @@ export default class FilerPro extends View {
     else if (action === "root") this.navigate(joinPath(this.root, path), cx);
   }
 
+  // The only writer of the selection fields (issue #101 moves them into a per-tree object).
+  setSelection({ selected, anchor = null, base = null } = {}) {
+    this.selected = new Set(selected);
+    this.anchor = anchor;
+    this.base = base;
+  }
+
+  clearSelected() { this.setSelection(clearSelection()); }
+
+  // Drops selected rows that the loaded listings no longer hold; the anchor goes with its row.
+  pruneSelected() {
+    if (!this.selected?.size) return;
+    const next = prune(this.selected, this.entries);
+    if (next.size === this.selected.size) return;
+    const real = (p) => p != null && Boolean(this.entryAt(p)) && !this.entryAt(p).note;
+    this.setSelection({ selected: next, anchor: real(this.anchor) ? this.anchor : null, base: this.base && new Set([...this.base].filter((p) => next.has(p))) });
+  }
+
+  // A click on a tree row with several rows selectable (lib/clicks.js rowClick, lib/selection.js).
+  clickRow(path, dir, bundle, e, cx) {
+    const kind = rowClick(e, { multi: this.conf.multi_select === true, selecting: this.selecting === true, toggleKey: this.conf.select_toggle_click, rangeKey: this.conf.select_range_click, remoteBinary: Boolean(this.on) && !dir && isBinaryName(path) });
+    if (kind === "toggle" || kind === "range") {
+      const order = this.visible().filter((r) => !r.entry.note).map((r) => r.path);
+      this.setSelection(applyClick({ selected: this.selected ?? new Set(), anchor: this.anchor ?? null, base: this.base ?? null }, kind, path, order));
+      cx.notify();
+    } else if (kind === "reveal") this.reveal(path);
+    else if (kind === "row") {
+      if (this.selected?.size) { this.clearSelected(); cx.notify(); }
+      if (dir) this.clickFolder(path, bundle, e, cx); else this.clickFile(path, bundle, e, cx);
+    }
+  }
+
   toggle(path, cx) {
     if (this.folders.has(path)) {
       for (const folder of [...this.folders]) if (folder === path || folder.startsWith(path + "/")) {
@@ -880,6 +917,7 @@ export default class FilerPro extends View {
       }
       // A collapsed package is a file row again (lib/bundles.js), and so is every package shown below it.
       for (const p of [...(this.packages ?? [])]) if (p === path || p.startsWith(path + "/")) this.packages.delete(p);
+      this.pruneSelected(); // rows below the folder are hidden now
     } else {
       this.folders.add(path);
       if (!this.entries.has(path) && !this.pending.has(path)) {
@@ -924,6 +962,29 @@ export default class FilerPro extends View {
     if (!r?.id || r.id === this.gotoSeen) return;
     this.gotoSeen = r.id;
     if (expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on)) cx.spawn(async (cx) => this.navigate(r.path, cx));
+  }
+
+  // Select Files (issue #98): the menu copy asks through shared("filer-pro.select") = { id, mode, machine, root, path }. The panel that
+  // shows that machine and root applies it once: "start" turns the checkbox mode on and adds the row (no path keeps the selection),
+  // "clear" empties the selection. Called from render, so it runs in a task.
+  pollSelect(cx) {
+    const r = shared("filer-pro.select");
+    if (!r?.id || r.id === this.selectSeen) return;
+    this.selectSeen = r.id;
+    if ((r.machine ?? null) !== (this.on ?? null) || r.root !== this.root) return;
+    const rel = r.path ? expandPath({ machine: r.machine ?? null, folder: r.path }, this.root, this.on) : null;
+    if (r.path && !rel) return;
+    cx.spawn(async (cx) => {
+      if (r.mode === "clear") this.clearSelected();
+      else if (r.mode === "start") {
+        this.selecting = true;
+        if (rel) {
+          const next = new Set(this.selected).add(rel);
+          this.setSelection({ selected: next, anchor: rel, base: next });
+        } else this.setSelection({ selected: this.selected });
+      }
+      cx.notify();
+    });
   }
 
   // Calculate Size (issue #58): the menu copy asks through shared filer-pro.sizes (lib/sizes.js requestSize). The panel
@@ -2063,19 +2124,29 @@ export default class FilerPro extends View {
       const dir = treeDir(entry, path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
       return h_flex().id(`file-${path}`).h(ROW_H).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(path === this.lastOpened, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
-        .on_click((e, cx) => e.modifiers.platform && !(this.on && !dir && isBinaryName(path)) ? this.reveal(path) : dir ? this.clickFolder(path, bundle, e, cx) : this.clickFile(path, bundle, e, cx))
+        .on_click((e, cx) => { cx.stop_propagation(); this.clickRow(path, dir, bundle, e, cx); })
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
+          // A menu on a row outside the selection ends the selection, except in checkbox mode.
+          if (this.selecting !== true && this.selected?.size && !this.selected.has(path)) { this.clearSelected(); cx.notify(); }
           const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents, selecting: this.selecting === true }) };
           openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, path), isDir: entry.dir, bundle, contents, selecting: this.selecting === true, folder: dropTarget(this.root, path, dir), editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir))
-        .child(dir ? svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
+        .child(this.chevron(path, dir, open, t))
         .child(image(bundle && !dir ? bundleIcon(entry.name, dark) : icon(path, entry.dir, open, dark)).size(16).flex_none())
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
         .when(Boolean(sizes), el => el.child(this.sizeCell(path, entry, sizes, font, t)))
         .when(Boolean(mark) || Boolean(sizes), el => el.child(div().text_size(11).when(Boolean(sizes), m => m.w(12).flex_none().flex().justify_center()).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark ?? "")));
     });
+  }
+
+  // The chevron of a row. In checkbox mode a click on it only opens or closes the folder (a double click does nothing more).
+  chevron(path, dir, open, t) {
+    if (!dir) return div().w(12).flex_none();
+    const glyph = svg(`${BASE}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim);
+    if (this.selecting !== true) return glyph;
+    return div().id(`chevron-${path}`).w(12).flex_none().on_click((e, cx) => { cx.stop_propagation(); if (!(e?.click_count > 1)) this.toggle(path, cx); }).child(glyph);
   }
 
   // The size of a row (lib/sizes.js sizeCell): text 11, dim, in the terminal font so the digits line up; a spinner
@@ -2112,6 +2183,7 @@ export default class FilerPro extends View {
     this.pollReload(cx);
     this.pollPackage(cx);
     this.pollGoto(cx);
+    this.pollSelect(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
     // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
@@ -2136,6 +2208,7 @@ export default class FilerPro extends View {
         .when(!this.file, el => el.flex_1().p(TREE_PAD).children(this.rows(t, dark)))
         .when(Boolean(this.file), el => el.flex_none().h(0).p(0).child(div().flex_none().h(this.visible().length * ROW_H + 2 * TREE_PAD)))
         .on_drop((e, cx) => this.drop(e.paths, null, false))
+        .on_click((_e, cx) => { if (this.selecting !== true && this.selected?.size) { this.clearSelected(); cx.notify(); } })
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           if (!this.root) return;

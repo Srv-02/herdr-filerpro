@@ -138,3 +138,206 @@ test("#98 right click: both popups carry selecting and are sized from it", async
     assert.equal(free.height, menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: selecting === true })));
   }
 });
+
+// ---- Task 7: panel state and click wiring ----
+const LIST3 = ["f", "a.txt", "f", "b.txt", "f", "c.txt", "d", "src"].join("\0") + "\0";
+const CMD = { platform: true }, SHIFT = { shift: true }, CMD_ALT = { platform: true, alt: true };
+async function multi(opts = {}, cfg = {}) {
+  const h = host({ listing: LIST3, ...opts });
+  const cx = fakeCx();
+  const self = await loaded(cx);
+  self.cfg = { ...DEFAULTS, multi_select: true, select_toggle_click: "cmd", select_range_click: "shift", ...cfg };
+  self.selected = new Set(); self.anchor = null; self.base = null; self.selecting = false;
+  return { ...h, cx, self };
+}
+const names = (set) => [...set].sort();
+const revealExecs = (log) => log.execs.filter((e) => e.cmd !== "sh" && e.cmd !== "git");
+
+test("#98 clicks: with multi_select off Cmd+click reveals and selects nothing", async () => {
+  const { self, cx, log } = await multi({}, { multi_select: false });
+  const before = revealExecs(log).length;
+  clickRow(self, cx, "a.txt", 1, CMD);
+  assert.equal(revealExecs(log).length, before + 1);
+  assert.equal(self.selected.size, 0);
+});
+
+test("#98 clicks: Cmd+click toggles a file and a folder, no reveal, no expand, no file shown", async () => {
+  const { self, cx, log } = await multi();
+  const before = revealExecs(log).length;
+  clickRow(self, cx, "a.txt", 1, CMD);
+  assert.deepEqual(names(self.selected), ["a.txt"]);
+  assert.equal(self.anchor, "a.txt");
+  clickRow(self, cx, "src", 1, CMD);
+  assert.deepEqual(names(self.selected), ["a.txt", "src"]);
+  assert.ok(!self.folders.has("src"));
+  assert.equal(revealExecs(log).length, before);
+  assert.ok(!self.file);
+});
+
+test("#98 clicks: Shift+click selects a range, moves its end, and toggles without an anchor", async () => {
+  const { self, cx } = await multi();
+  clickRow(self, cx, "b.txt", 1, SHIFT);
+  assert.deepEqual(names(self.selected), ["b.txt"]);
+  assert.equal(self.anchor, "b.txt");
+  self.setSelection({ selected: new Set(["a.txt"]), anchor: "a.txt", base: new Set(["a.txt"]) });
+  clickRow(self, cx, "c.txt", 1, SHIFT);
+  assert.deepEqual(names(self.selected), ["a.txt", "b.txt", "c.txt"]);
+  clickRow(self, cx, "b.txt", 1, SHIFT);
+  assert.deepEqual(names(self.selected), ["a.txt", "b.txt"]);
+});
+
+test("#98 clicks: Option+Cmd+click reveals while multi is on; on a machine it writes a reveal request", async () => {
+  const local = await multi();
+  const n = revealExecs(local.log).length;
+  clickRow(local.self, local.cx, "a.txt", 1, CMD_ALT);
+  assert.equal(revealExecs(local.log).length, n + 1);
+  assert.equal(local.self.selected.size, 0);
+  const remote = await multi({ machine: "box" });
+  clickRow(remote.self, remote.cx, "a.txt", 1, CMD_ALT);
+  await settle();
+  assert.ok(remote.log.writes.some((w) => String(w.text).includes('"reveal":true')));
+});
+
+test("#98 clicks: a plain click with a selection clears it and acts as before", async () => {
+  const { self, cx } = await multi();
+  self.setSelection({ selected: new Set(["b.txt"]), anchor: "b.txt", base: new Set(["b.txt"]) });
+  clickRow(self, cx, "src", 1);
+  assert.equal(self.selected.size, 0);
+  assert.equal(self.anchor, null);
+  assert.ok(self.folders.has("src"));
+});
+
+test("#98 clicks: the row stops propagation; the free area clears outside the mode only", async () => {
+  const { self, cx } = await multi();
+  let stopped = 0;
+  const spy = { ...cx, stop_propagation: () => stopped++ };
+  handler(byId(self.render(cx), "file-a.txt"), "on_click")({ modifiers: {}, click_count: 1 }, spy);
+  assert.equal(stopped, 1);
+  self.setSelection({ selected: new Set(["a.txt"]), anchor: "a.txt", base: new Set(["a.txt"]) });
+  self.selecting = true;
+  handler(byId(self.render(cx), "files-tree"), "on_click")({}, cx);
+  assert.equal(self.selected.size, 1);
+  self.selecting = false;
+  handler(byId(self.render(cx), "files-tree"), "on_click")({}, cx);
+  assert.equal(self.selected.size, 0);
+  assert.equal(self.anchor, null);
+});
+
+test("#98 right click: an unselected row clears outside the mode, keeps inside, a selected row keeps", async () => {
+  const { self, cx } = await multi();
+  const right = (name) => handler(byId(self.render(cx), `file-${name}`), "on_mouse_down", "right")({}, cx);
+  self.setSelection({ selected: new Set(["a.txt"]), anchor: "a.txt", base: new Set(["a.txt"]) });
+  right("a.txt");
+  assert.equal(self.selected.size, 1);
+  right("b.txt");
+  assert.equal(self.selected.size, 0);
+  self.setSelection({ selected: new Set(["a.txt"]), anchor: "a.txt", base: new Set(["a.txt"]) });
+  self.selecting = true;
+  right("b.txt");
+  assert.equal(self.selected.size, 1);
+});
+
+test("#98 pollSelect: start adds the row and turns the mode on, once per id", async () => {
+  const { self, cx, store } = await multi();
+  self.selectSeen = null;
+  self.setSelection({ selected: new Set(["b.txt"]), anchor: "b.txt", base: new Set(["b.txt"]) });
+  store["filer-pro.select"] = { id: "s1", mode: "start", machine: null, root: ROOT, path: `${ROOT}/a.txt` };
+  self.pollSelect(cx);
+  await settle();
+  assert.equal(self.selecting, true);
+  assert.deepEqual(names(self.selected), ["a.txt", "b.txt"]);
+  assert.equal(self.anchor, "a.txt");
+  self.setSelection({ selected: new Set(), anchor: null, base: null });
+  self.pollSelect(cx);
+  await settle();
+  assert.equal(self.selected.size, 0);
+});
+
+test("#98 pollSelect: other machine or root ignored; no path keeps the selection; clear keeps the mode", async () => {
+  const { self, cx, store } = await multi();
+  self.selectSeen = null;
+  const send = async (r) => { store["filer-pro.select"] = r; self.pollSelect(cx); await settle(); };
+  await send({ id: "s1", mode: "start", machine: "other", root: ROOT, path: `${ROOT}/a.txt` });
+  await send({ id: "s2", mode: "start", machine: null, root: "/elsewhere", path: "/elsewhere/a.txt" });
+  assert.equal(self.selecting, false);
+  assert.equal(self.selected.size, 0);
+  self.setSelection({ selected: new Set(["b.txt"]), anchor: "b.txt", base: new Set(["b.txt"]) });
+  await send({ id: "s3", mode: "start", machine: null, root: ROOT, path: null });
+  assert.equal(self.selecting, true);
+  assert.deepEqual(names(self.selected), ["b.txt"]);
+  assert.equal(self.anchor, null);
+  await send({ id: "s4", mode: "clear", machine: null, root: ROOT });
+  assert.equal(self.selected.size, 0);
+  assert.equal(self.selecting, true);
+});
+
+test("#98 checkbox mode: a plain click toggles, the chevron expands, a double click toggles once", async () => {
+  const { self, cx } = await multi({}, { multi_select: false });
+  self.selecting = true;
+  clickRow(self, cx, "src", 1);
+  assert.deepEqual(names(self.selected), ["src"]);
+  assert.ok(!self.folders.has("src"));
+  const chev = byId(self.render(cx), "chevron-src");
+  let stopped = 0;
+  handler(chev, "on_click")({ click_count: 2 }, { ...cx, stop_propagation: () => stopped++ });
+  assert.ok(!self.folders.has("src"));
+  handler(chev, "on_click")({ click_count: 1 }, { ...cx, stop_propagation: () => stopped++ });
+  assert.ok(self.folders.has("src"));
+  assert.equal(stopped, 2);
+  assert.deepEqual(names(self.selected), ["src"]);
+  clickRow(self, cx, "a.txt", 1);
+  clickRow(self, cx, "a.txt", 2);
+  assert.deepEqual(names(self.selected), ["a.txt", "src"]);
+});
+
+test("#98 prune: collapsing a folder drops the rows below it from the selection and the anchor", async () => {
+  const { self, cx } = await multi();
+  const base = globalThis.__impl.exec;
+  globalThis.__impl.exec = async (c, a, o) => (c === "sh" && a[1] === LIST_SCRIPT && a[3] === `${ROOT}/src` ? { code: 0, stdout: "f\0x.js\0", stderr: "" } : base(c, a, o));
+  clickRow(self, cx, "src", 1);
+  await settle();
+  clickRow(self, cx, "src/x.js", 1, CMD);
+  assert.deepEqual(names(self.selected), ["src/x.js"]);
+  clickRow(self, cx, "src", 1);
+  assert.equal(self.selected.size, 0);
+  assert.equal(self.anchor, null);
+});
+
+test("#98 prune: a reload drops a row that is gone, and the count follows", async () => {
+  const { self, cx } = await multi();
+  self.setSelection({ selected: new Set(["a.txt", "b.txt"]), anchor: "b.txt", base: new Set(["a.txt", "b.txt"]) });
+  const base = globalThis.__impl.exec;
+  globalThis.__impl.exec = async (c, a, o) => (c === "sh" && a[1] === LIST_SCRIPT && a[3] === ROOT ? { code: 0, stdout: ["f", "a.txt", "f", "c.txt"].join("\0") + "\0", stderr: "" } : base(c, a, o));
+  self.refresh(cx);
+  await settle();
+  assert.deepEqual(names(self.selected), ["a.txt"]);
+  assert.equal(self.anchor, null);
+});
+
+test("#98 context: the selection is saved and restored, the anchor is not; navigate carries it", async () => {
+  const { self, cx } = await multi();
+  self.setSelection({ selected: new Set(["b.txt"]), anchor: "b.txt", base: new Set(["b.txt"]) });
+  self.selecting = true;
+  const spaces = globalThis.__impl.spaces;
+  globalThis.__impl.spaces = () => [{ active: true, id: "s2", folder: "/Users/example/Other", machine: null }];
+  self.refresh(cx);
+  await settle();
+  assert.equal(self.selected.size, 0);
+  assert.equal(self.selecting, false);
+  globalThis.__impl.spaces = spaces;
+  self.refresh(cx);
+  await settle();
+  assert.deepEqual(names(self.selected), ["b.txt"]);
+  assert.equal(self.selecting, true);
+  assert.equal(self.anchor, null);
+  globalThis.__impl.focused = () => ({ pane: "p1" });
+  globalThis.__impl.panes = () => [{ pane: "p1", cwd: ROOT }];
+  self.refresh(cx);
+  await settle();
+  self.setSelection({ selected: new Set(["b.txt"]), anchor: "b.txt", base: new Set(["b.txt"]) });
+  self.navigate("/Users/example", cx);
+  await settle();
+  assert.deepEqual(names(self.selected), ["Downloads/b.txt"]);
+  assert.equal(self.anchor, null);
+  assert.equal(self.selecting, true);
+});
