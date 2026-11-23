@@ -7,7 +7,7 @@
 // something it shows changes: a message goes away, a field gains or loses the focus ring, a field is checked on blur.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar } from "gpui-base";
-import { SETTINGS, ADVANCED, validateField, changedEdits, saveSettings, group } from "../lib/settings.js";
+import { SETTINGS, ADVANCED, validateField, changedEdits, saveSettings, group, clickProblem } from "../lib/settings.js";
 import { TERMINAL_EDITORS, GUI_EDITORS } from "../lib/editors.js";
 import { updateHint } from "../lib/update.js";
 import { BASE } from "../lib/icons.js";
@@ -65,8 +65,8 @@ export function createSettingsDialog(snapshot, cx) {
     state.fields[s.key] = field(state, s.key, shown, s.key === "node_path" ? "Automatic" : null);
     state.initial[s.key] = validateField(s.key, shown).value ?? shown;
   }
-  // The two selection clicks (#98); the pickers come with the dialog part of the feature.
-  state.choices = {};
+  // The two selection clicks (#98): the picked values, and the message when both are the same.
+  state.choices = {}; state.clickError = null;
   for (const s of SETTINGS) if (s.kind === "choice") { state.choices[s.key] = config[s.key] ?? s.default; state.initial[s.key] = state.choices[s.key]; }
   // Editors: only the choice is edited here; own entries come from the config file (see docs/GUIDE.md, Editors).
   state.editors = {
@@ -91,6 +91,9 @@ export function collect(state) {
     if (r.error) { bad = true; if (ADVANCED_KEYS.has(key)) state.advanced = true; } else current[key] = r.value;
   }
   for (const ed of Object.values(state.editors)) current[ed.key] = ed.choice;
+  Object.assign(current, state.choices);
+  state.clickError = clickProblem(state.choices.select_toggle_click, state.choices.select_range_click);
+  if (state.clickError) bad = true;
   return bad ? null : changedEdits(state.initial, current);
 }
 
@@ -221,18 +224,25 @@ function updatesRow(t, state, handlers, status) {
   return row(t, "filer-pro-settings-version", title, line, [control]);
 }
 
-// Herdr's appearancePicker: one segment per name, the chosen one raised.
+// Herdr's appearancePicker: one segment per option ([value, label]), the chosen one raised. ids: the picker's id and the
+// prefix of its segments. A disabled picker has no click.
+function segments(t, pickerId, segmentPrefix, options, choice, onPick, disabled = false) {
+  return h_flex().id(pickerId).self_start().flex_wrap().gap(2).p(2).rounded(8).border_1().border_color(t.border).bg(t.background)
+    .children(options.map(([value, label]) => {
+      const on = value === choice;
+      return div().id(`${segmentPrefix}-${value}`).px(12).py(4).rounded(6).text_size(13).border_1()
+        .when(!disabled, (el) => el.cursor_pointer())
+        .when(on, (el) => el.bg(t.raised).text_color(t.foreground).border_color(t.border))
+        .when(!on, (el) => el.border_color("#00000000").text_color(t.muted).when(!disabled, (e) => e.hover((s) => s.text_color(t.foreground))))
+        .when(!disabled, (el) => el.on_click((_e, cx) => { if (choice !== value) onPick(value, cx); }))
+        .child(label);
+    }));
+}
+
 function segmented(t, state, kind) {
   const ed = state.editors[kind];
-  return h_flex().id(`filer-pro-settings-${ed.key}-picker`).self_start().flex_wrap().gap(2).p(2).rounded(8).border_1().border_color(t.border).bg(t.background)
-    .children(ed.names.map((name) => {
-      const on = name === ed.choice;
-      return div().id(`filer-pro-settings-${kind}-${name}`).px(12).py(4).rounded(6).text_size(13).cursor_pointer().border_1()
-        .when(on, (el) => el.bg(t.raised).text_color(t.foreground).border_color(t.border))
-        .when(!on, (el) => el.border_color("#00000000").text_color(t.muted).hover((s) => s.text_color(t.foreground)))
-        .on_click((_e, cx) => { if (ed.choice !== name) { ed.choice = name; cx.notify(); } })
-        .child(name);
-    }));
+  return segments(t, `filer-pro-settings-${ed.key}-picker`, `filer-pro-settings-${kind}`, ed.names.map((n) => [n, n]), ed.choice,
+    (name, cx) => { ed.choice = name; cx.notify(); });
 }
 
 function editorBlock(t, state, kind, title, about, last) {
@@ -240,6 +250,19 @@ function editorBlock(t, state, kind, title, about, last) {
   return v_flex().id(`filer-pro-settings-${key}`).gap(8).py(12).when(!last, (el) => el.border_b(1).border_color(t.border))
     .child(v_flex().gap(3).child(div().text_size(14).text_color(t.foreground).child(title)).child(help(t, about)))
     .child(segmented(t, state, kind));
+}
+
+// A selection click picker (#98), laid out like an editor block; dimmed and dead while multi_select is off.
+function choiceRow(t, state, key, { disabled = false, last = false, error = null } = {}) {
+  const s = SETTINGS.find((x) => x.key === key);
+  const pick = (value, cx) => {
+    state.choices[key] = value; state.clickError = null;
+    if (state.error === FIX_FIELDS && !Object.values(state.fields).some((f) => f.error)) state.error = null;
+    cx.notify();
+  };
+  return v_flex().id(`filer-pro-settings-${key}`).gap(8).py(12).when(!last, (el) => el.border_b(1).border_color(t.border)).when(disabled, (el) => el.opacity(0.45))
+    .child(v_flex().gap(3).child(div().text_size(14).text_color(t.foreground).child(s.label)).child(help(t, s.help)).when(Boolean(error), (el) => el.child(errorLine(t, error))))
+    .child(segments(t, `filer-pro-settings-${key}-picker`, `filer-pro-settings-${key}`, s.choices, state.choices[key], pick, disabled));
 }
 
 function link(t, id, text, iconName, url) {
@@ -282,6 +305,8 @@ function body(t, state, handlers, stored) {
     switchRow(t, state, "double_click_apps"),
     switchRow(t, state, "double_click_folders"),
     switchRow(t, state, "multi_select"),
+    choiceRow(t, state, "select_toggle_click", { disabled: state.flags.multi_select !== true }),
+    choiceRow(t, state, "select_range_click", { disabled: state.flags.multi_select !== true, error: state.clickError }),
     switchRow(t, state, "extract_space_check", { last: true }),
 
     heading(t, "Preview"),
