@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, double_click_folders: true, extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: true,
+    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, double_click_folders: true, multi_select: false, select_toggle_click: "cmd", select_range_click: "shift", extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: true,
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -165,4 +165,19 @@ test("warn_cross_copy: default on, a boolean in the file wins, other types fall 
 test("show_sizes is on by default and changes only with a boolean (issue #58, #73)", async () => {
   for (const text of [null, "{nope", '{"show_sizes":"yes"}', '{"show_sizes":1}']) assert.equal((await loadConfig(reader(text), appHome, home)).show_sizes, true, String(text));
   assert.equal((await loadConfig(reader('{"show_sizes":false}'), appHome, home)).show_sizes, false);
+});
+
+test("multi_select and the two click pickers (#98): defaults, values as written, bad values", async () => {
+  const load = async (text) => loadConfig(reader(text), appHome, home);
+  for (const text of [null, "{nope", "{}"]) {
+    const c = await load(text);
+    assert.deepEqual([c.multi_select, c.select_toggle_click, c.select_range_click], [false, "cmd", "shift"], String(text));
+  }
+  const c = await load('{"multi_select":true,"select_toggle_click":"alt","select_range_click":"alt_shift"}');
+  assert.deepEqual([c.multi_select, c.select_toggle_click, c.select_range_click], [true, "alt", "alt_shift"]);
+  assert.equal((await load('{"select_toggle_click":"ctrl"}')).select_toggle_click, "cmd");
+  assert.equal((await load('{"select_range_click":3}')).select_range_click, "shift");
+  assert.equal((await load('{"multi_select":"yes"}')).multi_select, false);
+  const same = await load('{"select_toggle_click":"shift","select_range_click":"shift"}');
+  assert.deepEqual([same.select_toggle_click, same.select_range_click], ["cmd", "shift"], "equal picks: both defaults");
 });

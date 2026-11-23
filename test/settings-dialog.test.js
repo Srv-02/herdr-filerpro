@@ -66,7 +66,7 @@ test("dialog: every setting starts with its current value; ~/ stays as written; 
   assert.equal(s.fields.node_path.input.placeholder, "Automatic");
   assert.equal(s.flags.svg_check, false);
   assert.equal(s.flags.update_check, true);
-  for (const k of SETTINGS.map((x) => x.key)) assert.ok(k in s.fields || k in s.flags, k);
+  for (const k of SETTINGS.map((x) => x.key)) assert.ok(k in s.fields || k in s.flags || k in s.choices, k);
   assert.ok(!("perf" in s.flags), "perf is not in the dialog");
   assert.equal(s.editors.terminal.choice, "vi");
   assert.equal(s.editors.gui.choice, "VS Code");
@@ -192,7 +192,7 @@ test("view: Advanced opens with its three groups, every number with its unit and
   const s = createSettingsDialog(await snapshot(undefined), cx);
   s.advanced = true;
   const root = view(s), out = texts(root);
-  for (const x of SETTINGS) assert.ok(out.includes(`#filer-pro-settings-${x.key}`), x.key);
+  for (const x of SETTINGS.filter((y) => y.kind !== "choice")) assert.ok(out.includes(`#filer-pro-settings-${x.key}`), x.key);
   const groups = ["File list limits", "Preview limits", "Transfers & connections"].map((g) => out.indexOf(g));
   assert.ok(groups.every((i, n) => i > 0 && (n === 0 || i > groups[n - 1])));
   assert.ok(out.includes("Bigger folders are cut off with a note. Default 500."));

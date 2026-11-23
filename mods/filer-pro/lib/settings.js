@@ -8,6 +8,12 @@ import { group } from "./numbers.js";
 const int = (key, def, min, max, label, help, section, unit, zero = false) => ({ key, kind: "int", default: def, min, max, label, help, section, unit, ...(zero ? { zero: true } : {}) });
 const bool = (key, def, label, help, section) => ({ key, kind: "bool", default: def, label, help, section });
 
+const choice = (key, def, choices, label, help, section) => ({ key, kind: "choice", default: def, choices, label, help, section });
+
+// The clicks that may add, remove or range-select a row (#98), in the order of the picker. No Ctrl (macOS opens the
+// context menu), no plain click, no Option+Cmd (Show in Finder while multi_select is on).
+export const SELECT_CLICKS = Object.freeze([["cmd", "Cmd"], ["shift", "Shift"], ["cmd_shift", "Cmd+Shift"], ["alt", "Option"], ["alt_shift", "Option+Shift"]].map((p) => Object.freeze(p)));
+
 // ui/settings.js takes group from here, with the rest of the dialog's helpers.
 export { group };
 
@@ -46,6 +52,9 @@ export const SETTINGS = Object.freeze([
   bool("double_click_files", false, "Open files with a double click", "A single click only marks a file. Folders still open with a single click.", "File list"),
   bool("double_click_apps", true, "Open apps with a double click", "Apps, installers and other packages on this Mac. A double click keeps a downloaded app from starting by accident.", "File list"),
   bool("double_click_folders", true, "Show folders as root with a double click", "A single click still opens and closes a folder. Show as Root in the right-click menu works either way.", "File list"),
+  bool("multi_select", false, "Select several files with Cmd and Shift", "Cmd+click adds or removes a file, Shift+click selects everything in between. Show in Finder then needs Option+Cmd+click or the right-click menu.", "File list"),
+  choice("select_toggle_click", "cmd", SELECT_CLICKS, "Click to add or remove a file", "Used while Select several files is on.", "File list"),
+  choice("select_range_click", "shift", SELECT_CLICKS, "Click to select a range", "Selects every visible row from the last added file to this one.", "File list"),
   bool("extract_space_check", true, "Check free space before extracting", "Stops when the archive would not fit. A single compressed file is read once more.", "File list"),
   bool("preview", true, "Show previews", "Markdown, HTML, images and PDFs open formatted. Turn off to always see the raw text.", "Preview"),
   bool("mermaid", true, "Draw diagrams", "Turns Mermaid code in Markdown files into diagrams. Needs Node.js.", "Preview"),
@@ -74,6 +83,7 @@ export function validateField(key, input) {
   const s = BY_KEY.get(key);
   if (!s) return { error: "Unknown setting" };
   if (s.kind === "bool") return typeof input === "boolean" ? { value: input } : { error: "Must be on or off" };
+  if (s.kind === "choice") return s.choices.some(([v]) => v === input) ? { value: input } : { error: "Pick one of the choices." };
   const text = typeof input === "string" ? input.trim() : "";
   if (s.kind === "int") {
     if (!/^\d+$/.test(text)) return { error: "Enter a whole number." };
@@ -86,6 +96,11 @@ export function validateField(key, input) {
     return text.startsWith("/") && !/[\0\n\r]/.test(text) ? { value: text } : { error: "Enter a full path that starts with /, or leave it empty." };
   }
   return text === "" ? { error: "Enter a folder." } : { value: text };
+}
+
+// Why the two selection clicks cannot be used together, or null: one click would do both jobs.
+export function clickProblem(toggle, range) {
+  return toggle === range ? "Pick two different clicks." : null;
 }
 
 const hasPath = (t) => /\{path(_uri)?\}/.test(t);

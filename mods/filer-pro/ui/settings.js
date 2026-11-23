@@ -59,11 +59,15 @@ export function createSettingsDialog(snapshot, cx) {
   state.error = state.broken ? brokenText(configPath) : null;
   for (const s of SETTINGS) {
     if (s.kind === "bool") { state.flags[s.key] = config[s.key] ?? s.default; state.initial[s.key] = state.flags[s.key]; continue; }
+    if (s.kind === "choice") continue; // the click pickers have their own state (state.choices)
     // The download folder as written in the file (~/ stays ~/), everything else as loadConfig read it.
     const shown = s.key === "download_folder" ? (str(raw.download_folder).trim() || s.default) : String(config[s.key] ?? s.default);
     state.fields[s.key] = field(state, s.key, shown, s.key === "node_path" ? "Automatic" : null);
     state.initial[s.key] = validateField(s.key, shown).value ?? shown;
   }
+  // The two selection clicks (#98); the pickers come with the dialog part of the feature.
+  state.choices = {};
+  for (const s of SETTINGS) if (s.kind === "choice") { state.choices[s.key] = config[s.key] ?? s.default; state.initial[s.key] = state.choices[s.key]; }
   // Editors: only the choice is edited here; own entries come from the config file (see docs/GUIDE.md, Editors).
   state.editors = {
     gui: { key: "gui_editor", names: editorNames(GUI_EDITORS, config.gui_editors), choice: config.gui_editor ?? "VS Code" },
@@ -277,6 +281,7 @@ function body(t, state, handlers, stored) {
     switchRow(t, state, "double_click_files"),
     switchRow(t, state, "double_click_apps"),
     switchRow(t, state, "double_click_folders"),
+    switchRow(t, state, "multi_select"),
     switchRow(t, state, "extract_space_check", { last: true }),
 
     heading(t, "Preview"),
