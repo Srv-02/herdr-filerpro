@@ -1,7 +1,7 @@
 // Request files: other programs (herdr-app do ... cannot pass arguments) drop <id>.json into
 // appHome()/filer-pro/requests/; the lease holder claims, handles and answers with <id>.result.json.
 import { createBatch } from "./batch.js";
-import { clipEntry, pastePlan } from "./clipboard.js";
+import { clipEntry, clipItems, pastePlan, sameClip } from "./clipboard.js";
 import { badSpelling, normalizePath } from "./fileops.js";
 import { baseName, joinPath, keepBothName, nameKey } from "./names.js";
 
@@ -370,12 +370,12 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
   const { getShared, setShared } = deps;
   const now = deps.now ?? Date.now;
   if (typeof root !== "string" || root === "") return { ok: false, error: "root is required" };
-  const i = await deps.fileOps.inspectMove({ on, src: plan.src, destDir: plan.destDir, root });
+  const src = plan.srcs[0];
+  const i = await deps.fileOps.inspectMove({ on, src, destDir: plan.destDir, root });
   if (!i.ok) return i;
   if (i.noop) return { ok: true, noop: true };
   const clearClipboard = () => {
-    const cur = getShared("filer-pro.clipboard");
-    if (cur && cur.path === clip.path && cur.at === clip.at && (cur.machine ?? null) === (clip.machine ?? null)) setShared("filer-pro.clipboard", null);
+    if (sameClip(getShared("filer-pro.clipboard"), clip)) setShared("filer-pro.clipboard", null);
   };
   const batch = `${deps.newBatchId()}#1`;
   const item = {
@@ -386,13 +386,13 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
   if (i.crossVolume) {
     const a = await deps.ask({ batch, item, choices: ["copy_instead", "cancel"], remaining: 1 });
     if (a?.choice !== "copy_instead") return cancelled;
-    const r = await runTransfers({ direction: plan.direction, machine: plan.machine, paths: [plan.src], destDir: plan.destDir, conflict, reveal }, deps);
+    const r = await runTransfers({ direction: plan.direction, machine: plan.machine, paths: [src], destDir: plan.destDir, conflict, reveal }, deps);
     // The copy only started: the Cut clipboard stays until it succeeds. jobs.js empties it when a job named in
     // copyJobs ends as done (a failed copy leaves the Cut intact).
     if (r.ok) {
       const ids = r.jobs.map((j) => j.id);
       const cur = getShared("filer-pro.clipboard");
-      if (cur && cur.path === clip.path && cur.at === clip.at && (cur.machine ?? null) === (clip.machine ?? null)) {
+      if (sameClip(cur, clip)) {
         setShared("filer-pro.clipboard", { ...cur, copyJobs: ids });
         const jobsNow = getShared("filer-pro.jobs") || {};
         if (ids.length > 0 && ids.every((id) => jobsNow[id]?.state === "done")) clearClipboard();
@@ -417,7 +417,7 @@ export async function runMove({ on, plan, clip, root, conflict, reveal }, deps) 
     const target = j.direction === "up" || j.direction === "remote" || j.direction === "cross" ? j.machine : null;
     if ((target ?? null) === on && typeof j.dest === "string") reserved.push(baseName(j.dest));
   }
-  const out = await deps.fileOps.move({ on, src: plan.src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
+  const out = await deps.fileOps.move({ on, src, destDir: plan.destDir, root, choice, expect: i.src, expectDest: i.dest, reserved });
   if (out.ok) clearClipboard();
   changedAfter(setShared, now); // a failed move may have moved the old entry aside already
   return out;
@@ -466,7 +466,10 @@ export async function handleRequest(req, deps) {
     case "extract":
       return runExtract(req, deps);
     case "clip":
-      setShared("filer-pro.clipboard", clipEntry({ on: req.machine, path: req.path, isDir: req.is_dir, at: now(), cut: req.cut }));
+      setShared("filer-pro.clipboard", clipEntry({
+        on: req.machine, at: now(), cut: req.cut,
+        items: req.items ? req.items.map(({ path, is_dir }) => ({ path, isDir: is_dir })) : [{ path: req.path, isDir: req.is_dir }],
+      }));
       return { ok: true };
     case "paste": {
       const clip = getShared("filer-pro.clipboard");
@@ -475,9 +478,9 @@ export async function handleRequest(req, deps) {
       if (plan.move) return runMove({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
       // A copy between two machines runs through this computer: one warning per paste unless the setting is off.
       const warn = plan.direction === "cross" && (await deps.loadConfig())?.warn_cross_copy !== false
-        ? { item: { name: baseName(plan.src), isDir: clip.isDir === true, path: plan.src, from: plan.from, machine: plan.machine, direction: "cross" } } : null;
+        ? { item: { name: baseName(plan.srcs[0]), isDir: clipItems(clip)[0].isDir, path: plan.srcs[0], from: plan.from, machine: plan.machine, direction: "cross" } } : null;
       return runTransfers({
-        direction: plan.direction, machine: plan.machine, ...(plan.from ? { from: plan.from } : {}), paths: [plan.src], destDir: plan.destDir,
+        direction: plan.direction, machine: plan.machine, ...(plan.from ? { from: plan.from } : {}), paths: plan.srcs, destDir: plan.destDir,
         conflict: req.conflict, links: req.links, reveal: req.reveal, warn,
       }, deps);
     }

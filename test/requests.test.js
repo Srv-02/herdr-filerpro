@@ -441,9 +441,11 @@ test("resultText carries path, trashed and trash_path", () => {
 test("clip stores the clipboard", async () => {
   const d = deps();
   assert.deepEqual(await handleRequest({ action: "clip", machine: "box", path: "/srv/a", is_dir: false }, d), { ok: true });
-  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", path: "/srv/a", isDir: false, at: 777 });
+  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/a", isDir: false }], at: 777 });
   await handleRequest({ action: "clip", path: "/Users/m/a", is_dir: true }, d);
-  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: null, path: "/Users/m/a", isDir: true, at: 777 });
+  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: null, items: [{ path: "/Users/m/a", isDir: true }], at: 777 });
+  await handleRequest({ action: "clip", items: [{ path: "/Users/m/a", is_dir: true }, { path: "/Users/m/b", is_dir: false }], cut: true }, d);
+  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: null, items: [{ path: "/Users/m/a", isDir: true }, { path: "/Users/m/b", isDir: false }], at: 777, cut: true });
 });
 
 test("paste: nothing copied, cross machine, and the four directions through runTransfers", async () => {
@@ -733,9 +735,9 @@ const paste = (extra = {}) => ({ action: "paste", machine: "box", folder: "/srv/
 test("clip with cut stores the mark, clip without clears it", async () => {
   const d = deps();
   await handleRequest({ action: "clip", machine: "box", path: "/srv/a", is_dir: false, cut: true }, d);
-  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", path: "/srv/a", isDir: false, at: 777, cut: true });
+  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/a", isDir: false }], at: 777, cut: true });
   await handleRequest({ action: "clip", machine: "box", path: "/srv/a", is_dir: false }, d);
-  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", path: "/srv/a", isDir: false, at: 777 });
+  assert.deepEqual(d.store["filer-pro.clipboard"], { machine: "box", items: [{ path: "/srv/a", isDir: false }], at: 777 });
 });
 test("paste after cut on another machine is refused and starts nothing", async () => {
   for (const [store, extra] of [[cut("box", "/srv/a"), { machine: undefined }], [cut("box", "/srv/a"), { machine: "other" }], [cut(null, "/Users/me/a"), { machine: "box" }]]) {
@@ -1254,4 +1256,17 @@ test("#99 parseRequest: bad lists", () => {
   assert.equal(e({ action: "delete", paths: ["/a/./b"], root: "/" }), 'Path must not contain ".", ".." or "//"');
   assert.equal(e({ action: "delete", paths: ["/a"] }), "root is required");
   assert.equal(e({ action: "delete", path: "/a", paths: ["/a"], root: "/" }), "Use path or paths, not both");
+});
+
+test("#99 paste of a Copy of two items runs one batch with both paths", async () => {
+  const store = { "filer-pro.clipboard": { machine: null, items: [{ path: "/Users/m/a", isDir: false }, { path: "/Users/m/b", isDir: true }], at: 1 } };
+  const d = deps({ store });
+  assert.deepEqual(await handleRequest({ action: "paste", folder: "/in", conflict: "keep_both" }, d), { ok: true, jobs: [{ id: "j1" }, { id: "j1" }] });
+  assert.deepEqual(d.calls.filter((c) => c[0] === "inspect").map((c) => c[1].src), ["/Users/m/a", "/Users/m/b"]);
+  assert.deepEqual(d.calls.filter((c) => c[0] === "start").map((c) => c[1].src), ["/Users/m/a", "/Users/m/b"]);
+});
+test("#99 an old single clipboard entry still pastes", async () => {
+  const d = deps({ store: { "filer-pro.clipboard": { machine: null, path: "/Users/m/a", isDir: false, at: 1 } } });
+  assert.deepEqual(await handleRequest({ action: "paste", folder: "/in" }, d), { ok: true, jobs: [{ id: "j1" }] });
+  assert.equal(d.calls.find((c) => c[0] === "start")[1].src, "/Users/m/a");
 });
