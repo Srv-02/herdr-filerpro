@@ -38,6 +38,7 @@ Then click `Filer Pro` in the tab bar.
 - **Navigate freely:** Up one level, Go to `/`, and one click back to the terminal's folder.
 - **Sizes and git marks:** file sizes next to each name, Calculate Size for folders, `M` `A` `U` `D` from git.
 - **Always current:** follows file system events on this Mac, no polling.
+- **Select several files:** Select Files in the right-click menu, or Cmd+click and Shift+click with the switch in Settings.
 
 ![The file tree with sizes, a calculated folder size and the row menu of a file](screenshots/browse.png)
 
