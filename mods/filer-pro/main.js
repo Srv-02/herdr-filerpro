@@ -878,7 +878,9 @@ export default class FilerPro extends View {
       tree.context = pinned ? pinnedContext(cwd) : { key: next, cwd, on, tree: "follow" }; tree.root = cwd; tree.on = on; tree.entries = new Map(); tree.realFolders = new Map(); tree.fileReal = null; tree.folders = new Set(saved?.folders); tree.packages = new Set(saved?.packages);
       tree.pending = new Set(); tree.marks = {}; if (own) this.show(null); tree.watched = null; tree.gitWatch = null; tree.error = null; tree.limited = false;
       tree.loading = false; tree.again = false; tree.fileWanted = 0; tree.fileForce = false; tree.lastOpened = saved?.lastOpened ?? null;
-      this.setSelection({ selected: new Set(saved?.selected) }, tree); tree.selecting = saved?.selecting === true; // anchor and base are not restored
+      // anchor and base are not restored. The other tree's live selection wins over a restored one (one selection at a time).
+      const other = [this.trees.follow, this.trees.pinned].some((o) => o && o !== tree && (o.selected?.size || o.anchor || o.selecting === true));
+      this.setSelection({ selected: new Set(other ? null : saved?.selected) }, tree); tree.selecting = !other && saved?.selecting === true;
       if (own && saved?.file) this.show(saved.file, cx, { tree }); // read fresh: no file reload needed
       file = 0; force = false;
     }
@@ -2358,7 +2360,14 @@ export default class FilerPro extends View {
       return;
     }
     if (this.cfgPending === true) return;
-    const root = state.root ?? startFolder(this.conf);
+    const start = startFolder(this.conf);
+    // The setting changed since the root was taken from it: the lower tree goes back to the new start folder.
+    if (start && state.seed !== start) {
+      const reset = state.seed != null || state.root == null;
+      setShared(LOCAL_TREE_KEY, writeLocalTree(state, reset ? { seed: start, root: null } : { seed: start }));
+      if (reset) state.root = null;
+    }
+    const root = state.root ?? start;
     if (!root) return;
     const tree = this.trees.pinned ??= createTree("pinned");
     if (tree.context?.key !== pinnedContext(root).key) { tree.want = root; this.refresh(cx, {}, tree); }

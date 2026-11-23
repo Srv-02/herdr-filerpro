@@ -644,7 +644,7 @@ export async function handleRequest(req, deps) {
       const clip = getShared("filer-pro.clipboard");
       const plan = pastePlan(clip, { on: req.machine ?? null, folder: req.folder });
       if (plan.error) return { ok: false, error: plan.error };
-      if (plan.move && (plan.direction === "local" || plan.direction === "remote")) return (plan.srcs.length === 1 ? runMove : runMoves)({ on: req.machine ?? null, plan, clip, root: req.root, conflict: req.conflict, reveal: req.reveal }, deps);
+      if (plan.move && (plan.direction === "local" || plan.direction === "remote")) return (plan.srcs.length === 1 ? runMove : runMoves)({ on: req.machine ?? null, plan, clip, root: clip.root ?? req.root, conflict: req.conflict, reveal: req.reveal }, deps);
       if (plan.move) { // a Cut on another side (#100): copy, verify, delete
         // Two machine names for one SSH host are one tree: a plain move there (a copy over itself would delete both files).
         if (plan.direction === "cross") {

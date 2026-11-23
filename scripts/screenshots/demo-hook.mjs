@@ -53,12 +53,12 @@ const hook = `
     else if (c.op === "settings") { this.demoSettings = { demoFrom: c.from ?? 0 }; await this.openSettings(); }
     else if (c.op === "full") { this.demoFull = { demoSpread: true, demoZoom: c.zoom }; await this.openFull(cx); }
     else if (c.op === "rootmenu") {
-      openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root, editor: editorMenu(this.conf), hover: c.hover }, kind: "popup", at: { x: c.x, y: c.y }, width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false } })) });
+      openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", machine: this.on, root: this.root, folder: this.root, editor: editorMenu(this.conf), hover: c.hover }, kind: "popup", at: { x: c.x, y: c.y }, width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, upload: canUpload() })) });
     } else if (c.op === "menu") {
       const entry = this.entryAt(c.path);
       if (!entry) return;
       const dir = treeDir(entry, c.path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
-      const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
+      const menuState = { paste: { enabled: false }, upload: canUpload(), ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
       openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, c.path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, c.path, dir), editor: editorMenu(this.conf), hover: c.hover }, kind: "popup", at: { x: c.x, y: c.y }, width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
     }
   }
