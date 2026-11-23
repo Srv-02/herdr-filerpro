@@ -906,7 +906,7 @@ export default class FilerPro extends View {
       cx.notify();
     } else if (kind === "reveal") this.reveal(path);
     else if (kind === "row") {
-      if (this.selected?.size) { this.clearSelected(); cx.notify(); }
+      if (this.selected?.size || this.anchor) { this.clearSelected(); cx.notify(); } // a lone anchor (toggled off) goes too
       if (dir) this.clickFolder(path, bundle, e, cx); else this.clickFile(path, bundle, e, cx);
     }
   }
@@ -2221,7 +2221,7 @@ export default class FilerPro extends View {
         .when(!this.file, el => el.flex_1().p(TREE_PAD).children(this.rows(t, dark)))
         .when(Boolean(this.file), el => el.flex_none().h(0).p(0).child(div().flex_none().h(this.visible().length * ROW_H + 2 * TREE_PAD)))
         .on_drop((e, cx) => this.drop(e.paths, null, false))
-        .on_click((_e, cx) => { if (this.selecting !== true && this.selected?.size) { this.clearSelected(); cx.notify(); } })
+        .on_click((_e, cx) => { if (this.selecting !== true && (this.selected?.size || this.anchor)) { this.clearSelected(); cx.notify(); } })
         .on_mouse_down("right", (_e, cx) => {
           cx.stop_propagation();
           if (!this.root) return;

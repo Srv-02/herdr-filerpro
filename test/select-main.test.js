@@ -207,6 +207,20 @@ test("#98 clicks: a plain click with a selection clears it and acts as before", 
   assert.ok(self.folders.has("src"));
 });
 
+test("#98 clicks: a plain click or the free area clears a lone anchor, so the next Shift+click starts fresh", async () => {
+  const { self, cx } = await multi();
+  const lone = () => { clickRow(self, cx, "a.txt", 1, CMD); clickRow(self, cx, "a.txt", 1, CMD); assert.equal(self.selected.size, 0); assert.equal(self.anchor, "a.txt"); };
+  lone();
+  clickRow(self, cx, "src", 1); // a folder, so no file view hides the rows
+  assert.equal(self.anchor, null);
+  clickRow(self, cx, "c.txt", 1, SHIFT);
+  assert.deepEqual(names(self.selected), ["c.txt"]);
+  self.clearSelected();
+  lone();
+  handler(byId(self.render(cx), "files-tree"), "on_click")({}, cx);
+  assert.equal(self.anchor, null);
+});
+
 test("#98 clicks: the row stops propagation; the free area clears outside the mode only", async () => {
   const { self, cx } = await multi();
   let stopped = 0;

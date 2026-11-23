@@ -454,6 +454,17 @@ test("save: the same pick twice writes nothing and shows the click error; a pick
   assert.equal(s.error, null);
 });
 
+test("save: equal picks with multi_select off are not an error and keep the stored picks (#98)", async () => {
+  const s = createSettingsDialog(await snapshot({ multi_select: true }), cx);
+  const c = makeCx();
+  called(byId(view(s), "filer-pro-settings-select_toggle_click-shift"), "on_click")[0][0]({}, c);
+  s.flags.multi_select = false;
+  assert.deepEqual(collect(s), { multi_select: false }, "no error, the equal picks are not written");
+  assert.equal(s.clickError, null);
+  s.flags.multi_select = true;
+  assert.equal(collect(s), null, "on: still refused");
+});
+
 test("save: only a changed pick is written (#98)", async () => {
   const s = createSettingsDialog(await snapshot({ multi_select: true }), cx);
   assert.deepEqual(collect(s), {}, "unchanged: nothing");

@@ -92,8 +92,12 @@ export function collect(state) {
   }
   for (const ed of Object.values(state.editors)) current[ed.key] = ed.choice;
   Object.assign(current, state.choices);
-  state.clickError = clickProblem(state.choices.select_toggle_click, state.choices.select_range_click);
+  // Equal picks are refused only while multi_select is on; off, the pickers are locked, so the stored picks stay.
+  const equal = clickProblem(state.choices.select_toggle_click, state.choices.select_range_click);
+  const on = state.flags.multi_select === true;
+  state.clickError = on ? equal : null;
   if (state.clickError) bad = true;
+  else if (equal) for (const k of ["select_toggle_click", "select_range_click"]) current[k] = state.initial[k];
   return bad ? null : changedEdits(state.initial, current);
 }
 
