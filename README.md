@@ -87,8 +87,8 @@ Then click `Filer Pro` in the tab bar.
 
 ### Transfers
 
-- **Drop to upload** from the Finder, or **Upload File…** in the menu (needs a Herdr version with `pickFiles`), right click to download.
-- **Drag out:** rows to the Finder and between the two trees (remote-row drags depend on the Herdr host, not measured yet).
+- **Drop to upload** from the Finder, or **Upload File…** or **Upload Folder…** in the menu of a machine tree (the file picker needs a Herdr version with `pickFiles`), right click to download.
+- **Drag out:** rows are drag sources for terminals only (the path is pasted). Between the two trees use **Upload to <machine>**, **Download to This Mac** or Copy and Paste.
 - **Progress and cancel** for every transfer, nothing overwritten without asking.
 - **Machine to machine:** Copy or Cut on one, Paste on the other, through this computer. A Cut copies, checks and then deletes the original.
 - **Several at once:** select rows, then Download, Copy, Cut or Delete them in one step.
