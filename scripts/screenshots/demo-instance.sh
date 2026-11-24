@@ -1,12 +1,15 @@
 #!/bin/sh
 # A separate Herdr instance for the README screenshots, so the demo never runs in your own Herdr: own HERDR_APP_HOME (below tmp/ of
 # this checkout, gitignored) and own core session (HC_SESSION). shoot.sh drives it end to end; the steps are here for manual use.
-# Usage: scripts/screenshots/demo-instance.sh prepare|start|space|quit|clean
+# Usage: scripts/screenshots/demo-instance.sh prepare|start|space|machine|quit|clean
 #   prepare: copy the demo project to ~/acme-app (refuses to overwrite) and generate its PDF, PNG and ZIP; copy the mod of this
 #            checkout into the instance home (with DEMO_HOOK=1 patched by demo-hook.mjs, in that copy only) and write the layout
 #   start:   launch the window (macOS gives a new instance the focus once; nothing here raises or focuses it afterwards)
 #   space:   open the demo space with a neutral prompt        quit: close the instance and stop its core session
-#   clean:   delete ~/acme-app, the instance home and the core session state
+#   machine: (optional, needs DEMO_MACHINE=<ssh target>) copy the demo project to /tmp/acme-app there (refuses to overwrite) and add
+#            the target to this instance's core only, as "devbox", with its own hc session there; your ssh config and your own
+#            Herdr's machines stay untouched. The images then show "devbox", never the real host name.
+#   clean:   delete ~/acme-app, the instance home and the core session state, and on the machine the demo copy and the session
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export HERDR_APP_HOME="$ROOT/tmp/shots-home"
@@ -17,6 +20,10 @@ APP="${HERDR_APP:-/Applications/Herdr.app/Contents/MacOS/Herdr}"
 EDGE="${EDGE:-/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge}"
 GEN="$ROOT/scripts/screenshots/demo/gen"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-core/$HC_SESSION"
+# The machine for the machine-tree cards: an ssh target, shown under a neutral name, with the demo outside the home folder
+# (a machine tree shows the full path, and /home/<user> would show the user name).
+MACHINE_NAME="${DEMO_MACHINE_NAME:-devbox}"
+REMOTE_DIR="${DEMO_REMOTE_DIR:-/tmp/acme-app}"
 
 # Headless Edge only: no window. The profile is thrown away.
 edge() { "$EDGE" --headless --disable-gpu --hide-scrollbars --user-data-dir="$ROOT/tmp/shots-edge" "$@" 2>/dev/null; }
@@ -53,11 +60,33 @@ prepare() {
   ' "${DEFAULT_LAYOUT:-$HOME/.config/herdr-app/layouts/main.json}" "$("${HERDR_APP_CLI:-herdr-app}" --version | awk '{print $NF}')"
 }
 
+# On the machine: hc of the user lives in ~/.local/bin, which a non-login ssh shell may not have on PATH.
+remote() { ssh -o BatchMode=yes "$1" "PATH=\$HOME/.local/bin:\$PATH; $2"; }
+
+machine() {
+  [ -n "${DEMO_MACHINE:-}" ] || { echo "set DEMO_MACHINE to an ssh target" >&2; exit 2; }
+  [ -d "$DEMO" ] || { echo "$DEMO missing: run prepare first" >&2; exit 1; }
+  remote "$DEMO_MACHINE" "[ ! -e '$REMOTE_DIR' ]" || { echo "$REMOTE_DIR exists on the machine: remove it first (or set DEMO_REMOTE_DIR)" >&2; exit 1; }
+  echo "$DEMO_MACHINE $REMOTE_DIR" > "$HERDR_APP_HOME/created-remote" # clean deletes it only when this run created it
+  (cd "$DEMO" && COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -cf - .) | remote "$DEMO_MACHINE" "mkdir '$REMOTE_DIR' && tar -xf - -C '$REMOTE_DIR'"
+  hc machine add "$DEMO_MACHINE" --name "$MACHINE_NAME" --session "$HC_SESSION" > /dev/null
+  for _ in $(seq 1 40); do hc machine ls --json | grep -q '"state":"connected"' && return 0; sleep 1; done
+  echo "$MACHINE_NAME did not connect" >&2; exit 1
+}
+
+unmachine() {
+  [ -f "$HERDR_APP_HOME/created-remote" ] || return 0
+  read -r target dir < "$HERDR_APP_HOME/created-remote"
+  remote "$target" "rm -rf '$dir'; HC_SESSION=$HC_SESSION hc server stop >/dev/null 2>&1; rm -rf \$HOME/.local/state/herdr-core/$HC_SESSION" || true
+  rm -f "$HERDR_APP_HOME/created-remote"
+}
+
 case "${1:-}" in
   prepare) prepare ;;
   start) nohup "$APP" > "$ROOT/tmp/shots-app.log" 2>&1 & echo "started; HERDR_APP_HOME=$HERDR_APP_HOME HC_SESSION=$HC_SESSION" ;;
+  machine) machine ;;
   space) herdr-app do space.new '{"name":"acme-app","folder":"'"$DEMO"'","tab":"acme-app","argv":["env","BASH_SILENCE_DEPRECATION_WARNING=1","PS1=acme-app $ ","/bin/bash","--norc","--noprofile"]}' ;;
   quit) herdr-app do app.quit || true; sleep 2; hc server stop || true ;;
-  clean) { [ "$(cat "$HERDR_APP_HOME/created-demo" 2>/dev/null)" != "$DEMO" ] || rm -rf "$DEMO"; }; rm -rf "$HERDR_APP_HOME" "$STATE" "$ROOT/tmp/shots-edge" ;;
-  *) echo "usage: $0 prepare|start|space|quit|clean" >&2; exit 2 ;;
+  clean) unmachine; { [ "$(cat "$HERDR_APP_HOME/created-demo" 2>/dev/null)" != "$DEMO" ] || rm -rf "$DEMO"; }; rm -rf "$HERDR_APP_HOME" "$STATE" "$ROOT/tmp/shots-edge" ;;
+  *) echo "usage: $0 prepare|start|space|machine|quit|clean" >&2; exit 2 ;;
 esac

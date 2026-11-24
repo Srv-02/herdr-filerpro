@@ -4,7 +4,10 @@
 // Usage: node scripts/screenshots/demo-hook.mjs <path of the copied mods/filer-pro>
 // Commands (one JSON object, a new "id" each time): { id, op: "expand", paths: ["docs"] } | { op: "size", path } |
 // { op: "row", path } (hover look of a tree row) | { op: "menu", path, x, y, hover: "<menu entry id>" } |
-// { op: "rootmenu", x, y, hover } | { op: "settings", from: 0 | 9 } | { op: "full", zoom } | { op: "close" } | { op: "back" }
+// { op: "select", paths, boxes } | { op: "rootmenu", x, y, hover } (Folder actions) | { op: "localtree", shown, root, sizes } |
+// { op: "probe" } (writes demo-probe.json: loading, unsized) | { op: "jobs", jobs: { id: job } } (the transfers bar shows them, nothing runs) | { op: "conflict", item, choices } |
+// { op: "settings", from: 0 | 9 } | { op: "full", zoom } | { op: "close" } | { op: "back" }
+// expand, collapse, size, select, menu and rootmenu take "tree": "pinned" for the lower tree (This Mac).
 import fs from "node:fs";
 
 const dir = process.argv[2];
@@ -43,24 +46,51 @@ const hook = `
   }
 
   async demoRun(c, cx) {
-    if (c.op === "expand") { for (const p of c.paths) if (!this.folders.has(p)) this.toggle(p, cx); }
-    else if (c.op === "collapse") { for (const p of c.paths) if (this.folders.has(p)) this.toggle(p, cx); }
-    else if (c.op === "size") setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), null, joinPath(this.root, c.path), this.newId(), Date.now()));
+    // "tree": "pinned" acts on the lower tree (This Mac), otherwise on the upper tree.
+    const tree = c.tree === "pinned" ? this.trees.pinned : this.trees.follow;
+    if (!tree) return;
+    if (c.op === "expand") { for (const p of c.paths) if (!tree.folders.has(p)) this.toggle(p, cx, tree); }
+    else if (c.op === "collapse") { for (const p of c.paths) if (tree.folders.has(p)) this.toggle(p, cx, tree); }
+    else if (c.op === "size") setShared("filer-pro.sizes", requestSize(shared("filer-pro.sizes"), tree.on ?? null, joinPath(tree.root, c.path), this.newId(), Date.now()));
     else if (c.op === "localtree") setShared("filer-pro.localtree", { shown: c.shown !== false, root: c.root ?? null, sizes: c.sizes ?? null });
     else if (c.op === "row") { this.demoRow = c.path ?? null; cx.notify(); }
+    else if (c.op === "select") {
+      // The selection a Cmd+click or Select Files would make; "boxes" turns on the checkbox mode, an empty list ends both.
+      this.dropOtherSelection(tree);
+      const paths = c.paths ?? [];
+      this.setSelection({ selected: new Set(paths), anchor: paths.at(-1) ?? null }, tree);
+      tree.selecting = c.boxes === true;
+      cx.notify();
+    }
+    else if (c.op === "probe") {
+      // For the shell to wait on: whether a shown tree is still listing, and whether a row lacks its size (sizes come with the listing).
+      const rows = this.shownTrees().flatMap((tree) => this.visible(tree).filter((r) => !r.entry.note && !r.entry.dir));
+      await fs.writeFile(\`\${appHome()}/demo-probe.json\`, JSON.stringify({ id: c.id, loading: this.anyLoading(), unsized: rows.filter((r) => !Number.isFinite(r.entry.size)).length }));
+    }
+    else if (c.op === "jobs") { this.demoJobs = c.jobs ?? null; cx.notify(); } // shown in the transfers bar only, never run
+    else if (c.op === "conflict") {
+      // The question dialog as ask() opens it, with a made-up case; no batch waits for the answer.
+      setShared("filer-pro.answer", null);
+      setShared("filer-pro.pending", { batch: "demo#0", item: c.item, choices: c.choices ?? ["replace", "keep_both", "cancel"], remaining: 1 });
+      openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: 240 });
+    }
     else if (c.op === "back") { this.show(null, cx); cx.notify(); }
     else if (c.op === "close") { if (DEMO_LAST) { try { closeOverlay(DEMO_LAST); } catch {} } DEMO_LAST = null; }
     else if (c.op === "settings") { this.demoSettings = { demoFrom: c.from ?? 0 }; await this.openSettings(); }
     else if (c.op === "full") { this.demoFull = { demoSpread: true, demoZoom: c.zoom }; await this.openFull(cx); }
     else if (c.op === "rootmenu") {
-      const spec = this.folderMenu(this.trees.follow);
+      const spec = this.folderMenu(tree);
       openOverlay({ ...spec, props: { ...spec.props, hover: c.hover }, at: { x: c.x, y: c.y } });
     } else if (c.op === "menu") {
-      const entry = this.entryAt(c.path);
+      // The same popup as a right click on the row (rows() in main.js), at a fixed place and with one entry hovered.
+      const entry = this.entryAt(c.path, tree);
       if (!entry) return;
-      const dir = treeDir(entry, c.path, this.packages), bundle = entry.bundle === true, contents = bundle && dir;
-      const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: this.on, platform: window()?.platform, bundle, contents }) };
-      openOverlay({ mod: "filer-pro", props: { view: "menu", machine: this.on, root: this.root, path: joinPath(this.root, c.path), isDir: entry.dir, bundle, contents, folder: dropTarget(this.root, c.path, dir), editor: editorMenu(this.conf), hover: c.hover }, kind: "popup", at: { x: c.x, y: c.y }, width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
+      const dir = treeDir(entry, c.path, tree.packages), bundle = entry.bundle === true, contents = bundle && dir;
+      const items = tree.selected?.has(c.path) ? this.selectedItems(tree) : [];
+      const multi = items.length >= 2 ? { items, count: items.length } : {};
+      const xfer = this.transfers(tree);
+      const menuState = { paste: { enabled: false }, ...xfer.state, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: tree.on, platform: window()?.platform, bundle, contents, selecting: tree.selecting === true, count: multi.count }) };
+      openOverlay({ mod: "filer-pro", props: { view: "menu", tree: tree.id, machine: tree.on, root: tree.root, path: joinPath(tree.root, c.path), isDir: entry.dir, bundle, contents, selecting: tree.selecting === true, folder: dropTarget(tree.root, c.path, dir), editor: editorMenu(this.conf), ...xfer.props, ...multi, hover: c.hover }, kind: "popup", at: { x: c.x, y: c.y }, width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
     }
   }
 `;
@@ -74,6 +104,7 @@ patch("main.js", [
   ["configPath: tilde(`${appHome()}/filer-pro.json`, home()) });", 'configPath: "~/.config/herdr-app/filer-pro.json" });'],
   ["force: this.force, full: id }", "force: this.force, full: id, ...(this.demoFull ?? {}) }"],
   ["        this.startFullscreen(cx);\n", "        this.startFullscreen(cx);\n        if (props().demoSpread) cx.timer.after(3000, () => { this.setLayout(true, cx); cx.timer.after(1500, () => this.showPages(2, cx)); if (props().demoZoom) this.zoomBy(props().demoZoom, cx); });\n"],
+  ['const bar = transfersBar(shared("filer-pro.jobs"), t,', 'const bar = transfersBar(this.demoJobs ?? shared("filer-pro.jobs"), t,'],
   [".when(picked || current, el => el.bg(t.selected)).hover(s => s.bg(t.hover))", ".when(picked || current, el => el.bg(t.selected)).when(path === this.demoRow, el => el.bg(t.hover)).hover(s => s.bg(t.hover))"],
 ]);
 console.log("patched", dir);
