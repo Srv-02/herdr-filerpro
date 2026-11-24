@@ -24,6 +24,7 @@ import { readFileGuarded } from "./lib/readfile.js";
 import { icon, BASE } from "./lib/icons.js";
 import { withPanel, withoutLegacy, panelShown } from "./lib/panels.js";
 import { dropRequest, dropTarget, uploadRequest } from "./lib/droptarget.js";
+import { dragSpec, dropPlan, pressMemory } from "./lib/dragsource.js";
 import { createFileOps, successToast, deleteErrorToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
 import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
@@ -75,6 +76,8 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 // The settings before the config file was read (and in copies that never read it): today's defaults.
+// Rows as drag sources (#102); overridable per instance (this.drag) for tests. Remote-row drags depend on the Herdr host.
+export const DRAG = Object.freeze({ rows: true });
 const DEFAULTS = { ...numbers(null), node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, double_click_folders: true, multi_select: false, select_toggle_click: "cmd", select_range_click: "shift", show_sizes: true };
 const MB = 1024 * 1024;
 // How much of the open file a refresh flight reloads at its end (refresh opts.file, this.fileWanted): TEXT only reads and
@@ -2264,9 +2267,16 @@ export default class FilerPro extends View {
   }
 
   // Dropped Finder items: upload (remote tree) or local copy into the folder the drop landed on.
+  // A drop that equals the last remote drag is that drag, never local paths (#102); remote-looking paths are refused.
   drop(paths, rowPath, rowIsDir, tree = this.trees.follow) {
-    const r = dropRequest({ on: tree.on, root: tree.root, rowPath, rowIsDir, paths });
-    if (r) this.request(r);
+    const plan = dropPlan({ press: this.press, paths, dest: { on: tree.on, root: tree.root, rowPath, rowIsDir } });
+    if (plan.kind === "requests") { this.press = null; for (const r of plan.requests) this.request(r); return; }
+    const local = () => { const r = dropRequest({ on: tree.on, root: tree.root, rowPath, rowIsDir, paths }); if (r) this.request(r); };
+    if (plan.kind === "local") return local();
+    Promise.all(paths.map((p) => fs.exists(p))).then((ok) => {
+      if (ok.every(Boolean)) local();
+      else notify({ title: "Drop refused", body: "This drag came from a machine. Drag it again from its row.", level: "error" });
+    }).catch(() => notify({ title: "Drop refused", body: "Could not check the dropped paths.", level: "error" }));
   }
 
   anyLoading() { return this.shownTrees().some((t) => t.loading); }
@@ -2285,6 +2295,7 @@ export default class FilerPro extends View {
     const sizes = this.conf.show_sizes === true ? shared("filer-pro.sizes") ?? {} : null, font = sizes ? settings().font_family : null;
     const boxes = tree.selecting === true, none = !tree.selected?.size && !boxes;
     const pre = tree.id === "pinned" ? "local-" : ""; // element ids of the lower tree
+    const sel = tree.selected?.size > 1 ? this.selectedItems(tree) : null;
     return this.visible(tree).map(({ path, entry, depth }) => {
       if (entry.note) return h_flex().id(`${pre}file-${path}-note`).h(ROW_H).flex_none().pl(8 + (boxes ? 16 + 7 : 0) + depth * 18 + 19).pr(8).items_center().text_size(12).text_color(t.dim).child(div().flex_1().min_w(0).truncate().child(entry.name));
       const open = tree.folders.has(path), mark = tree.marks[joinPath(tree.root, path)];
@@ -2293,6 +2304,10 @@ export default class FilerPro extends View {
       // The last opened file is marked only while no selection competes with it. In checkbox mode the box leads the row and
       // a spacer (pulled back over the row gap) carries the depth, so the boxes line up in one column.
       const picked = tree.selected?.has(path) === true, current = path === tree.lastOpened && none;
+      // Dragging a selected row drags the whole selection of its tree; a remote press is remembered for the drop.
+      const items = picked && sel ? sel : [{ path: joinPath(tree.root, path), isDir: entry.dir === true }];
+      const spec = dragSpec({ on: tree.on, paths: items.map((i) => i.path) });
+      const drag = this.drag ?? DRAG;
       return h_flex().id(`${pre}file-${path}`).h(ROW_H).flex_none().pl(boxes ? 8 : 8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(picked || current, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .when(boxes, el => el.role("check_box").accessibility_label(`${entry.name}, ${picked ? "checked" : "not checked"}`))
@@ -2309,6 +2324,8 @@ export default class FilerPro extends View {
           openOverlay({ mod: "filer-pro", props: { view: "menu", tree: tree.id, machine: tree.on, root: tree.root, path: joinPath(tree.root, path), isDir: entry.dir, bundle, contents, selecting: tree.selecting === true, folder: dropTarget(tree.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems({ ...menuState, upload: canUpload() })) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir, tree))
+        .when(Boolean(spec) && drag.rows !== false, el => el.drag_paths(spec.paths, { on: spec.on })
+          .on_mouse_down("left", () => { this.press = pressMemory(tree.on, spec.paths, items.map((i) => i.isDir), Date.now()); }))
         .when(boxes, el => el.child(checkBox(t, picked)).when(depth > 0, e => e.child(div().w(depth * 18).flex_none().ml(-7))))
         .child(this.chevron(path, dir, open, t, tree))
         .child(image(bundle && !dir ? bundleIcon(entry.name, dark) : icon(path, entry.dir, open, dark)).size(16).flex_none())

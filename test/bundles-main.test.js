@@ -192,6 +192,7 @@ test("the row menu of a package gets bundle props, its parent as paste target, a
 
 test("a drop onto a closed package lands in its folder, onto shown package contents inside it", async () => {
   const { log } = host();
+  globalThis.__impl.exists = async () => true; // dropped Finder files exist here (#102 checks before a drop)
   const cx = fakeCx();
   const self = await loaded(cx);
   handler(byId(self.render(cx), "file-Example.app"), "on_drop")({ paths: ["/Users/example/x.txt"] }, cx);
