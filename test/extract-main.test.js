@@ -139,7 +139,7 @@ test("row menu: the popup height matches the drawn entries, also for an archive 
     handler(byId(self.render(cx), "file-pics.tar.gz"), "on_mouse_down", "right")({}, cx);
     const opened = log.overlays.at(-1);
     globalThis.__impl.props = () => ({ ...opened.props, overlay: "menu1" });
-    const drawn = rowMenuItems({ paste: { enabled: false }, isDir: false, name: "pics.tar.gz", remote: Boolean(machine), windows: platform === "windows" });
+    const drawn = rowMenuItems({ paste: { enabled: false }, isDir: false, name: "pics.tar.gz", remote: Boolean(machine), windows: platform === "windows", uploadFolder: Boolean(machine) });
     const extract = drawn.some((i) => i.action === "extract_here");
     assert.equal(extract, !(platform === "windows" && !machine), `${platform} ${machine}: Extract shown`);
     assert.equal(Boolean(byId(Object.create(FilerPro.prototype).overlayView(cx), "filer-pro-menu-extract-here")), extract, `${platform} ${machine}: popup`);
