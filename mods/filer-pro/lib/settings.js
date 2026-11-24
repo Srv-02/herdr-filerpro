@@ -62,6 +62,7 @@ export const SETTINGS = Object.freeze([
   bool("svg_check", true, "Check SVG images before showing them", "Recommended. Blocks SVG files that try to load content from the internet.", "Security"),
   // First row of Advanced, Transfers & connections (approved design, #60); the numbers of that group follow it.
   bool("warn_cross_copy", true, "Warn before copying between machines", "Asks once per paste when the data has to travel through this computer.", "Transfers & connections"),
+  bool("warn_cross_move", true, "Warn before cutting between machines", "Asks before a cut file is moved to or from another machine; the original is deleted after the copy is verified.", "Transfers & connections"),
   ...NUMBERS,
   Object.freeze({ key: "node_path", kind: "path", default: "", label: "Node.js for diagrams", help: "Leave empty to find Node.js automatically. Otherwise the full path, for example /opt/homebrew/bin/node.", section: "Preview limits" }),
 ]);

@@ -25,7 +25,7 @@ test("preview, mermaid, perf with defaults and type checks", async () => {
   assert.deepEqual(await loadConfig(reader(null), appHome, home), {
     download_folder: "/home/u/Downloads", preview: true, mermaid: true, perf: false, update_check: true,
     terminal_editor: "vi", terminal_editors: [], gui_editor: "VS Code", gui_editors: [],
-    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, double_click_folders: true, multi_select: false, select_toggle_click: "cmd", select_range_click: "shift", extract_space_check: true, ...numbers(null), warn_cross_copy: true, show_sizes: true, local_tree_folder: "",
+    node_path: "", svg_check: true, hide_system_files: true, hide_dotfiles: false, double_click_files: false, double_click_apps: true, double_click_folders: true, multi_select: false, select_toggle_click: "cmd", select_range_click: "shift", extract_space_check: true, ...numbers(null), warn_cross_copy: true, warn_cross_move: true, show_sizes: true, local_tree_folder: "",
   });
   const c = await loadConfig(reader('{"preview":false,"mermaid":"no","perf":true}'), appHome, home);
   assert.deepEqual([c.preview, c.mermaid, c.perf], [false, true, true]);
@@ -186,4 +186,10 @@ test("loadConfig: local_tree_folder defaults to empty and expands ~", async () =
   assert.equal((await loadConfig(reader("{}"), appHome, home)).local_tree_folder, "");
   assert.equal((await loadConfig(reader('{"local_tree_folder":"~/Inbox"}'), appHome, home)).local_tree_folder, "/home/u/Inbox");
   assert.equal((await loadConfig(reader('{"local_tree_folder":7}'), appHome, home)).local_tree_folder, "");
+});
+
+test("warn_cross_move: default on, a boolean in the file wins, other types fall back", async () => {
+  assert.equal((await loadConfig(reader('{"warn_cross_move":false}'), appHome, home)).warn_cross_move, false);
+  assert.equal((await loadConfig(reader('{"warn_cross_move":"no"}'), appHome, home)).warn_cross_move, true);
+  assert.equal((await loadConfig(reader('{}'), appHome, home)).warn_cross_move, true);
 });
