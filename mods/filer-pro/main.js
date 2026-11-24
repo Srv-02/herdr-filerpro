@@ -37,7 +37,7 @@ import { bindZoomKeys } from "./lib/pdfkeys.js";
 import { hideArgs, hiddenPath } from "./lib/hidden.js";
 import { createReloadGate, watchPlan, watchRel, permsCover } from "./lib/reload.js";
 import { baseName, joinPath, parentOf, relativePath, shellPath, stemEnd } from "./lib/names.js";
-import { paneId, shownRoot, setRoot, upOf, topOf, carry, headerPath, frontTruncate, watchable } from "./lib/navigate.js";
+import { paneId, shownRoot, setRoot, upOf, topOf, carry, headerPath, frontTruncate, pathChars, watchable } from "./lib/navigate.js";
 import { EDIT_MAX_BYTES, PROBE_SCRIPT, VERIFY_SCRIPT, parseProbe, parseVerify, verifiedEditable, probeFileGuarded, saveFile, saveCopy, bufferBytes, statusText, copyName, createHistory, mirrorName, scpSender } from "./lib/textedit.js";
 import { equalBytes, bytesToBase64, base64ToBytes } from "./lib/textcodec.js";
 import { writeClipboard } from "./lib/pasteboard.js";
@@ -2162,7 +2162,7 @@ export default class FilerPro extends View {
           const next = Math.floor(size.width / 8) * 8;
           if (next !== (this.lineWidths ??= {})[tree.id]) { this.lineWidths[tree.id] = next; cx.notify(); }
         })
-        .when(Boolean(where), el => el.tooltip(tree.root).child(div().min_w(0).truncate().child("· " + frontTruncate(where, Math.max(8, Math.floor((w - 8) / 7)))))))
+        .when(Boolean(where), el => el.tooltip(tree.root).child(div().min_w(0).truncate().child("· " + frontTruncate(where, pathChars(w, LINE.text))))))
       .children(this.navButtons(t, tree))
       .child(div().w(1).h(12).mx(3).flex_none().bg(t.border))
       .child(this.navButton(`${pre}files-actions`, "ellipsis", "Folder actions", t, (cx) => { if (tree.root) { this.dropOtherSelection(tree); openOverlay(this.folderMenu(tree)); cx.notify(); } }))
