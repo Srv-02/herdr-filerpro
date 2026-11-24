@@ -1531,6 +1531,26 @@ test("paste cut: warn_cross_copy false still asks Move, Don't show again changes
   assert.deepEqual(d.saves, []);
   assert.equal(mvStarts(d).length, 1);
 });
+test("paste cut cross: warn_cross_move false skips the Move dialog, remote source and local source", async () => {
+  for (const [clip, over] of [[movedClip(), { machine: "other", folder: "/in" }], [movedClip({ machine: null, items: [{ path: "/Users/m/a", isDir: false }], root: "/Users/m" }), { machine: "box", folder: "/srv/in" }]]) {
+    const d = deps({ store: clip, config: { warn_cross_move: false }, answers: [] });
+    const r = await handleRequest(mvPaste(over), d);
+    assert.equal(r.ok, true);
+    assert.equal(d.asked.length, 0);
+    assert.equal(mvStarts(d).length, 1);
+    assert.equal(mvStarts(d)[0].move.root, clip["filer-pro.clipboard"].root);
+    assert.equal(d.fileOpsCalls.filter((c) => c[0] === "check").length, 1);
+  }
+});
+test("paste cut cross: warn_cross_move false keeps the guards (a refused source starts nothing)", async () => {
+  const d = deps({ store: movedClip(), config: { warn_cross_move: false }, fileOpsError: "Refusing to delete the shown folder", answers: [] });
+  const r = await handleRequest(mvPaste({ machine: "other", folder: "/in" }), d);
+  assert.equal(r.ok, false);
+  assert.deepEqual(mvStarts(d), []);
+  const t = deps({ store: movedClip(), config: { warn_cross_move: true }, answers: [{ choice: "move" }] });
+  await handleRequest(mvPaste({ machine: "other", folder: "/in" }), t);
+  assert.equal(t.asked.length, 1);
+});
 test("paste cut: a second item with a failing check is reported, the first one moves", async () => {
   const d = deps({ store: movedClip({ items: [{ path: "/srv/a", isDir: false }, { path: "/srv/b", isDir: false }] }), answers: [{ choice: "move" }] });
   const orig = d.fileOps.check;

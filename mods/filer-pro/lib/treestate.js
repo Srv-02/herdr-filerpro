@@ -8,6 +8,9 @@ export const TREE_FIELDS = Object.freeze(["context", "root", "on", "entries", "r
 export const LOCAL_TREE_KEY = "filer-pro.localtree";
 export const MIN_TREE_PX = 120;
 export const DEFAULT_SPLIT = 0.6;
+// The location line above each tree of the split (#101): one set of sizes for both lines (height, side padding, gap, text,
+// glyph and hit area of its small buttons).
+export const LINE = Object.freeze({ height: 26, padX: 14, gap: 6, text: 12, icon: 12, hit: 20 });
 
 export function createTree(id) {
   return {

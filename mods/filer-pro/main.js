@@ -17,7 +17,7 @@ import { platform } from "./lib/platform.js";
 import { openRegularFile, openChecked, openBundle } from "./lib/open.js";
 import { markBundles, treeDir, sortsAsFolder, bundleIcon } from "./lib/bundles.js";
 import { fileClick, folderClick, rowClick } from "./lib/clicks.js";
-import { TREE_FIELDS, LOCAL_TREE_KEY, MIN_TREE_PX, DEFAULT_SPLIT, createTree, pinnedContext, readLocalTree, writeLocalTree, startFolder } from "./lib/treestate.js";
+import { LINE, TREE_FIELDS, LOCAL_TREE_KEY, MIN_TREE_PX, DEFAULT_SPLIT, createTree, pinnedContext, readLocalTree, writeLocalTree, startFolder } from "./lib/treestate.js";
 import { applyClick, clearSelection, collapse, prune } from "./lib/selection.js";
 import { isBinaryName, nulReason, BINARY_MESSAGE } from "./lib/binary.js";
 import { readFileGuarded } from "./lib/readfile.js";
@@ -2122,9 +2122,9 @@ export default class FilerPro extends View {
   // An icon button of the navigation (Up, Go to /) in the refresh button's style; without onClick dimmed. small: a 12px
   // glyph in a 20px hit area, for the location lines.
   navButton(id, glyph, label, t, onClick, small = false) {
-    return div().id(id).w(small ? 20 : 24).h(small ? 20 : 24).flex_none().flex().items_center().justify_center().rounded(6).tooltip(label).accessibility_label(label)
+    return div().id(id).w(small ? LINE.hit : 24).h(small ? LINE.hit : 24).flex_none().flex().items_center().justify_center().rounded(6).tooltip(label).accessibility_label(label)
       .when(Boolean(onClick), el => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)))
-      .child(svg(`${BASE}/${glyph}.svg`).size(small ? 12 : 14).text_color(onClick ? t.muted : t.dim));
+      .child(svg(`${BASE}/${glyph}.svg`).size(small ? LINE.icon : 14).text_color(onClick ? t.muted : t.dim));
   }
 
   // The line above a tree: where it is (a machine, or This Mac), its folder and the tree's own controls. Only drawn while
@@ -2133,8 +2133,8 @@ export default class FilerPro extends View {
     const pinned = tree.id === "pinned", pre = pinned ? "local-" : "";
     const name = tree.on ?? "This Mac", where = tree.root ? (tree.on ? tree.root : headerPath(tree.root, home())) : "";
     const w = (this.lineWidths ??= {})[tree.id] ?? 200;
-    return h_flex().id(`${pre}files-line`).h(26).flex_none().px(14).gap(6).items_center().text_size(12).border_b(1).border_color(t.border)
-      .child(svg(`${BASE}/${tree.on ? "server" : "laptop"}.svg`).size(12).flex_none().text_color(t.muted))
+    return h_flex().id(`${pre}files-line`).h(LINE.height).flex_none().px(LINE.padX).gap(LINE.gap).items_center().text_size(LINE.text).border_b(1).border_color(t.border)
+      .child(svg(`${BASE}/${tree.on ? "server" : "laptop"}.svg`).size(LINE.icon).flex_none().text_color(t.muted))
       .child(div().flex_none().font_medium().text_color(t.foreground).child(name))
       .child(h_flex().id(`${pre}files-line-path`).flex_1().min_w(0).overflow_hidden().text_color(t.dim)
         .on_size_change((size, cx) => {
@@ -2143,7 +2143,16 @@ export default class FilerPro extends View {
         })
         .when(Boolean(where), el => el.tooltip(tree.root).child(div().min_w(0).truncate().child("· " + frontTruncate(where, Math.max(8, Math.floor((w - 8) / 7)))))))
       .children(this.navButtons(t, tree, true))
-      .child(this.refreshButton(t, [tree], true));
+      .child(this.refreshButton(t, [tree], true))
+      .when(pinned, el => el.child(this.localClose(t)));
+  }
+
+  // The × at the right end of the lower tree's line: hides the lower tree, the same state change as the header toggle.
+  localClose(t) {
+    return div().id("local-files-close").w(LINE.hit).h(LINE.hit).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).tooltip("Hide This Mac").accessibility_label("Hide This Mac")
+      .on_click((_e, cx) => { const state = this.localTree(); setShared(LOCAL_TREE_KEY, writeLocalTree(state, { shown: false })); cx.notify(); })
+      .child(svg(`${BASE}/x.svg`).size(LINE.icon).text_color(t.muted));
   }
 
   // A header button in the style of the preview's Source/Preview button; `child` is a text or an element.
@@ -2157,7 +2166,7 @@ export default class FilerPro extends View {
   // tree is hidden, else one in each location line (small), each for its own tree.
   refreshButton(t, trees = [this.trees.follow], small = false) {
     const id = trees.length === 1 && trees[0].id === "pinned" ? "local-files-refresh" : "files-refresh";
-    return div().id(id).w(small ? 20 : 24).h(small ? 20 : 24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+    return div().id(id).w(small ? LINE.hit : 24).h(small ? LINE.hit : 24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover)).tooltip("Refresh").accessibility_label("Refresh")
       .on_click((_e, cx) => {
         // Calculated folder sizes are a snapshot (lib/sizes.js): Refresh drops those of the shown folder and below.
@@ -2167,7 +2176,7 @@ export default class FilerPro extends View {
         }
         this.reloadConfig(cx, { file: FILE_NAMED, force: true }, trees);
       })
-      .child(svg(`${BASE}/refresh-cw.svg`).size(small ? 12 : 14).text_color(t.muted));
+      .child(svg(`${BASE}/refresh-cw.svg`).size(small ? LINE.icon : 14).text_color(t.muted));
   }
 
   // The file actions of the selection bar (#99): icon buttons that run the same requests as the menu for several rows.

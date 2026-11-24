@@ -233,7 +233,7 @@ export function resultText({ ok, job, jobs, path, removed, trashed, trash_path, 
 // move: { root, clipAt } (#100): a Cut across sides. Copy first, then each job verifies and deletes its original. Every item gets
 // the delete guard before the question, the Move question replaces the warning, a marker probe refuses the original's own folder
 // after it, and the conflict dialog has no Merge.
-export async function runTransfers({ direction, machine, from, paths, destDir, conflict, links, reveal, warn, move }, deps) {
+export async function runTransfers({ direction, machine, from, paths, destDir, conflict, links, reveal, warn, move, confirmMove }, deps) {
   const { jobs } = deps;
   const srcSide = direction === "down" || direction === "remote" ? machine ?? null : direction === "cross" ? from ?? null : null;
   const destSide = direction === "up" || direction === "remote" || direction === "cross" ? machine ?? null : null;
@@ -269,7 +269,8 @@ export async function runTransfers({ direction, machine, from, paths, destDir, c
     });
   }
   const started = [];
-  if (items.length > 0 && move) {
+  // warn_cross_move off (confirmMove === false): no dialog at all, also not for the permanent remote delete; every guard still runs.
+  if (items.length > 0 && move && confirmMove !== false) {
     let size = 0;
     for (const item of items) {
       const n = jobs.sourceSize ? await jobs.sourceSize({ direction, machine, ...(from ? { from } : {}), src: item.path }) : null;
@@ -655,9 +656,10 @@ export async function handleRequest(req, deps) {
             return (plan.srcs.length === 1 ? runMove : runMoves)({ on: plan.from, plan: here, clip, root: clip.root, conflict: req.conflict, reveal: req.reveal }, deps);
           }
         }
+        const confirmMove = (await deps.loadConfig())?.warn_cross_move !== false;
         return runTransfers({
           direction: plan.direction, machine: plan.machine, ...(plan.from ? { from: plan.from } : {}), paths: plan.srcs, destDir: plan.destDir,
-          conflict: req.conflict, links: req.links, reveal: req.reveal, move: { root: plan.root, clipAt: clip.at },
+          conflict: req.conflict, links: req.links, reveal: req.reveal, move: { root: plan.root, clipAt: clip.at }, confirmMove,
         }, deps);
       }
       // A copy between two machines runs through this computer: one warning per paste unless the setting is off.

@@ -131,7 +131,7 @@ The button left of the gear in the header (**Show This Mac**) opens a second tre
 - **Start folder:** it opens in the folder you set as **Start folder for This Mac** in Settings (Downloads). Empty means the download folder. If you change the setting later, the lower tree goes back to the new start folder, also after you navigated it. Up, Go to `/`, **Show as Root** and a double click on a folder move it, and it keeps that folder after a restart.
 - **Same rules:** both trees have the same rows, menus, sizes, git marks and selection. A selection is in one tree at a time: a click in the other tree clears it, and a selection that returns with a terminal switch gives way to the lower tree's, and one selection bar sits under both trees.
 - **Between the trees:** **Copy** (or **Cut**) in one tree and **Paste** in a folder of the other moves files between this computer and a machine without the Finder, or between two folders on this computer.
-- **Location lines:** each tree has a line with its place (a server icon and the machine name, or a laptop icon and **This Mac**), its folder and its own Go to `/`, Up and Refresh. **Back to the terminal's folder** is only in the upper line.
+- **Location lines:** each tree has a line with its place (a server icon and the machine name, or a laptop icon and **This Mac**), its folder and its own Go to `/`, Up and Refresh. **Back to the terminal's folder** is only in the upper line. Both lines have the same height, text size and icon size. The lower line ends in a **×** (tooltip **Hide This Mac**) that hides the lower tree, like the header button.
 - **The divider:** drag it to resize. Each tree stays at least 120 px high. The sizes, the shown state and the folder are remembered.
 - **Open files:** a file opens in the viewer as before and hides both trees. `←` brings both back at their scroll positions. A file you opened from the lower tree stays open when the terminal moves to another folder or machine.
 
@@ -342,6 +342,7 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 ### Move between machines
 
 - Cut on this computer or on a machine, Paste on the other side (or on a third machine): Filer Pro copies first, checks the copy, and only then deletes the original.
+- **Warn before cutting between machines** in Settings (default on) turns this dialog off. Then a cut between machines starts at once, also when the original is deleted for good; the copy is still checked before the delete, and all refusals stay.
 - A dialog asks before each paste: **Move from `host-a` to this computer?** An original on a machine is deleted for good (no Trash), the dialog says so in red and the **Move** button is red. A local original goes to the Trash on this computer. **Cancel** starts nothing.
 - The check compares files, folders, bytes and the newest change of the original before and after the copy. Up to 1 GB it also compares a SHA-256 of the content, which needs `sha256sum`, `shasum` or `sha256` on both sides. Larger items count files, folders and bytes only.
 - Every other ending keeps the original and says why in a `Copied, source kept` toast: the copy failed, was cancelled or stalled, the check failed or timed out, the original changed during the copy, a delete guard refused, or Herdr was restarted. The Cut stays, so the item can be pasted again. Only a moved item leaves the Cut.
@@ -453,6 +454,7 @@ All settings live in `~/.config/herdr-app/filer-pro.json`:
 | `stall_seconds` | Advanced, Transfers & connections: Stop a stuck transfer after | `120` | 10–3,600 s | A transfer whose temp file does not grow this long is stopped as stalled |
 | `keep_done_seconds` | Advanced, Transfers & connections: Keep finished transfers visible for | `10` | 0–3,600 s | How long finished transfers stay in the transfers bar |
 | `warn_cross_copy` | Advanced, Transfers & connections: Warn before copying between machines | `true` | `true` / `false` | Ask once per paste before the data of a copy between two machines travels through this computer; **Don't show again** in the warning sets it to `false` |
+| `warn_cross_move` | Advanced, Transfers & connections: Warn before cutting between machines | `true` | `true` / `false` | Ask before a cut file is moved to or from another machine; `false` skips the Move dialog in every case, also for the permanent delete on a machine (the copy is still verified before the original goes) |
 | `perf` | config file only | `false` | `true` / `false` | Render timings in `perf.jsonl` (takes effect after a restart) |
 
 - The SSH settings apply to transfers (download, upload, copy on a machine, copy between machines, Load) and to the preview's copy of images and PDFs from a machine (that copy also stops after 30 s).

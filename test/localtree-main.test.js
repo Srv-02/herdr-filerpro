@@ -466,3 +466,44 @@ test("#101 a changed local_tree_folder resets the lower tree's root, also after 
   await show(self, cx);
   assert.equal(self.trees.pinned.root, "/Users/example", "navigating again sticks");
 });
+
+const argsOf = (el, name) => el.calls.filter(([k]) => k === name).map(([, ...a]) => a);
+const sizesOf = (line) => ({
+  own: ["h", "px", "gap", "text_size"].map((k) => argsOf(line, k)[0]),
+  icons: [...walk(line)].filter((e) => e.kind === "svg").map((e) => argsOf(e, "size")[0]),
+  buttons: [...walk(line)].filter((e) => e.kind === "div" && /^(local-)?files-(top|up|refresh|back-terminal)$/.test(idOf(e) ?? "")).map((e) => [argsOf(e, "w")[0], argsOf(e, "h")[0]]),
+});
+
+test("#101 both location lines are built with the same size parameters (height, padding, gap, text, glyphs, buttons)", async () => {
+  for (const machine of ["box", null]) {
+    host({ machine, store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+    const cx = fakeCx(), self = panel();
+    self.refresh(cx);
+    const tree = await show(self, cx);
+    const up = sizesOf(byId(tree, "files-line")), low = sizesOf(byId(tree, "local-files-line"));
+    assert.deepEqual(up.own, [[26], [14], [6], [12]]);
+    assert.deepEqual(up.own, low.own);
+    assert.deepEqual(up.icons, low.icons.slice(0, up.icons.length));
+    assert.ok(up.buttons.length >= 3 && up.buttons.every(([w, h]) => w[0] === 20 && h[0] === 20));
+    assert.deepEqual(low.buttons.map(([w]) => w), low.buttons.map(() => [20]));
+  }
+});
+
+test("#101 the lower line ends in a x that hides the lower tree like the header toggle", async () => {
+  const { store } = host({ store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  const tree = await show(self, cx);
+  const low = byId(tree, "local-files-line");
+  assert.equal(idsIn(low).at(-1), "local-files-close");
+  assert.ok(!idsIn(byId(tree, "files-line")).includes("local-files-close"));
+  const close = byId(tree, "local-files-close");
+  assert.ok(iconOf(close)[0].endsWith("/x.svg"));
+  assert.deepEqual(argsOf(close, "tooltip")[0], ["Hide This Mac"]);
+  handler(close, "on_click")({}, cx);
+  assert.equal(store[KEY].shown, false);
+  assert.equal(byId(self.render(cx), "files-line"), undefined);
+  assert.equal(argsOf(byId(self.render(cx), "files-local-toggle"), "tooltip")[0][0], "Show This Mac");
+  handler(byId(self.render(cx), "files-local-toggle"), "on_click")({}, cx);
+  assert.equal(store[KEY].shown, true);
+});
