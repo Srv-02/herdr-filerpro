@@ -1,7 +1,7 @@
 // Folder navigation (issue #59): the per-terminal override of the shown root and the state it carries along.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { paneId, shownRoot, setRoot, upOf, topOf, carry, headerPath, frontTruncate, watchable } from "../mods/filer-pro/lib/navigate.js";
+import { paneId, shownRoot, setRoot, upOf, topOf, carry, headerPath, frontTruncate, pathChars, watchable } from "../mods/filer-pro/lib/navigate.js";
 
 const at = (cwd, on = null, space = "s1") => ({ cwd, on, space });
 
@@ -126,6 +126,15 @@ test("frontTruncate cuts at the front, at a folder boundary when it can", () => 
   assert.equal(frontTruncate("~/averyveryverylongname", 8), "…ongname");
   assert.equal(frontTruncate("~/abc", 1), "…");
   assert.equal(frontTruncate("", 5), "");
+});
+
+test("pathChars leaves room for the prefix and the ellipsis and has no floor above one character", () => {
+  assert.equal(pathChars(200, 12), 22);
+  assert.equal(pathChars(80, 12), 7);
+  assert.equal(pathChars(24, 12), 1);
+  assert.equal(pathChars(0, 12), 1);
+  // Worst realistic case at 12 px: "· " + "…" + digits (7.3 px each) fits the box, so only the front is cut.
+  for (const w of [24, 48, 80, 136, 200, 336]) assert.ok(6.94 + 9.66 + (pathChars(w, 12) - 1) * 7.3 <= w, `width ${w}`);
 });
 
 test("topOf: / or the drive root", () => {

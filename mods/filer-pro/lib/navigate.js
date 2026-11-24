@@ -101,3 +101,10 @@ export function frontTruncate(text, max) {
   const tail = text.slice(text.length - (max - 1)), slash = tail.indexOf("/");
   return `…${slash > 0 && slash < tail.length - 1 ? tail.slice(slash) : tail}`;
 }
+
+// How many characters of a path fit in a box `width` px wide at a `textPx` font, for frontTruncate (#114). Conservative,
+// so the box never has to cut the end too: 2/3 of the text size per character (8 px at 12 px; lowercase averages 6.4,
+// digits 7.3, capitals 8.1) and 1.5 text sizes reserved for the "· " prefix (6.9 px) and the … (9.7 px).
+export function pathChars(width, textPx) {
+  return Math.max(1, Math.floor((width - textPx * 1.5) / (textPx * 2 / 3)));
+}
