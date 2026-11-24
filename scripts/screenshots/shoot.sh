@@ -135,7 +135,12 @@ if [ "$M" = 1 ] && [ -z "${DEMO_MACHINE:-}" ]; then echo "machine, folder-action
 if [ "$M" = 1 ] && [ -n "${DEMO_MACHINE:-}" ]; then
 # machine.png: a terminal on devbox, its tree above and This Mac below (~/acme-app), the row menu with Download to This Mac
 inst machine
-out="$(herdr-app do space.new '{"name":"acme-app","machine":"devbox","folder":"/tmp/acme-app","tab":"acme-app","argv":["env","PS1=acme-app $ ","/bin/bash","--norc","--noprofile"]}' 2>&1)" || { echo "space on devbox failed: $out" >&2; exit 1; }
+# A machine that just connected may not have its layout yet: try for about 30 s.
+for try in $(seq 1 10); do
+  out="$(herdr-app do space.new '{"name":"acme-app","machine":"devbox","folder":"/tmp/acme-app","tab":"acme-app","argv":["env","PS1=acme-app $ ","/bin/bash","--norc","--noprofile"]}' 2>&1)" && break
+  [ "$try" = 10 ] && { echo "space on devbox failed: $out" >&2; exit 1; }
+  sleep 3
+done
 sleep 6
 herdr-app do layout.show '{"id":"panel"}' > /dev/null # a new space starts without the panel
 sleep 8
@@ -146,15 +151,12 @@ shot machine-tree
 cmd '"op":"menu","path":"docs/report.pdf",'"$(at 1000 118)"',"hover":"filer-pro-menu-download-here"' 1; shot machine-menu; closeall
 # folder-actions.png: the Folder actions of the devbox tree, Upload Folder… hovered
 cmd '"op":"rootmenu",'"$(at 1000 118)"',"hover":"filer-pro-menu-upload-folder"' 1; shot folder-menu; closeall
-# hero (preview.png): two files of devbox selected, the menu for both with Download to This Mac
-# docs again, after the listing settled: expanded while the machine still lists, its rows can stay without icons
+# hero (preview.png): three files of devbox ticked in the checkbox mode, the menu for all with Download to This Mac
 settled
 cmd '"op":"collapse","paths":["docs"]' 2
-cmd '"op":"expand","paths":["docs"]' 3
-settled
-cmd '"op":"select","paths":["docs/report.pdf","docs/setup.md","README.md"],"boxes":true' 2
+cmd '"op":"select","paths":["README.md","index.html","package.json"],"boxes":true' 2
 settled; shot hero-tree
-cmd '"op":"menu","path":"docs/report.pdf",'"$(at 1000 118)"',"hover":"filer-pro-menu-download-here"' 1; shot hero-menu; closeall
+cmd '"op":"menu","path":"README.md",'"$(at 1000 118)"',"hover":"filer-pro-menu-download-here"' 1; shot hero-menu; closeall
 cmd '"op":"select","paths":[]' 1
 # transfers.png: a download from devbox in the transfers bar (shown only, nothing runs) and the conflict dialog
 cmd '"op":"jobs","jobs":{"demo1":{"id":"demo1","name":"site-backup.tar","direction":"down","machine":"devbox","state":"running","bytes":3400000000,"total":13000000000,"rate":598000000,"percent":26,"startedAt":1}}' 2
