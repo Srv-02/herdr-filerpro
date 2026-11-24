@@ -5,7 +5,7 @@
 // Commands (one JSON object, a new "id" each time): { id, op: "expand", paths: ["docs"] } | { op: "size", path } |
 // { op: "row", path } (hover look of a tree row) | { op: "menu", path, x, y, hover: "<menu entry id>" } |
 // { op: "select", paths, boxes } | { op: "rootmenu", x, y, hover } (Folder actions) | { op: "localtree", shown, root, sizes } |
-// { op: "jobs", jobs: { id: job } } (the transfers bar shows them, nothing runs) | { op: "conflict", item, choices } |
+// { op: "probe" } (writes demo-probe.json: loading, unsized) | { op: "jobs", jobs: { id: job } } (the transfers bar shows them, nothing runs) | { op: "conflict", item, choices } |
 // { op: "settings", from: 0 | 9 } | { op: "full", zoom } | { op: "close" } | { op: "back" }
 // expand, collapse, size, select, menu and rootmenu take "tree": "pinned" for the lower tree (This Mac).
 import fs from "node:fs";
@@ -61,6 +61,11 @@ const hook = `
       this.setSelection({ selected: new Set(paths), anchor: paths.at(-1) ?? null }, tree);
       tree.selecting = c.boxes === true;
       cx.notify();
+    }
+    else if (c.op === "probe") {
+      // For the shell to wait on: whether a shown tree is still listing, and whether a row lacks its size (sizes come with the listing).
+      const rows = this.shownTrees().flatMap((tree) => this.visible(tree).filter((r) => !r.entry.note && !r.entry.dir));
+      await fs.writeFile(\`\${appHome()}/demo-probe.json\`, JSON.stringify({ id: c.id, loading: this.anyLoading(), unsized: rows.filter((r) => !Number.isFinite(r.entry.size)).length }));
     }
     else if (c.op === "jobs") { this.demoJobs = c.jobs ?? null; cx.notify(); } // shown in the transfers bar only, never run
     else if (c.op === "conflict") {

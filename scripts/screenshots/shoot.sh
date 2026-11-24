@@ -34,6 +34,14 @@ openfile() {
   sleep "${2:-3}"
 }
 shot() { herdr-app shot "$RAW/$1.png" > /dev/null; }
+# Waits until no shown tree is listing and every file row has its size (at most 40 s), then a little more for the icons.
+settled() {
+  for _ in $(seq 1 40); do
+    cmd '"op":"probe"' 1
+    grep -q '"loading":false,"unsized":0}' "$HERDR_APP_HOME/demo-probe.json" 2>/dev/null && break
+  done
+  sleep 3
+}
 # A popup's place in window points of the default window; Z=2 when the window is 2560 x 1640 points at app zoom 2 (see below).
 Z=1
 at() { printf '"x":%s,"y":%s' $(($1 * Z)) $(($2 * Z)); }
@@ -139,8 +147,13 @@ cmd '"op":"menu","path":"docs/report.pdf",'"$(at 1000 118)"',"hover":"filer-pro-
 # folder-actions.png: the Folder actions of the devbox tree, Upload Folder… hovered
 cmd '"op":"rootmenu",'"$(at 1000 118)"',"hover":"filer-pro-menu-upload-folder"' 1; shot folder-menu; closeall
 # hero (preview.png): two files of devbox selected, the menu for both with Download to This Mac
-cmd '"op":"expand","paths":["docs"]' 3 # again: the first expand is lost when the machine lists slowly
-cmd '"op":"select","paths":["docs/report.pdf","docs/setup.md"]' 2; shot hero-tree
+# docs again, after the listing settled: expanded while the machine still lists, its rows can stay without icons
+settled
+cmd '"op":"collapse","paths":["docs"]' 2
+cmd '"op":"expand","paths":["docs"]' 3
+settled
+cmd '"op":"select","paths":["docs/report.pdf","docs/setup.md","README.md"],"boxes":true' 2
+settled; shot hero-tree
 cmd '"op":"menu","path":"docs/report.pdf",'"$(at 1000 118)"',"hover":"filer-pro-menu-download-here"' 1; shot hero-menu; closeall
 cmd '"op":"select","paths":[]' 1
 # transfers.png: a download from devbox in the transfers bar (shown only, nothing runs) and the conflict dialog
