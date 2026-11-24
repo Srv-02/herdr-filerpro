@@ -5,6 +5,7 @@
 // Commands (one JSON object, a new "id" each time): { id, op: "expand", paths: ["docs"] } | { op: "size", path } |
 // { op: "row", path } (hover look of a tree row) | { op: "menu", path, x, y, hover: "<menu entry id>" } |
 // { op: "select", paths, boxes } | { op: "rootmenu", x, y, hover } (Folder actions) | { op: "localtree", shown, root, sizes } |
+// { op: "jobs", jobs: { id: job } } (the transfers bar shows them, nothing runs) | { op: "conflict", item, choices } |
 // { op: "settings", from: 0 | 9 } | { op: "full", zoom } | { op: "close" } | { op: "back" }
 // expand, collapse, size, select, menu and rootmenu take "tree": "pinned" for the lower tree (This Mac).
 import fs from "node:fs";
@@ -61,6 +62,13 @@ const hook = `
       tree.selecting = c.boxes === true;
       cx.notify();
     }
+    else if (c.op === "jobs") { this.demoJobs = c.jobs ?? null; cx.notify(); } // shown in the transfers bar only, never run
+    else if (c.op === "conflict") {
+      // The question dialog as ask() opens it, with a made-up case; no batch waits for the answer.
+      setShared("filer-pro.answer", null);
+      setShared("filer-pro.pending", { batch: "demo#0", item: c.item, choices: c.choices ?? ["replace", "keep_both", "cancel"], remaining: 1 });
+      openOverlay({ mod: "filer-pro", props: { view: "conflict" }, kind: "dialog", modal: true, width: 440, height: 240 });
+    }
     else if (c.op === "back") { this.show(null, cx); cx.notify(); }
     else if (c.op === "close") { if (DEMO_LAST) { try { closeOverlay(DEMO_LAST); } catch {} } DEMO_LAST = null; }
     else if (c.op === "settings") { this.demoSettings = { demoFrom: c.from ?? 0 }; await this.openSettings(); }
@@ -91,6 +99,7 @@ patch("main.js", [
   ["configPath: tilde(`${appHome()}/filer-pro.json`, home()) });", 'configPath: "~/.config/herdr-app/filer-pro.json" });'],
   ["force: this.force, full: id }", "force: this.force, full: id, ...(this.demoFull ?? {}) }"],
   ["        this.startFullscreen(cx);\n", "        this.startFullscreen(cx);\n        if (props().demoSpread) cx.timer.after(3000, () => { this.setLayout(true, cx); cx.timer.after(1500, () => this.showPages(2, cx)); if (props().demoZoom) this.zoomBy(props().demoZoom, cx); });\n"],
+  ['const bar = transfersBar(shared("filer-pro.jobs"), t,', 'const bar = transfersBar(this.demoJobs ?? shared("filer-pro.jobs"), t,'],
   [".when(picked || current, el => el.bg(t.selected)).hover(s => s.bg(t.hover))", ".when(picked || current, el => el.bg(t.selected)).when(path === this.demoRow, el => el.bg(t.hover)).hover(s => s.bg(t.hover))"],
 ]);
 console.log("patched", dir);

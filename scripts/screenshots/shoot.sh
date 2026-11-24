@@ -5,8 +5,8 @@
 # window takes on launch is macOS's own. Needs: macOS, Herdr.app, Microsoft Edge, node, zip, sips. Usage: scripts/screenshots/shoot.sh
 # CROP_ONLY=1 skips the instance and re-crops and renders from the raw shots in tmp/shots-raw.
 # Usage: shoot.sh [card ...]   (preview formats browse editors extract edit-terminal pdf-fullscreen settings show-as-root select
-#                              machine folder-actions; none = all)
-# machine and folder-actions need DEMO_MACHINE=<ssh target> (a Linux or macOS host you reach with ssh): it shows as "devbox",
+#                              machine folder-actions transfers hero; none = all)
+# machine, folder-actions, transfers and hero need DEMO_MACHINE=<ssh target> (a Linux or macOS host you reach with ssh): it shows as "devbox",
 # with the demo project in /tmp/acme-app there (see demo-instance.sh machine). Without it, both cards are skipped.
 # The crop boxes below are raw pixels of the default window (1280 x 820 points at 2x, panel 446 points wide, app zoom 1).
 set -eu
@@ -122,8 +122,9 @@ cmd '"op":"select","paths":["src/api.ts","src/app.tsx","src/checkout.ts"],"boxes
 cmd '"op":"menu","path":"src/app.tsx",'"$(at 1000 118)"',"hover":"filer-pro-menu-copy"' 1; shot select-menu; closeall
 cmd '"op":"select","paths":[]' 1
 fi
-if { w machine || w folder-actions; } && [ -z "${DEMO_MACHINE:-}" ]; then echo "machine, folder-actions: skipped (set DEMO_MACHINE)" >&2; fi
-if { w machine || w folder-actions; } && [ -n "${DEMO_MACHINE:-}" ]; then
+M=0; { w machine || w folder-actions || w transfers || w hero; } && M=1
+if [ "$M" = 1 ] && [ -z "${DEMO_MACHINE:-}" ]; then echo "machine, folder-actions, transfers, hero: skipped (set DEMO_MACHINE)" >&2; fi
+if [ "$M" = 1 ] && [ -n "${DEMO_MACHINE:-}" ]; then
 # machine.png: a terminal on devbox, its tree above and This Mac below (~/acme-app), the row menu with Download to This Mac
 inst machine
 out="$(herdr-app do space.new '{"name":"acme-app","machine":"devbox","folder":"/tmp/acme-app","tab":"acme-app","argv":["env","PS1=acme-app $ ","/bin/bash","--norc","--noprofile"]}' 2>&1)" || { echo "space on devbox failed: $out" >&2; exit 1; }
@@ -137,6 +138,15 @@ shot machine-tree
 cmd '"op":"menu","path":"docs/report.pdf",'"$(at 1000 118)"',"hover":"filer-pro-menu-download-here"' 1; shot machine-menu; closeall
 # folder-actions.png: the Folder actions of the devbox tree, Upload Folder… hovered
 cmd '"op":"rootmenu",'"$(at 1000 118)"',"hover":"filer-pro-menu-upload-folder"' 1; shot folder-menu; closeall
+# hero (preview.png): two files of devbox selected, the menu for both with Download to This Mac
+cmd '"op":"expand","paths":["docs"]' 3 # again: the first expand is lost when the machine lists slowly
+cmd '"op":"select","paths":["docs/report.pdf","docs/setup.md"]' 2; shot hero-tree
+cmd '"op":"menu","path":"docs/report.pdf",'"$(at 1000 118)"',"hover":"filer-pro-menu-download-here"' 1; shot hero-menu; closeall
+cmd '"op":"select","paths":[]' 1
+# transfers.png: a download from devbox in the transfers bar (shown only, nothing runs) and the conflict dialog
+cmd '"op":"jobs","jobs":{"demo1":{"id":"demo1","name":"site-backup.tar","direction":"down","machine":"devbox","state":"running","bytes":3400000000,"total":13000000000,"rate":598000000,"percent":26,"startedAt":1}}' 2
+shot transfers-tree
+cmd '"op":"conflict","item":{"name":"report.pdf","isDir":false,"destIsDir":false,"direction":"down","machine":"devbox"}' 2; shot transfers-dialog; closeall
 fi
 inst quit
 echo "shots done, instance closed"
@@ -192,5 +202,13 @@ fi
 if w folder-actions && [ -f "$RAW/folder-menu.png" ]; then
   panel machine-tree folder-tree; box folder-menu 236 2000 400 450 folder-menu
   "$R" "$C/folder-actions.html" "$ROOT/screenshots/folder-actions.png" 880 640 > /dev/null
+fi
+if w hero && [ -f "$RAW/hero-tree.png" ]; then
+  panel hero-tree hero-tree; box hero-menu 236 2000 400 584 hero-menu
+  "$R" "$C/hero.html" "$ROOT/preview.png" 1022 572 > /dev/null
+fi
+if w transfers && [ -f "$RAW/transfers-tree.png" ]; then
+  panel transfers-tree transfers-tree; box transfers-dialog 580 840 880 480 transfers-dialog
+  "$R" "$C/transfers.html" "$ROOT/screenshots/transfers.png" 880 792 > /dev/null
 fi
 echo "rendered into screenshots/. Look at every image before you commit it: no user name, no path outside ~/acme-app."
