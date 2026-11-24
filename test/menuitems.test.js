@@ -215,3 +215,22 @@ test("#27 Upload File… only with upload: row after Download to…, free area a
   assert.equal(menuHeight(rootMenuItems({ ...on, upload: true })), 166 + 28);
   assert.equal(acts(rowMenuItems({ ...on, upload: true, count: 2 })).includes("upload"), false);
 });
+
+test("#111 Upload to / Download to This Mac after Download to…, Upload File… and Upload Folder… after them, heights", () => {
+  const acts = (items) => items.filter((i) => !i.separator).map((i) => i.action);
+  const st = { ...on, upload: true, uploadFolder: true, uploadTo: "box", downloadHere: true };
+  const row = acts(rowMenuItems(st));
+  assert.deepEqual(row.slice(row.indexOf("download_to"), row.indexOf("download_to") + 5), ["download_to", "upload_to", "download_here", "upload", "upload_folder"]);
+  const labels = rowMenuItems(st).filter((i) => i.action === "upload_to" || i.action === "download_here" || i.action === "upload_folder").map((i) => i.label);
+  assert.deepEqual(labels, ["Upload to box", "Download to This Mac", "Upload Folder…"]);
+  assert.equal(menuHeight(rowMenuItems(st)), 516 + 4 * 28);
+  const multi = rowMenuItems({ ...st, count: 3 });
+  assert.deepEqual(acts(multi).slice(0, 5), ["download", "download_to", "upload_to", "download_here", "copy"]);
+  assert.equal(multi.some((i) => i.action === "upload" || i.action === "upload_folder"), false);
+  assert.equal(menuHeight(multi), menuHeight(rowMenuItems({ ...on, count: 3 })) + 2 * 28);
+  const root = acts(rootMenuItems(st));
+  assert.deepEqual(root.slice(root.indexOf("upload")), ["upload", "upload_folder", "new_folder", "paste", "select_files", "settings"]);
+  assert.equal(menuHeight(rootMenuItems({ ...on, uploadFolder: true })), 166 + 28);
+  const none = acts(rowMenuItems(on));
+  for (const a of ["upload_to", "download_here", "upload_folder"]) assert.equal(none.includes(a), false);
+});

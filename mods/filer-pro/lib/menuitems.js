@@ -38,7 +38,9 @@ export function rowMenuItems(state) {
     SEPARATOR,
     entry("download", "Download"),
     entry("download_to", "Download to…"),
+    ...transferEntries(state),
     ...(state.upload === true ? [entry("upload", "Upload File…")] : []),
+    ...(state.uploadFolder === true ? [entry("upload_folder", "Upload Folder…")] : []),
     SEPARATOR,
     ...(archive ? [entry("extract_here", "Extract Here"), entry("extract_to", extractToLabel(archive.stem)), SEPARATOR] : []),
     entry("copy", "Copy"),
@@ -55,11 +57,24 @@ export function rowMenuItems(state) {
   ];
 }
 
+// Between the trees (#111): uploadTo names the upper tree's machine (shown in the lower tree), downloadHere: the lower tree is shown (upper machine tree).
+const transferEntries = (state) => [
+  ...(typeof state.uploadTo === "string" && state.uploadTo ? [entry("upload_to", `Upload to ${state.uploadTo}`)] : []),
+  ...(state.downloadHere === true ? [entry("download_here", "Download to This Mac")] : []),
+];
+
+// What a tree's menus show of the transfers: Upload File… and Upload Folder… only on a machine tree (a local copy was confusing),
+// Upload to <machine> in the lower tree while the upper one shows a machine, Download to This Mac in a machine tree while the lower one is shown.
+export function transferState({ machine, pickFiles, peerMachine, lowerShown }) {
+  return { upload: Boolean(machine) && pickFiles === true, uploadFolder: Boolean(machine), uploadTo: !machine && peerMachine ? peerMachine : null, downloadHere: Boolean(machine) && lowerShown === true };
+}
+
 function multiMenuItems(state) {
   const n = group(state.count);
   return [
     entry("download", `Download ${n} Items`),
     entry("download_to", `Download ${n} Items to…`),
+    ...transferEntries(state),
     SEPARATOR,
     entry("copy", `Copy ${n} Items`),
     entry("cut", `Cut ${n} Items`),
@@ -81,7 +96,7 @@ export function rowMenuState({ name, isDir, machine, platform, bundle, contents,
 }
 
 export function rootMenuItems(state) {
-  return [entry("open_editor", openIn(state.editor), state.editorFolder !== false), SEPARATOR, ...(state.upload === true ? [entry("upload", "Upload File…")] : []), entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), ...(state.selecting === true ? [] : [entry("select_files", "Select Files")]), SEPARATOR, entry("settings", "Settings…")];
+  return [entry("open_editor", openIn(state.editor), state.editorFolder !== false), SEPARATOR, ...(state.upload === true ? [entry("upload", "Upload File…")] : []), ...(state.uploadFolder === true ? [entry("upload_folder", "Upload Folder…")] : []), entry("new_folder", "New Folder…"), entry("paste", "Paste", state.paste.enabled), ...(state.selecting === true ? [] : [entry("select_files", "Select Files")]), SEPARATOR, entry("settings", "Settings…")];
 }
 
 export function menuHeight(items) {
