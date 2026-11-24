@@ -326,6 +326,7 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 
 ## Transfers
 
+- **Drag out:** rows are drag sources. A local row goes to the Finder or onto the other tree; a drop of local files on a tree uploads (machine tree) or copies (This Mac tree), like a Finder drop. A selected row drags the whole selection of its tree. A remote row is remembered at the mouse press: a drop of exactly those paths downloads into a This Mac folder, or copies on a machine (through Copy and Paste, which replaces the clipboard). Remote paths without a matching drag are refused with a notice. Dragging a remote row depends on what the Herdr host delivers and was not measured yet; if the drop never fires for in-app drags, nothing happens. Rows show no drop highlight.
 - Drop files from the Finder to upload, right click to download. **Upload File…** in the row menu (next to Download to…) and in the free-area menu (above New Folder…) opens the file picker and sends the chosen files like a drop: into the folder of the row, or the root of the tree the menu belongs to; a local tree copies. It is hidden with several rows selected and needs a Herdr version with `pickFiles` (newer than 0.1.17); on 0.1.17 the entry does not show.
 - Every transfer shows progress and can be cancelled.
 - **Cut** on one side and **Paste** on the other moves: see [Move between machines](#move-between-machines).

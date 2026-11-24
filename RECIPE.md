@@ -1,6 +1,6 @@
 # Filer Pro
 
-A file panel in the right panel column, opened from a `Filer Pro` pill at the right end of the tab bar. It shows the working folder of the focused terminal as a tree, on this Mac or on the SSH machine the terminal runs on; a second tree on this computer can sit below it (Copy in one, Paste in the other). A right click on a row opens a menu to open, download, copy, cut, paste, rename, delete or create folders; Cmd+click downloads and reveals (with `multi_select` on, Option+Cmd+click does, and Cmd+click and Shift+click select rows; **Select Files** in the menu shows a checkbox column); files dropped from the Finder are uploaded. Transfers show as rows with a progress bar below the tree. Clicking a file (or double clicking it, setting `double_click_files`) opens it in the panel as source, as a Markdown or HTML preview with Mermaid diagrams, as an image or as PDF pages, with a fullscreen dialog.
+A file panel in the right panel column, opened from a `Filer Pro` pill at the right end of the tab bar. It shows the working folder of the focused terminal as a tree, on this Mac or on the SSH machine the terminal runs on; a second tree on this computer can sit below it (Copy in one, Paste in the other). A right click on a row opens a menu to open, download, copy, cut, paste, rename, delete or create folders; Cmd+click downloads and reveals (with `multi_select` on, Option+Cmd+click does, and Cmd+click and Shift+click select rows; **Select Files** in the menu shows a checkbox column); files dropped from the Finder are uploaded; rows are drag sources (`drag_paths`). Transfers show as rows with a progress bar below the tree. Clicking a file (or double clicking it, setting `double_click_files`) opens it in the panel as source, as a Markdown or HTML preview with Mermaid diagrams, as an image or as PDF pages, with a fullscreen dialog.
 
 ![Filer Pro](preview.png)
 
@@ -87,7 +87,7 @@ Folder `mods/filer-pro/`, `mod.json` `{ "place": "none", "version": "1.3.4" }` (
 
 - `herdr-app check ~/.config/herdr-app/mods/filer-pro` passes.
 - With both blocks in the layout, the `Filer Pro` pill shows in the tab bar and a click opens the panel; a second click hides it. `workspace.panels` now contains `filer-pro`.
-- The tree shows the focused terminal's folder; focusing a terminal on an SSH machine shows that machine's folder. **Show This Mac** opens a second tree on this computer below it; Copy in one tree and Paste in the other starts one job.
+- The tree shows the focused terminal's folder; focusing a terminal on an SSH machine shows that machine's folder. **Show This Mac** opens a second tree on this computer below it; Copy in one tree and Paste in the other starts one job. A row dragged onto a folder of the other tree starts one `↓` job (host-dependent, not measured yet).
 - In a git repo, an untracked file shows a green `A`.
 - Right click on a remote file, `Download`: a `↓` row runs to 100 %, a `Downloaded` toast appears, the file is in the download folder. Downloading it again opens `Already exists`; `Keep both` creates `name-1.ext`.
 - Dropping a Finder file onto a remote folder row uploads it there (`↑`, `Uploaded`).
