@@ -46,7 +46,7 @@ export const NUMBERS = Object.freeze([
 export const SETTINGS = Object.freeze([
   bool("update_check", true, "Check for updates automatically", "Once a day, Filer Pro asks GitHub whether a new version exists. Nothing about you or your files is sent, but GitHub sees your IP address.", "Updates"),
   Object.freeze({ key: "download_folder", kind: "text", default: "~/Downloads", label: "Download folder", help: "Where Download and Download to… put files.", section: "Downloads" }),
-  Object.freeze({ key: "local_tree_folder", kind: "text", empty: true, default: "", label: "Start folder for This Mac", help: "Where the lower tree for this Mac opens. Leave empty to use the download folder.", section: "Downloads" }),
+  Object.freeze({ key: "local_tree_folder", kind: "text", empty: true, default: "", label: "Start folder for This Mac", help: "Where the lower tree for this Mac opens. Leave empty to use your home folder.", section: "Downloads" }),
   bool("hide_system_files", true, "Hide system files", "Hides clutter that macOS and Windows leave in folders, such as .DS_Store and Thumbs.db. Copying or deleting a folder still includes them.", "File list"),
   bool("hide_dotfiles", false, "Hide hidden files", "Hides every file and folder whose name starts with a dot, such as .env or .gitignore.", "File list"),
   bool("show_sizes", true, "Show file sizes", "Sizes next to files. Folders show a size after Calculate Size.", "File list"),

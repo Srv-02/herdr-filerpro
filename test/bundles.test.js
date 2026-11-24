@@ -93,7 +93,7 @@ test("the row menu of a package: Open and Show Package Contents, the file-only e
   assert.equal(enabled(items, "open"), true);
   assert.equal(enabled(items, "package_contents"), true);
   for (const a of ["open_preview", "open_editor", "edit_terminal"]) assert.equal(enabled(items, a), false, a);
-  for (const a of ["reveal", "download", "copy", "cut", "copy_path", "rename", "delete"]) assert.equal(enabled(items, a), true, a);
+  for (const a of ["reveal", "copy", "cut", "copy_path", "rename", "delete"]) assert.equal(enabled(items, a), true, a);
   assert.equal(menuHeight(items), menuHeight(rowMenuItems({ ...on, isDir: true })), "Show Package Contents takes the place of Show as Root (issue #90)");
 });
 

@@ -106,7 +106,7 @@ test("the row's right click passes the configured editor to the popup, and the n
   assert.deepEqual(host.overlays.at(-1).props.editor, { name: "Cursor", remote: true, remoteFolder: true });
 });
 
-test("the free-area right click passes the editor and sizes the popup for five rows", async () => {
+test("the free-area right click passes the editor and sizes the popup for six rows (#112)", async () => {
   const self = await panel();
   rightClick(findId(self.render(cx), "files-tree"));
   const o = host.overlays.at(-1);
@@ -114,7 +114,7 @@ test("the free-area right click passes the editor and sizes the popup for five r
   assert.equal(o.props.root, "/r");
   assert.deepEqual(o.props.editor, { name: "VS Code", remote: true, remoteFolder: true });
   assert.equal(o.height, menuHeight(rootMenuItems({ paste: { enabled: false } })));
-  assert.equal(o.height, 166);
+  assert.equal(o.height, 194);
 });
 
 test("the popup draws Open in <name> from its props, cut by truncate", () => {

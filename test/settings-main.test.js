@@ -203,15 +203,38 @@ test("settings: openSettings stores a snapshot and opens the modal dialog; a bro
   assert.deepEqual([none.store["filer-pro.settings"].raw, none.store["filer-pro.settings"].broken], [null, false]);
 });
 
-test("settings: the free-area menu opens the dialog and then closes itself", async () => {
-  const h = host({ props: { overlay: "menu1", view: "menu", scope: "root", root: "/data", folder: "/data" } });
-  const self = Object.create(FilerPro.prototype);
+test("#112 the folder menu has no Settings… (the gear has it)", () => {
+  host({ props: { overlay: "menu1", view: "menu", scope: "root", root: "/data", folder: "/data" } });
   const { cx } = fakeCx();
-  const el = byId(self.overlayView(cx), "filer-pro-menu-settings");
-  click(el, cx);
+  assert.equal(byId(Object.create(FilerPro.prototype).overlayView(cx), "filer-pro-menu-settings"), undefined);
+});
+
+test("#112 Show Hidden Files flips hide_dotfiles in the config file, keeps the other keys and signals every panel", async () => {
+  for (const [hidden, next, checked] of [[false, true, true], [true, false, false]]) {
+    const path = "/app/filer-pro.json", before = JSON.stringify({ hide_dotfiles: hidden, mermaid: false, custom: 1 });
+    const h = host({ files: { [path]: before }, props: { overlay: "menu1", view: "menu", scope: "root", root: "/data", folder: "/data", hidden } });
+    const { cx } = fakeCx();
+    const el = byId(Object.create(FilerPro.prototype).overlayView(cx), "filer-pro-menu-toggle-hidden");
+    assert.ok(texts(el).includes("Show Hidden Files"));
+    assert.equal([...walk(el)].some((e) => e.kind === "svg"), checked, "checked while hidden files show");
+    click(el, cx);
+    await settle();
+    assert.deepEqual(JSON.parse(h.log.writes.at(-1).text), { hide_dotfiles: next, mermaid: false, custom: 1 });
+    assert.equal(h.log.writes.at(-1).expected, before);
+    assert.ok(h.log.shared.some(([k]) => k === "filer-pro.config"), "every panel reads the config again");
+    assert.deepEqual(h.log.closed, ["menu1"]);
+  }
+});
+
+test("#112 Show Hidden Files: a broken config is not overwritten, the error shows", async () => {
+  const path = "/app/filer-pro.json";
+  const h = host({ files: { [path]: "{ oops" }, props: { overlay: "menu1", view: "menu", scope: "root", root: "/data", folder: "/data" } });
+  const { cx } = fakeCx();
+  click(byId(Object.create(FilerPro.prototype).overlayView(cx), "filer-pro-menu-toggle-hidden"), cx);
   await settle();
-  assert.equal(h.log.overlays[0].props.view, "settings");
-  assert.deepEqual(h.log.closed, ["menu1"]);
+  assert.equal(h.log.writes.length, 0);
+  assert.equal(h.log.notes.at(-1).level, "error");
+  assert.equal(h.log.shared.some(([k]) => k === "filer-pro.config"), false);
 });
 
 test("settings: the panel header has a gear with the tooltip Settings while no file is open", async () => {
