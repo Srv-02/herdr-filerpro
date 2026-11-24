@@ -27,7 +27,7 @@ import { dropRequest, dropTarget, uploadRequest } from "./lib/droptarget.js";
 import { dragSpec, dropPlan, pressMemory } from "./lib/dragsource.js";
 import { createFileOps, successToast, deleteErrorToast, validateName } from "./lib/fileops.js";
 import { createMoveOps, moveToasts } from "./lib/move.js";
-import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "./lib/menuitems.js";
+import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, transferState, MENU_WIDTH } from "./lib/menuitems.js";
 import { pasteState } from "./lib/clipboard.js";
 import { pruneFolder, folderMissing, LIST_DENIED, NO_LIST_MESSAGE, expandPath, visibleRows, ROW_H, TREE_PAD, LIST_SCRIPT, psListCommand, parseListing, psEntries, limitText } from "./lib/tree.js";
 import { sizeArgs, SIZE_GRACE_MS, FOLDER_SIZE_MS, TOO_LARGE, busy, sizeKey, requestSize, claimSizes, sizeResult, storeSize, dropSizes, sizeCell, sizeDetail, sizeNote } from "./lib/sizes.js";
@@ -482,7 +482,7 @@ export default class FilerPro extends View {
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
       const ed = p.editor ?? editorMenu(null);
-      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), upload: canUpload(), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting, count: p.count }),
+      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...transferState({ machine: p.machine, pickFiles: canUpload(), peerMachine: p.uploadTo, lowerShown: typeof p.downloadDir === "string" }), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting, count: p.count }),
         size: sizeDetail(sized, Date.now()), sizeTitle: sizeNote(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -528,6 +528,9 @@ export default class FilerPro extends View {
         download_to: () => { pickFolder({ prompt: "Download here" }).then(dir => { if (dir) send({ dest_dir: dir }); else close(); }).catch(close); },
         // p.folder is the drop target of the row (its folder, or the tree's root); the request is the one a drop sends. Cancel sends nothing.
         upload: () => { Promise.resolve(herdr.pickFiles({ prompt: "Upload", multiple: true })).then((paths) => { const r = uploadRequest({ on: p.machine ?? null, folder: p.folder, paths }); if (r) this.request(r); close(); }).catch(close); },
+        upload_to: () => { const r = uploadRequest({ on: p.uploadTo, folder: p.uploadDir, paths: many ? p.items.map((i) => i.path) : [p.path] }); if (r) this.request(r); close(); },
+        download_here: () => (many ? runSelection("download_to", p.downloadDir) : send({ dest_dir: p.downloadDir })),
+        upload_folder: () => { Promise.resolve(pickFolder({ prompt: "Upload" })).then((dir) => { const r = dir ? uploadRequest({ on: p.machine ?? null, folder: p.folder, paths: [dir] }) : null; if (r) this.request(r); close(); }).catch(close); },
         extract_here: () => act({ action: "extract", path: p.path, how: "here" }),
         extract_to: () => act({ action: "extract", path: p.path, how: "to" }),
         copy: () => act({ action: "clip", path: p.path, is_dir: p.isDir === true, root: p.root }),
@@ -1061,6 +1064,16 @@ export default class FilerPro extends View {
 
   // The lower tree's shared state (lib/treestate.js readLocalTree) and the trees on screen: the upper one, and the lower one while shown.
   localTree() { return readLocalTree(shared(LOCAL_TREE_KEY)); }
+  // Menu fields for transfers between the trees (#111): the other tree's place as props, the entries as transferState().
+  peerProps(tree) {
+    const up = this.trees.follow, low = this.trees.pinned, both = this.shownTrees().length > 1;
+    if (tree.id === "pinned") return up?.on && up.root ? { uploadTo: up.on, uploadDir: up.root } : {};
+    return up.on && both && low?.root ? { downloadDir: low.root } : {};
+  }
+  transfers(tree) {
+    const peer = this.peerProps(tree);
+    return { props: peer, state: transferState({ machine: tree.on, pickFiles: canUpload(), peerMachine: peer.uploadTo, lowerShown: Boolean(peer.downloadDir) }) };
+  }
   shownTrees() { const p = this.trees.pinned; return p?.context && this.localTree().shown ? [this.trees.follow, p] : [this.trees.follow]; }
 
   // Show as Root (issue #90): the menu copy asks through shared("filer-pro.goto") = { id, machine, path }; the panel that shows
@@ -2308,7 +2321,7 @@ export default class FilerPro extends View {
       const items = picked && sel ? sel : [{ path: joinPath(tree.root, path), isDir: entry.dir === true }];
       const spec = dragSpec({ on: tree.on, paths: items.map((i) => i.path) });
       const drag = this.drag ?? DRAG;
-      return h_flex().id(`${pre}file-${path}`).h(ROW_H).flex_none().pl(boxes ? 8 : 8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+      return h_flex().id(`${pre}file-${path}`).tooltip(entry.name).h(ROW_H).flex_none().pl(boxes ? 8 : 8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer()
         .when(picked || current, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .when(boxes, el => el.role("check_box").accessibility_label(`${entry.name}, ${picked ? "checked" : "not checked"}`))
         .on_click((e, cx) => { cx.stop_propagation(); this.clickRow(path, dir, bundle, e, cx, tree); })
@@ -2320,8 +2333,9 @@ export default class FilerPro extends View {
           // Several rows (a folder and what lies inside it count once) get the short menu for all of them (#99).
           const items = picked ? this.selectedItems(tree) : [];
           const multi = items.length >= 2 ? { items, count: items.length } : {};
-          const menuState = { paste: { enabled: false }, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: tree.on, platform: window()?.platform, bundle, contents, selecting: tree.selecting === true, count: multi.count }) };
-          openOverlay({ mod: "filer-pro", props: { view: "menu", tree: tree.id, machine: tree.on, root: tree.root, path: joinPath(tree.root, path), isDir: entry.dir, bundle, contents, selecting: tree.selecting === true, folder: dropTarget(tree.root, path, dir), editor: editorMenu(this.conf), ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems({ ...menuState, upload: canUpload() })) });
+          const xfer = this.transfers(tree);
+          const menuState = { paste: { enabled: false }, ...xfer.state, ...rowMenuState({ name: entry.name, isDir: entry.dir, machine: tree.on, platform: window()?.platform, bundle, contents, selecting: tree.selecting === true, count: multi.count }) };
+          openOverlay({ mod: "filer-pro", props: { view: "menu", tree: tree.id, machine: tree.on, root: tree.root, path: joinPath(tree.root, path), isDir: entry.dir, bundle, contents, selecting: tree.selecting === true, folder: dropTarget(tree.root, path, dir), editor: editorMenu(this.conf), ...xfer.props, ...multi }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rowMenuItems(menuState)) });
         })
         .on_drop((e, cx) => this.drop(e.paths, path, dir, tree))
         .when(Boolean(spec) && drag.rows !== false, el => el.drag_paths(spec.paths, { on: spec.on })
@@ -2424,7 +2438,7 @@ export default class FilerPro extends View {
         cx.stop_propagation();
         if (!tree.root) return;
         if (this.dropOtherSelection(tree)) cx.notify();
-        openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", tree: tree.id, machine: tree.on, root: tree.root, folder: tree.root, selecting: tree.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: tree.selecting === true, upload: canUpload() })) });
+        openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", tree: tree.id, machine: tree.on, root: tree.root, folder: tree.root, selecting: tree.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: tree.selecting === true, ...this.transfers(tree).state })) });
       })
       .when(Boolean(tree.error) || !tree.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(tree.error || (tree.entries.get("")?.denied ? NO_LIST_MESSAGE : tree.loading ? "Loading files…" : tree.root ? "No files" : "No folder"))))
       .when(tree.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total))));
