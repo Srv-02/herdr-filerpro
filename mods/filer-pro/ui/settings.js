@@ -62,7 +62,7 @@ export function createSettingsDialog(snapshot, cx) {
     if (s.kind === "choice") continue; // the click pickers have their own state (state.choices)
     // The download folder as written in the file (~/ stays ~/), everything else as loadConfig read it.
     const shown = s.key === "download_folder" ? (str(raw.download_folder).trim() || s.default) : s.key === "local_tree_folder" ? str(raw.local_tree_folder).trim() : String(config[s.key] ?? s.default);
-    state.fields[s.key] = field(state, s.key, shown, s.key === "node_path" ? "Automatic" : s.key === "local_tree_folder" ? "Download folder" : null);
+    state.fields[s.key] = field(state, s.key, shown, s.key === "node_path" ? "Automatic" : s.key === "local_tree_folder" ? "Home folder" : null);
     state.initial[s.key] = validateField(s.key, shown).value ?? shown;
   }
   // The two selection clicks (#98): the picked values, and the message when both are the same.

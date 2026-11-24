@@ -478,7 +478,7 @@ test("dialog: the lower tree's start folder row follows the download folder, wit
   assert.equal(s.fields.local_tree_folder.value, "~/Inbox");
   const e = createSettingsDialog(await snapshot({}), makeCx());
   assert.equal(e.fields.local_tree_folder.value, "");
-  assert.equal(e.fields.local_tree_folder.input.placeholder, "Download folder");
+  assert.equal(e.fields.local_tree_folder.input.placeholder, "Home folder");
   const v = view(s);
   const all = [...walk(v)].map((n) => n.calls?.find(([k]) => k === "id")?.[1][0]).filter(Boolean);
   assert.ok(all.indexOf("filer-pro-settings-local_tree_folder") === all.indexOf("filer-pro-settings-download_folder") + 1 || all.indexOf("filer-pro-settings-local_tree_folder") > all.indexOf("filer-pro-settings-download_folder"));
