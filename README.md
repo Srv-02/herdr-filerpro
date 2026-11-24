@@ -7,7 +7,8 @@
 - **Follows your terminal:** the tree shows the folder of the focused terminal, local or remote.
 - **Previews almost anything:** Markdown with Mermaid diagrams, PDF, code, HTML and images, also in full screen.
 - **Edits in place:** quick fixes right in the panel, or one click to your editor.
-- **Moves files between machines:** upload, download and copy from one SSH machine to another.
+- **Two trees:** your terminal's folder on top, This Mac below.
+- **Moves files between your Mac and your machines:** upload, download, copy and move, also from one SSH machine to another.
 - **Quiet on SSH machines:** no commands sent while you just look.
 
 <br>
@@ -35,14 +36,36 @@ Then click `Filer Pro` in the tab bar.
 ### Browse
 
 - **Your terminal's folder:** `cd` in the terminal, and the tree follows.
-- **This Mac below:** a second tree on this computer under the terminal's tree; Copy in one, Paste in the other.
-- **Navigate freely:** Up one level, Go to `/`, and one click back to the terminal's folder, in a location line above each tree.
-- **Folder actions:** the `…` button of each tree for New Folder, Paste, Upload, Show in Finder, Open in your editor and Show Hidden Files.
+- **Location line:** where you are, Go to `/`, Up one level and one click back to the terminal's folder.
 - **Sizes and git marks:** file sizes next to each name, Calculate Size for folders, `M` `A` `U` `D` from git.
 - **Always current:** follows file system events on this Mac, no polling.
-- **Select several files:** Select Files in the right-click menu, or Cmd+click and Shift+click with the switch in Settings.
 
 ![The file tree with sizes, a calculated folder size and the row menu of a file](screenshots/browse.png)
+
+### Folder actions
+
+- **The `…` in the location line**, or a right click below the tree: Upload File… and Upload Folder… on machines, New Folder…, Paste, Show in Finder, Open in your editor, Select Files.
+- **Show Hidden Files** with one click.
+- **Row menus act on the row** they belong to.
+
+![The Folder actions of a machine tree with Upload File…, Upload Folder… and Show Hidden Files](screenshots/folder-actions.png)
+
+### This Mac below
+
+- **A second tree** on this computer under the terminal's tree: **Show This Mac** in the header, `×` to close.
+- **Starts in your home folder,** or in the start folder you set in Settings.
+- **Between the trees:** Download to This Mac, Upload to `<machine>`, or Copy and Paste.
+- **Drag the divider** to share the height.
+
+![A machine tree on devbox above This Mac, with Download to This Mac in the row menu](screenshots/machine.png)
+
+### Select several
+
+- **Select Files** in a menu puts a checkbox on every row.
+- **Cmd+click and Shift+click** with the switch in Settings.
+- **One step for all:** Download, Copy, Cut, Paste, Copy Paths or Delete, from the selection bar or a right click.
+
+![Three files checked, the selection bar and the menu for all of them](screenshots/select.png)
 
 ### Show as Root
 
@@ -88,11 +111,12 @@ Then click `Filer Pro` in the tab bar.
 
 ### Transfers
 
-- **Drop to upload** from the Finder, or **Upload File…** or **Upload Folder…** in the Folder actions of a machine tree (the file picker needs a Herdr version with `pickFiles`), right click to download.
-- **Drag out:** rows are drag sources for terminals only (the path is pasted). Between the two trees use **Upload to <machine>**, **Download to This Mac** or Copy and Paste.
+- **Upload:** drop files from the Finder, or Upload File… and Upload Folder… in the Folder actions of a machine tree.
+- **Download:** right click a row on a machine, or Download to This Mac into the lower tree.
+- **Move:** Cut on one side, Paste on the other, between this computer and a machine or between two machines. The original goes only after the copy checks out.
+- **Machine to machine:** Copy on one, Paste on the other, through this computer.
+- **Drag a row into a terminal** to paste its path.
 - **Progress and cancel** for every transfer, nothing overwritten without asking.
-- **Machine to machine:** Copy or Cut on one, Paste on the other, through this computer. A Cut copies, checks and then deletes the original.
-- **Several at once:** select rows, then Download, Copy, Cut or Delete them in one step.
 
 ![A running transfer and the conflict dialog](screenshots/transfers.png)
 
