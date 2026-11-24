@@ -482,7 +482,7 @@ export default class FilerPro extends View {
       const act = (fields) => { this.request({ ...(p.machine ? { machine: p.machine } : {}), ...fields }); close(); };
       const sized = p.isDir === true ? shared("filer-pro.sizes")?.[sizeKey(p.machine, p.path)] : undefined;
       const ed = p.editor ?? editorMenu(null);
-      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...transferState({ machine: p.machine, pickFiles: canUpload(), peerMachine: p.uploadTo, lowerShown: typeof p.downloadDir === "string" }), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting, count: p.count }),
+      const state = { editor: ed.name, editorFile: !p.machine || ed.remote, editorFolder: !p.machine || ed.remoteFolder, paste: pasteState(shared("filer-pro.clipboard"), p.machine ?? null, p.folder), ...transferState({ machine: p.machine, pickFiles: canUpload(), peerMachine: p.uploadTo, lowerShown: typeof p.downloadDir === "string" }), ...rowMenuState({ name: typeof p.path === "string" ? baseName(p.path) : "", isDir: p.isDir, machine: p.machine, platform: window()?.platform, bundle: p.bundle, contents: p.contents, selecting: p.selecting, count: p.count }), hideDotfiles: p.hidden === true,
         size: sizeDetail(sized, Date.now()), sizeTitle: sizeNote(sized, Date.now()), sizing: busy(sized, Date.now()) };
       const items = p.scope === "root" ? rootMenuItems(state) : rowMenuItems(state);
       // Open and Open in Preview: locally after the checks in open.js (the popup closes once open returned);
@@ -510,10 +510,11 @@ export default class FilerPro extends View {
         open_preview: () => openWith("preview"),
         open_editor: () => editor(openInEditor, `Open in ${ed.name}`, { hc, exec, home }, p.scope === "root" ? { path: p.root, folder: true } : { path: p.path }),
         edit_terminal: () => editor(editInTerminal, "Edit in Terminal", { focused, spaces, run }),
-        // dimmed on a machine (rowMenuItems remote): Show in Finder would download first; Cmd+click still does
+        // dimmed on a machine (rowMenuItems remote): Show in Finder would download first; Cmd+click still does.
+        // The folder menu (scope root, local trees only) shows the tree's folder.
         reveal: () => {
           if (p.machine) { close(); return; }
-          const [cmd, args] = platform.revealArgs(p.path);
+          const [cmd, args] = platform.revealArgs(p.scope === "root" ? p.root : p.path);
           Promise.resolve(exec(cmd, args)).catch(() => {}).finally(close);
         },
         // The panel that shows the package expands or collapses it (pollPackage).
@@ -543,8 +544,13 @@ export default class FilerPro extends View {
         rename: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "rename", machine: p.machine, path: p.path, root: p.root, isDir: p.isDir === true && p.bundle !== true }, kind: "dialog", modal: true, width: 440, height: 220 }); },
         permissions: () => { close(); openOverlay({ mod: "filer-pro", props: { view: "permissions", machine: p.machine, path: p.path, root: p.root, isDir: p.isDir === true }, kind: "dialog", modal: true, ...PERMS_SIZE }); },
         delete: () => act({ action: "delete", path: p.path, root: p.root }),
-        // The popup closes once the dialog is open (the snapshot is read first, as editor() does).
-        settings: () => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })).finally(close); },
+        // Show Hidden Files (#112): flips hide_dotfiles in the config file like the Settings dialog saves it; every panel copy
+        // then reads the config again and reloads its trees (checkConfig). p.hidden: the setting when the menu opened.
+        toggle_hidden: () => {
+          saveSettings({ hide_dotfiles: p.hidden !== true }, { readTextFile, writeTextFile, path: `${appHome()}/filer-pro.json` })
+            .then((out) => { if (out.ok) setShared("filer-pro.config", { at: Date.now() }); else notify({ title: "Show Hidden Files", body: out.error, level: "error" }); })
+            .catch((e) => notify({ title: "Show Hidden Files", body: String(e?.message ?? e), level: "error" })).finally(close);
+        },
         // The menu for several rows (#99): p.items is the collapsed selection; Paste and the rest above stay as they are.
         ...(many ? {
           download: () => runSelection("download"),
@@ -2099,30 +2105,24 @@ export default class FilerPro extends View {
   }
 
   // Icon and name of the open file: the panel's header (end: right-aligned before the buttons) and the dialog's title.
-  // In the panel without an open file: the shown folder's name, or while the tree is navigated away from the terminal's
-  // folder (issue #59) its path (from ~ on this computer), cut at the front to the measured width.
-  fileTitle(t, dark, end, lines = false) {
-    const nav = end && !this.file && !lines ? this.navState() : null;
-    const name = nav && upOf(this.root) === null ? "" : nav?.away ? frontTruncate(this.on ? this.root : headerPath(this.root, home()), Math.max(8, Math.floor(((this.titleWidth ?? 320) - 8) / 7))) : (this.file ?? this.root?.split(/[\\/]/).pop() ?? "");
+  // In the panel without an open file: the shown folder's name (its path is in the location line, #112).
+  fileTitle(t, dark, end) {
+    const name = this.file ?? this.root?.split(/[\\/]/).pop() ?? "";
     return h_flex().flex_1().min_w(0).overflow_hidden().gap(6).items_center().text_size(12).text_color(t.dim).when(end, el => el.justify_end())
-      .when(Boolean(nav), el => el.id("files-title").on_size_change((size, cx) => {
-        const w = Math.floor(size.width / 8) * 8;
-        if (w !== this.titleWidth) { this.titleWidth = w; cx.notify(); }
-      }))
       .when(Boolean(this.file), el => el.child(image(icon(this.file, false, false, dark)).size(14).flex_none()))
-      .child(div().min_w(0).truncate().when(Boolean(nav?.away) && name !== "", el => el.tooltip(this.root)).child((this.edit?.dirty ? "● " : "") + name));
+      .child(div().min_w(0).truncate().child((this.edit?.dirty ? "● " : "") + name));
   }
 
-  // The folder navigation of a tree: Go to /, Back to the terminal's folder and Up one level, always all three so no icon
-  // moves (issue #85); the lower tree has no terminal, so no Back. Go to / and Up are dimmed at the top (and, in the upper
-  // tree, without a terminal to key the navigation to), Back unless the tree is navigated away from the terminal's folder.
-  // In the header while the lower tree is hidden, else in the tree's location line (small).
-  navButtons(t, tree = this.trees.follow, small = false) {
+  // The folder navigation of a tree in its location line: Go to /, Back to the terminal's folder and Up one level, always
+  // all three so no icon moves (issue #85); the lower tree has no terminal, so no Back. Go to / and Up are dimmed at the top
+  // (and, in the upper tree, without a terminal to key the navigation to), Back unless the tree is navigated away from the
+  // terminal's folder.
+  navButtons(t, tree = this.trees.follow) {
     const nav = this.navState(tree), pre = tree.id === "pinned" ? "local-" : "";
     return [
-      this.navButton(`${pre}files-top`, "slash", `Go to ${nav.top ?? "/"}`, t, nav.up ? (cx) => this.navigate(nav.top, cx, tree) : null, small),
-      ...(tree.id === "pinned" ? [] : [this.navButton("files-back-terminal", "folder-tree", "Back to the terminal's folder", t, nav.away ? (cx) => this.navigate(nav.here, cx, tree) : null, small)]),
-      this.navButton(`${pre}files-up`, "corner-left-up", "Up one level", t, nav.up ? (cx) => this.navigate(nav.up, cx, tree) : null, small),
+      this.navButton(`${pre}files-top`, "slash", `Go to ${nav.top ?? "/"}`, t, nav.up ? (cx) => this.navigate(nav.top, cx, tree) : null),
+      ...(tree.id === "pinned" ? [] : [this.navButton("files-back-terminal", "folder-tree", "Back to the terminal's folder", t, nav.away ? (cx) => this.navigate(nav.here, cx, tree) : null)]),
+      this.navButton(`${pre}files-up`, "corner-left-up", "Up one level", t, nav.up ? (cx) => this.navigate(nav.up, cx, tree) : null),
     ];
   }
 
@@ -2135,16 +2135,21 @@ export default class FilerPro extends View {
     return { root: tree.root, up: pane ? upOf(tree.root) : null, top: topOf(tree.root), here, away };
   }
 
-  // An icon button of the navigation (Up, Go to /) in the refresh button's style; without onClick dimmed. small: a 12px
-  // glyph in a 20px hit area, for the location lines.
-  navButton(id, glyph, label, t, onClick, small = false) {
-    return div().id(id).w(small ? LINE.hit : 24).h(small ? LINE.hit : 24).flex_none().flex().items_center().justify_center().rounded(6).tooltip(label).accessibility_label(label)
+  // A small icon button of a location line (a 12px glyph in a 20px hit area); without onClick dimmed.
+  navButton(id, glyph, label, t, onClick) {
+    return div().id(id).w(LINE.hit).h(LINE.hit).flex_none().flex().items_center().justify_center().rounded(6).tooltip(label).accessibility_label(label)
       .when(Boolean(onClick), el => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)))
-      .child(svg(`${BASE}/${glyph}.svg`).size(small ? LINE.icon : 14).text_color(onClick ? t.muted : t.dim));
+      .child(svg(`${BASE}/${glyph}.svg`).size(LINE.icon).text_color(onClick ? t.muted : t.dim));
   }
 
-  // The line above a tree: where it is (a machine, or This Mac), its folder and the tree's own controls. Only drawn while
-  // both trees are shown. The folder is cut at the front to the measured width.
+  // The menu for the folder a tree shows (#112): the Folder actions button and a right click in the free area open it.
+  folderMenu(tree) {
+    const state = { paste: { enabled: false }, selecting: tree.selecting === true, remote: Boolean(tree.on), hideDotfiles: this.conf.hide_dotfiles === true, ...this.transfers(tree).state };
+    return { mod: "filer-pro", props: { view: "menu", scope: "root", tree: tree.id, machine: tree.on, root: tree.root, folder: tree.root, selecting: tree.selecting === true, editor: editorMenu(this.conf), hidden: state.hideDotfiles }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems(state)) };
+  }
+
+  // The line above each tree, always shown (#112): where it is (a machine, or This Mac), its folder, the navigation and the
+  // Folder actions button. The folder is cut at the front to the measured width; the buttons never shrink.
   locationLine(t, tree) {
     const pinned = tree.id === "pinned", pre = pinned ? "local-" : "";
     const name = tree.on ?? "This Mac", where = tree.root ? (tree.on ? tree.root : headerPath(tree.root, home())) : "";
@@ -2158,8 +2163,9 @@ export default class FilerPro extends View {
           if (next !== (this.lineWidths ??= {})[tree.id]) { this.lineWidths[tree.id] = next; cx.notify(); }
         })
         .when(Boolean(where), el => el.tooltip(tree.root).child(div().min_w(0).truncate().child("· " + frontTruncate(where, Math.max(8, Math.floor((w - 8) / 7)))))))
-      .children(this.navButtons(t, tree, true))
-      .child(this.refreshButton(t, [tree], true))
+      .children(this.navButtons(t, tree))
+      .child(div().w(1).h(12).mx(3).flex_none().bg(t.border))
+      .child(this.navButton(`${pre}files-actions`, "ellipsis", "Folder actions", t, (cx) => { if (tree.root) { this.dropOtherSelection(tree); openOverlay(this.folderMenu(tree)); cx.notify(); } }))
       .when(pinned, el => el.child(this.localClose(t)));
   }
 
@@ -2177,14 +2183,13 @@ export default class FilerPro extends View {
       .on_click((_e, cx) => onClick(cx)).child(child);
   }
 
-  // The Refresh button: reads the config again (hand edits), then reloads the given trees and the open file (issue #31:
-  // without refresh_seconds nothing polls; this is how an outside change on a machine shows). In the header while the lower
-  // tree is hidden, else one in each location line (small), each for its own tree.
-  refreshButton(t, trees = [this.trees.follow], small = false) {
-    const id = trees.length === 1 && trees[0].id === "pinned" ? "local-files-refresh" : "files-refresh";
-    return div().id(id).w(small ? LINE.hit : 24).h(small ? LINE.hit : 24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
-      .hover((s) => s.bg(t.hover)).tooltip("Refresh").accessibility_label("Refresh")
+  // The Refresh button in the header: reads the config again (hand edits), then reloads every shown tree and the open file
+  // (issue #31: without refresh_seconds nothing polls; this is how an outside change on a machine shows).
+  refreshButton(t) {
+    return div().id("files-refresh").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).tooltip("Refresh all trees").accessibility_label("Refresh all trees")
       .on_click((_e, cx) => {
+        const trees = [...new Set([...this.shownTrees(), this.fileSide().tree])]; // the open file's tree, also when it is hidden
         // Calculated folder sizes are a snapshot (lib/sizes.js): Refresh drops those of the shown folder and below.
         for (const tree of trees) {
           const sizes = shared("filer-pro.sizes"), next = dropSizes(sizes, tree.on, tree.root, Date.now());
@@ -2192,7 +2197,7 @@ export default class FilerPro extends View {
         }
         this.reloadConfig(cx, { file: FILE_NAMED, force: true }, trees);
       })
-      .child(svg(`${BASE}/refresh-cw.svg`).size(small ? LINE.icon : 14).text_color(t.muted));
+      .child(svg(`${BASE}/refresh-cw.svg`).size(14).text_color(t.muted));
   }
 
   // The file actions of the selection bar (#99): icon buttons that run the same requests as the menu for several rows.
@@ -2400,7 +2405,7 @@ export default class FilerPro extends View {
       return;
     }
     if (this.cfgPending === true) return;
-    const start = startFolder(this.conf);
+    const start = startFolder(this.conf, home());
     // The setting changed since the root was taken from it: the lower tree goes back to the new start folder.
     if (start && state.seed !== start) {
       const reset = state.seed != null || state.root == null;
@@ -2438,10 +2443,17 @@ export default class FilerPro extends View {
         cx.stop_propagation();
         if (!tree.root) return;
         if (this.dropOtherSelection(tree)) cx.notify();
-        openOverlay({ mod: "filer-pro", props: { view: "menu", scope: "root", tree: tree.id, machine: tree.on, root: tree.root, folder: tree.root, selecting: tree.selecting === true, editor: editorMenu(this.conf) }, kind: "popup", at: "pointer", width: MENU_WIDTH, height: menuHeight(rootMenuItems({ paste: { enabled: false }, selecting: tree.selecting === true, ...this.transfers(tree).state })) });
+        openOverlay(this.folderMenu(tree));
       })
       .when(Boolean(tree.error) || !tree.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(tree.error || (tree.entries.get("")?.denied ? NO_LIST_MESSAGE : tree.loading ? "Loading files…" : tree.root ? "No files" : "No folder"))))
       .when(tree.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(limitText(this.conf.list_per_folder, this.conf.list_total))));
+  }
+
+  // One tree with its location line (#112: shown without the lower tree too). With a file open the frame has no height,
+  // the tree stays mounted (treeView) and the line is left out.
+  singleView(t, dark, tree) {
+    return v_flex().min_h(0).when(Boolean(this.file), el => el.flex_none()).when(!this.file, el => el.flex_1().child(this.locationLine(t, tree)))
+      .child(this.treeView(t, dark, tree));
   }
 
   // The two trees in a vertical split: a frame that measures the height, the resizable group inside. The group is drawn
@@ -2482,7 +2494,7 @@ export default class FilerPro extends View {
     // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
     const update = this.conf.update_check ? updateHint(shared("filer-pro.update"), this.version) : null;
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
-    const trees = this.shownTrees(), lines = trees.length > 1, local = this.localTree(), selTree = this.selectionTree() ?? this.trees.follow;
+    const trees = this.shownTrees(), local = this.localTree(), selTree = this.selectionTree() ?? this.trees.follow;
     const sel = this.file ? null : selectionBar(t, { count: selTree.selected?.size ?? 0, selecting: selTree.selecting === true }, {
       onDone: (cx) => { selTree.selecting = false; this.clearSelected(selTree); cx.notify(); },
       onClear: (cx) => { this.clearSelected(selTree); cx.notify(); },
@@ -2493,16 +2505,15 @@ export default class FilerPro extends View {
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => this.requestLeave((cx) => { this.show(null); cx.notify(); }, cx)).child("←")))
         .child(div().flex_none().font_semibold().child("Filer Pro"))
         .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
-        .child(this.fileTitle(t, dark, true, lines))
-        .when(!this.file && !lines, el => el.children(this.navButtons(t)))
-        .when(!lines || Boolean(this.file), el => el.child(this.refreshButton(t, lines ? [this.fileSide().tree] : [this.trees.follow])))
+        .child(this.fileTitle(t, dark, true))
+        .child(this.refreshButton(t))
         .when(!this.file, el => el.child(this.localToggle(t)))
         .when(!this.file, el => el.child(this.gear(t)))
         .children(this.previewTools(t))
         .children(this.editTools(t))
         .when(Boolean(this.file) && Boolean(this.full), el => el.child(div().id("files-full").px(7).py(2).rounded(6).text_color(t.dim).tooltip("Open in full screen").child(svg(`${BASE}/maximize.svg`).size(13))))
         .when(Boolean(this.file) && !this.full, el => el.child(this.tool("files-full", svg(`${BASE}/maximize.svg`).size(13), t, (cx) => this.openFull(cx)))))
-      .child(trees.length > 1 ? this.splitView(t, dark, trees, local) : this.treeView(t, dark, this.trees.follow))
+      .child(trees.length > 1 ? this.splitView(t, dark, trees, local) : this.singleView(t, dark, this.trees.follow))
       .when(Boolean(sel), el => el.child(sel))
       .when(Boolean(bar), el => el.child(bar))
       .when(Boolean(this.file), el => el.child(this.viewer(t)));

@@ -317,7 +317,7 @@ test("the refresh button reloads the tree and the open file, also on a machine",
     const tree = self.render(w.rcx);
     const button = byId(tree, "files-refresh");
     assert.ok(button, "a refresh button in the header");
-    assert.equal(button.calls.find(([k]) => k === "tooltip")?.[1], "Refresh");
+    assert.equal(button.calls.find(([k]) => k === "tooltip")?.[1], "Refresh all trees");
     assert.equal(button.kids.find((k) => k.kind === "svg")?.args[0], "mods/filer-pro/refresh-cw.svg");
     click(tree, "files-refresh", w.cx);
     await settle();

@@ -41,7 +41,7 @@ export function writeLocalTree(state, patch) {
   return same ? state : next;
 }
 
-// The folder the lower tree opens in; both settings are expanded by loadConfig.
-export function startFolder(cfg) {
-  return cfg?.local_tree_folder || cfg?.download_folder || null;
+// The folder the lower tree opens in: the setting (expanded by loadConfig), else the home folder (#112).
+export function startFolder(cfg, home) {
+  return cfg?.local_tree_folder || home || null;
 }

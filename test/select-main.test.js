@@ -427,14 +427,14 @@ test("#98 bar: not while a file is open; before the transfers bar otherwise", as
 });
 
 // ---- #99: the menu for several rows ----
-test("#99 right click on a selected row with two items: multi menu props in tree order, height 264", async () => {
+test("#99 right click on a selected row with two items: multi menu props in tree order, height 201 (#112: no Download on this computer)", async () => {
   const { self, cx, log } = await multi();
   self.setSelection({ selected: new Set(["src", "a.txt"]), anchor: "a.txt", base: new Set(["src", "a.txt"]) });
   handler(byId(self.render(cx), "file-a.txt"), "on_mouse_down", "right")({}, cx);
   const o = log.overlays.at(-1);
   assert.deepEqual(o.props.items, [{ path: `${ROOT}/src`, isDir: true }, { path: `${ROOT}/a.txt`, isDir: false }], "folders sort first in the tree");
   assert.equal(o.props.count, 2);
-  assert.equal(o.height, 264);
+  assert.equal(o.height, 201);
   assert.equal(self.selected.size, 2);
 });
 test("#99 right click: a folder and its child count as one item, an unselected row has the single menu", async () => {
@@ -456,21 +456,20 @@ const written = (log) => log.writes.filter((w) => String(w.p).includes("/request
 const multiMenu = (extra = {}) => menuFor({ count: 2, items: [{ path: `${ROOT}/a.txt`, isDir: false }, { path: `${ROOT}/src`, isDir: true }], ...extra });
 const menuClick = (id) => { const m = Object.create(FilerPro.prototype); handler(byId(m.overlayView(fakeCx()), id), "on_click")({}, fakeCx()); return m; };
 
-test("#99 multi menu: Copy, Cut, Delete and Download write one request with the list", async () => {
+test("#99 multi menu: Copy, Cut and Delete write one request with the list; no Download on this computer (#112)", async () => {
   const { log } = host({ props: multiMenu() });
   const list = [{ path: `${ROOT}/a.txt`, is_dir: false }, { path: `${ROOT}/src`, is_dir: true }];
   menuClick("filer-pro-menu-copy");
   menuClick("filer-pro-menu-cut");
   menuClick("filer-pro-menu-delete");
-  menuClick("filer-pro-menu-download");
+  assert.equal(byId(Object.create(FilerPro.prototype).overlayView(fakeCx()), "filer-pro-menu-download"), undefined);
   await settle();
   assert.deepEqual(written(log), [
     { action: "clip", items: list, root: ROOT },
     { action: "clip", items: list, cut: true, root: ROOT },
     { action: "delete", paths: [`${ROOT}/a.txt`, `${ROOT}/src`], root: ROOT },
-    { action: "copy", paths: [`${ROOT}/a.txt`, `${ROOT}/src`] },
   ]);
-  assert.equal(log.closed.length, 4);
+  assert.equal(log.closed.length, 3);
 });
 test("#99 multi menu on a machine: Download is one download request with paths", async () => {
   const { log } = host({ props: multiMenu({ machine: "box" }) });

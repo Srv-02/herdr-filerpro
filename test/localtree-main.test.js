@@ -77,7 +77,7 @@ function fakeCx() {
   return cx;
 }
 function panel(cfg = {}) {
-  return Object.assign(Object.create(FilerPro.prototype), { cfg: { ...DEFAULTS, download_folder: LOW, local_tree_folder: "", ...cfg }, saved: new Map(), reload: { signal: () => false, take: () => false, mark() {} }, jobs: {}, perf: null });
+  return Object.assign(Object.create(FilerPro.prototype), { cfg: { ...DEFAULTS, download_folder: LOW, local_tree_folder: LOW, ...cfg }, saved: new Map(), reload: { signal: () => false, take: () => false, mark() {} }, jobs: {}, perf: null });
 }
 const listsOf = (log, path) => log.execs.filter((e) => e.cmd === "sh" && e.args[1] === LIST_SCRIPT && e.args[3] === path);
 
@@ -117,8 +117,8 @@ test("#101 hidden by default: one tree, the toggle shows This Mac", async () => 
   assert.equal(listsOf(log, LOW).length, 0);
 });
 
-test("#101 the toggle shows a lower tree at local_tree_folder, else download_folder", async () => {
-  for (const [cfg, folder] of [[{ local_tree_folder: INBOX }, INBOX], [{}, LOW]]) {
+test("#101 #112 the toggle shows a lower tree at local_tree_folder, else the home folder", async () => {
+  for (const [cfg, folder] of [[{ local_tree_folder: INBOX }, INBOX], [{ local_tree_folder: "" }, "/Users/example"]]) {
     const { log, store } = host({ listings: { [UP]: list("a.txt"), [folder]: list("b.txt") } });
     const cx = fakeCx(), self = panel(cfg);
     self.refresh(cx);
@@ -276,7 +276,7 @@ const SHOWN = { shown: true, root: null, sizes: null };
 const iconOf = (line) => [...walk(line)].filter((e) => e.kind === "svg").map((e) => e.args[0]);
 const idsIn = (el) => ids(el);
 
-test("#101 lines only while shown: server + machine above, laptop + This Mac below, with their own controls", async () => {
+test("#101 #112 split: server + machine above, laptop + This Mac below, each with its own navigation and Folder actions", async () => {
   host({ store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
   const cx = fakeCx(), self = panel();
   self.refresh(cx);
@@ -284,25 +284,78 @@ test("#101 lines only while shown: server + machine above, laptop + This Mac bel
   const up = byId(tree, "files-line"), low = byId(tree, "local-files-line");
   assert.ok(iconOf(up)[0].endsWith("/server.svg"));
   assert.ok(texts(up).includes("box"));
-  for (const id of ["files-top", "files-back-terminal", "files-up", "files-refresh"]) assert.ok(idsIn(up).includes(id), id);
+  assert.deepEqual(idsIn(up).filter((id) => !id.endsWith("-line") && !id.endsWith("-line-path")), ["files-top", "files-back-terminal", "files-up", "files-actions"]);
   assert.ok(iconOf(low)[0].endsWith("/laptop.svg"));
   assert.ok(texts(low).includes("This Mac"));
-  for (const id of ["local-files-top", "local-files-up", "local-files-refresh"]) assert.ok(idsIn(low).includes(id), id);
-  assert.ok(!idsIn(low).includes("local-files-back-terminal") && !idsIn(low).includes("files-back-terminal"));
+  assert.deepEqual(idsIn(low).filter((id) => !id.endsWith("-line") && !id.endsWith("-line-path")), ["local-files-top", "local-files-up", "local-files-actions", "local-files-close"]);
   const header = idsIn(byId(tree, "files")).slice(0, idsIn(byId(tree, "files")).indexOf("files-split-frame"));
-  assert.ok(header.includes("files-local-toggle") && header.includes("files-settings"));
-  assert.ok(!header.includes("files-top") && !header.includes("files-refresh"));
+  assert.deepEqual(header.slice(1), ["files-refresh", "files-local-toggle", "files-settings"]);
 });
 
-test("#101 hidden: no lines, the header keeps its controls with the toggle left of the gear", async () => {
+test("#112 one machine tree: the header has Refresh, the toggle and the gear; the location line has the navigation and Folder actions", async () => {
   host({ listings: { [UP]: list("a.txt") } });
   const cx = fakeCx(), self = panel();
   self.refresh(cx);
   await settle();
   const tree = self.render(cx);
-  assert.equal(byId(tree, "files-line"), undefined);
-  const order = idsIn(tree).filter((id) => ["files-top", "files-back-terminal", "files-up", "files-refresh", "files-local-toggle", "files-settings"].includes(id));
-  assert.deepEqual(order, ["files-top", "files-back-terminal", "files-up", "files-refresh", "files-local-toggle", "files-settings"]);
+  const line = byId(tree, "files-line");
+  assert.ok(iconOf(line)[0].endsWith("/server.svg"));
+  assert.ok(texts(line).includes("box"));
+  assert.deepEqual(idsIn(line).filter((id) => !id.endsWith("-line") && !id.endsWith("-line-path")), ["files-top", "files-back-terminal", "files-up", "files-actions"]);
+  const header = idsIn(tree).slice(0, idsIn(tree).indexOf("files-line"));
+  assert.deepEqual(header.slice(1), ["files-refresh", "files-local-toggle", "files-settings"]);
+  assert.deepEqual(argsOf(byId(tree, "files-refresh"), "tooltip")[0], ["Refresh all trees"]);
+  assert.deepEqual(argsOf(byId(tree, "files-actions"), "tooltip")[0], ["Folder actions"]);
+  assert.ok(iconOf(byId(tree, "files-actions"))[0].endsWith("/ellipsis.svg"));
+});
+
+test("#112 local terminal: laptop + This Mac, Back stays, no close button", async () => {
+  host({ machine: null, listings: { [UP]: list("a.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  await settle();
+  const tree = self.render(cx);
+  const line = byId(tree, "files-line");
+  assert.ok(iconOf(line)[0].endsWith("/laptop.svg"));
+  assert.ok(texts(line).includes("This Mac"));
+  assert.deepEqual(idsIn(line).filter((id) => !id.endsWith("-line") && !id.endsWith("-line-path")), ["files-top", "files-back-terminal", "files-up", "files-actions"]);
+  assert.deepEqual(idsIn(tree).slice(1, idsIn(tree).indexOf("files-line")), ["files-refresh", "files-local-toggle", "files-settings"]);
+});
+
+test("#112 Refresh in the header reloads every shown tree and drops their sizes", async () => {
+  const { log, store } = host({ store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  const tree = await show(self, cx);
+  store["filer-pro.sizes"] = { [sizeKey(null, `${LOW}/x`)]: { state: "done", bytes: 5, at: Date.now() }, [sizeKey("box", `${UP}/y`)]: { state: "done", bytes: 6, at: Date.now() } };
+  const upBefore = listsOf(log, UP).length, lowBefore = listsOf(log, LOW).length;
+  handler(byId(tree, "files-refresh"), "on_click")({}, cx);
+  await settle();
+  assert.ok(listsOf(log, LOW).length > lowBefore);
+  assert.ok(log.execs.filter((e) => e.args?.[3] === UP).length > 0 && listsOf(log, UP).length >= upBefore);
+  assert.equal(Object.keys(store["filer-pro.sizes"]).length, 0);
+});
+
+test("#112 Folder actions opens the folder menu of its own tree, the same as the free-area menu", async () => {
+  const { log } = host({ store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
+  const cx = fakeCx(), self = panel();
+  self.refresh(cx);
+  const tree = await show(self, cx);
+  for (const [btn, area, want] of [["files-actions", "files-tree", { tree: "follow", machine: "box", root: UP }], ["local-files-actions", "files-tree-local", { tree: "pinned", machine: null, root: LOW }]]) {
+    log.overlays.length = 0;
+    handler(byId(tree, btn), "on_click")({}, cx);
+    handler(byId(tree, area), "on_mouse_down")({}, cx);
+    const [a, b] = log.overlays;
+    assert.deepEqual(a, b);
+    assert.deepEqual({ scope: a.props.scope, tree: a.props.tree, machine: a.props.machine ?? null, root: a.props.root, folder: a.props.folder, hidden: a.props.hidden }, { scope: "root", ...want, folder: want.root, hidden: false });
+  }
+  log.overlays.length = 0;
+  handler(byId(tree, "files-actions"), "on_click")({}, cx);
+  handler(byId(tree, "local-files-actions"), "on_click")({}, cx);
+  // machine tree: Upload Folder… (Upload File… needs pickFiles), New Folder…, Paste, Open in, Select Files, Show Hidden Files
+  assert.equal(log.overlays[0].height, 12 + 6 * 28 + 3 * 7);
+  // This Mac: New Folder…, Paste, Show in Finder, Open in, Select Files, Show Hidden Files
+  assert.equal(log.overlays[1].height, 12 + 6 * 28 + 2 * 7);
 });
 
 test("#101 the toggle sits left of the gear and does not move when the lower tree opens", async () => {
@@ -326,21 +379,6 @@ test("#101 upper tree local: laptop + This Mac in both lines", async () => {
     assert.ok(iconOf(byId(tree, id))[0].endsWith("/laptop.svg"), id);
     assert.ok(texts(byId(tree, id)).includes("This Mac"), id);
   }
-});
-
-test("#101 Refresh in the lower line reloads only the lower tree and drops its sizes only", async () => {
-  const { log, store } = host({ store: { [KEY]: SHOWN }, listings: { [UP]: list("a.txt"), [LOW]: list("b.txt") } });
-  const cx = fakeCx(), self = panel();
-  self.refresh(cx);
-  const tree = await show(self, cx);
-  store["filer-pro.sizes"] = { [sizeKey(null, `${LOW}/x`)]: { state: "done", bytes: 5, at: Date.now() }, [sizeKey("box", `${UP}/y`)]: { state: "done", bytes: 6, at: Date.now() } };
-  const upBefore = listsOf(log, UP).length, lowBefore = listsOf(log, LOW).length;
-  handler(byId(tree, "local-files-refresh"), "on_click")({}, cx);
-  await settle();
-  assert.ok(listsOf(log, LOW).length > lowBefore);
-  assert.equal(listsOf(log, UP).length, upBefore);
-  assert.equal(Object.keys(store["filer-pro.sizes"]).length, 1);
-  assert.ok(store["filer-pro.sizes"][sizeKey("box", `${UP}/y`)]);
 });
 
 test("#101 Show as Root from the lower tree's menu moves only the lower tree, also when both trees show the folder", async () => {
@@ -471,7 +509,7 @@ const argsOf = (el, name) => el.calls.filter(([k]) => k === name).map(([, ...a])
 const sizesOf = (line) => ({
   own: ["h", "px", "gap", "text_size"].map((k) => argsOf(line, k)[0]),
   icons: [...walk(line)].filter((e) => e.kind === "svg").map((e) => argsOf(e, "size")[0]),
-  buttons: [...walk(line)].filter((e) => e.kind === "div" && /^(local-)?files-(top|up|refresh|back-terminal)$/.test(idOf(e) ?? "")).map((e) => [argsOf(e, "w")[0], argsOf(e, "h")[0]]),
+  buttons: [...walk(line)].filter((e) => e.kind === "div" && /^(local-)?files-(top|up|actions|back-terminal|close)$/.test(idOf(e) ?? "")).map((e) => [argsOf(e, "w")[0], argsOf(e, "h")[0]]),
 });
 
 test("#101 both location lines are built with the same size parameters (height, padding, gap, text, glyphs, buttons)", async () => {
@@ -502,7 +540,8 @@ test("#101 the lower line ends in a x that hides the lower tree like the header 
   assert.deepEqual(argsOf(close, "tooltip")[0], ["Hide This Mac"]);
   handler(close, "on_click")({}, cx);
   assert.equal(store[KEY].shown, false);
-  assert.equal(byId(self.render(cx), "files-line"), undefined);
+  assert.equal(byId(self.render(cx), "local-files-line"), undefined);
+  assert.ok(byId(self.render(cx), "files-line"), "the upper line stays (#112)");
   assert.equal(argsOf(byId(self.render(cx), "files-local-toggle"), "tooltip")[0][0], "Show This Mac");
   handler(byId(self.render(cx), "files-local-toggle"), "on_click")({}, cx);
   assert.equal(store[KEY].shown, true);

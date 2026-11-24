@@ -104,7 +104,7 @@ const UP = "filer-pro-menu-upload";
 const click = async (view) => { called(findId(view, UP), "on_click")[0][0]({}, cx); await settle(); };
 const fresh = () => { host.requests = []; host.picks = []; host.closed = 0; host.pick = null; };
 
-test("the row and free-area menus offer Upload File… and are one entry taller", async () => {
+test("#112 Upload File… and Upload Folder… only in the folder menu of a machine tree, not in row menus", async () => {
   fresh();
   const self = await panel();
   rightClick(findId(self.render(cx), "file-a.md"));
@@ -112,22 +112,20 @@ test("the row and free-area menus offer Upload File… and are one entry taller"
   const state = { paste: { enabled: false }, ...rowMenuState({ name: "a.md", isDir: false }) };
   assert.equal(row.height, menuHeight(rowMenuItems(state)));
   rightClick(findId(self.render(cx), "files-tree"));
-  assert.equal(host.overlays.at(-1).height, 166);
+  assert.equal(host.overlays.at(-1).height, 194);
   assert.equal(findId(popup({}), UP), null);
   assert.equal(findId(rootPopup(), UP), null);
   const m = { machine: "box", root: "/srv", folder: "/srv", path: "/srv/x.md" };
-  assert.ok(findId(popup(m), UP));
+  assert.equal(findId(popup(m), UP), null);
+  assert.equal(findId(popup({ ...m, path: "/srv", isDir: true }), "filer-pro-menu-upload-folder"), null);
   assert.ok(findId(rootPopup({ machine: "box", root: "/srv", folder: "/srv" }), UP));
-  assert.ok(findId(popup(m), "filer-pro-menu-upload-folder"));
+  assert.ok(findId(rootPopup({ machine: "box", root: "/srv", folder: "/srv" }), "filer-pro-menu-upload-folder"));
 });
 
-test("pick sends exactly the drop request: file row, folder row, free area, machine tree", async () => {
+test("pick sends exactly the drop request into the tree's folder", async () => {
   const paths = ["/Users/m/a.txt", "/Users/m/b.txt"];
   const cases = [
-    [{ machine: "box", path: "/srv/in/a.md", isDir: false, folder: "/srv/in", root: "/srv" }, { on: "box", root: "/srv", rowPath: "in/a.md", rowIsDir: false }],
-    [{ machine: "box", path: "/srv/in", isDir: true, folder: "/srv/in", root: "/srv" }, { on: "box", root: "/srv", rowPath: "in", rowIsDir: true }],
     [{ machine: "box", scope: "root", path: undefined, isDir: undefined, folder: "/srv", root: "/srv" }, { on: "box", root: "/srv", rowPath: null, rowIsDir: false }],
-    [{ machine: "box", path: "/srv/x.md", isDir: false, folder: "/srv", root: "/srv" }, { on: "box", root: "/srv", rowPath: "x.md", rowIsDir: false }],
   ];
   for (const [props, drop] of cases) {
     fresh(); host.pick = paths;
@@ -141,7 +139,7 @@ test("pick sends exactly the drop request: file row, folder row, free area, mach
 test("cancel (null or empty) sends nothing, shows no toast and closes the menu", async () => {
   for (const pick of [null, []]) {
     fresh(); host.pick = pick; host.notes = [];
-    await click(popup({ machine: "box" }));
+    await click(rootPopup({ machine: "box" }));
     assert.deepEqual(host.requests, []);
     assert.deepEqual(host.notes, []);
     assert.equal(host.closed, 1);
@@ -178,9 +176,9 @@ test("#111 Download to This Mac downloads into the lower root", async () => {
 test("#111 Upload Folder… picks one folder like a drop; cancel sends nothing", async () => {
   fresh();
   globalThis.__impl.pickFolder = async (o) => { host.picks.push(o); return "/Users/m/dir"; };
-  await act(popup({ machine: "box", path: "/srv/in", isDir: true, folder: "/srv/in", root: "/srv" }), "filer-pro-menu-upload-folder");
+  await act(rootPopup({ machine: "box", folder: "/srv", root: "/srv" }), "filer-pro-menu-upload-folder");
   assert.deepEqual(host.picks, [{ prompt: "Upload" }]);
-  assert.deepEqual(host.requests, [dropRequest({ on: "box", root: "/srv", rowPath: "in", rowIsDir: true, paths: ["/Users/m/dir"] })]);
+  assert.deepEqual(host.requests, [dropRequest({ on: "box", root: "/srv", rowPath: null, rowIsDir: false, paths: ["/Users/m/dir"] })]);
   fresh();
   globalThis.__impl.pickFolder = async () => null;
   await act(rootPopup({ machine: "box", folder: "/srv", root: "/srv" }), "filer-pro-menu-upload-folder");
@@ -192,4 +190,16 @@ test("#111 every row carries a tooltip with its full name", async () => {
   const self = await panel();
   const row = findId(self.render(cx), "file-a.md");
   assert.deepEqual(called(row, "tooltip"), [["a.md"]]);
+});
+
+test("#112 Show in Finder in the folder menu of a local tree reveals the tree's folder", async () => {
+  const execs = [];
+  const prev = globalThis.__impl.exec;
+  globalThis.__impl.exec = async (cmd, args) => { execs.push([cmd, args]); return { code: 0, stdout: "", stderr: "" }; };
+  fresh();
+  await act(rootPopup({ root: "/Users/e/Down", folder: "/Users/e/Down" }), "filer-pro-menu-reveal");
+  globalThis.__impl.exec = prev;
+  assert.deepEqual(execs, [["open", ["-R", "/Users/e/Down"]]]);
+  assert.equal(host.closed, 1);
+  assert.equal(findId(rootPopup({ machine: "box", root: "/srv", folder: "/srv" }), "filer-pro-menu-reveal"), null);
 });

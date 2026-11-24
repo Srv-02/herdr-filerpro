@@ -65,8 +65,11 @@ Then click `Filer Pro` in the tab bar. To update, install the new version the sa
 
 The tree shows the folder of the focused terminal, locally or on its machine.
 
-- **Row menu:** right click for open, edit, calculate size, show as root (folders), download, extract (archives only, locally and on machines), copy, paste, rename, permissions and delete.
-- **Free area menu:** right click the free area below the tree for `Settings…` and **Open in &lt;editor&gt;** for the shown folder.
+- **Header:** the title, the shown folder's name, **Refresh all trees**, **Show This Mac** (the lower tree) and the gear for Settings. These never move.
+- **Location line:** above every tree, also without the lower tree. It shows the place (a server icon and the machine name, or a laptop icon and **This Mac**), the folder, then Go to `/`, **Back to the terminal's folder** (upper tree only), Up and **Folder actions** (`…`). The path is cut first when the panel is narrow; the icons never wrap.
+- **Folder actions:** the `…` button, or a right click in the free area below the tree, opens the menu for the folder the tree shows: **Upload File…** and **Upload Folder…** (machine trees), **New Folder…**, **Paste**, **Show in Finder** (trees on this computer), **Open in &lt;editor&gt;**, **Select Files** and **Show Hidden Files**.
+- **Show Hidden Files:** checked while hidden files show. A click flips **Hide hidden files** (`hide_dotfiles`), saves it like the Settings dialog and reloads all trees.
+- **Row menu:** right click for open, edit, calculate size, show as root (folders), download (machine trees only), extract (archives only, locally and on machines), copy, paste and new folder (folder rows, inside that folder), rename, permissions and delete. It acts on the row only: no Upload entries, and on this computer no Download or Download to….
 - **Apps and packages:** apps and other macOS packages show as files. A double click starts them, and Show Package Contents looks inside.
 - **Select several rows:** pick **Select Files** in a row menu or in the free area menu. Every row then shows a checkbox. A click on a row toggles it, a click on the arrow still opens and closes a folder, and **Done** in the selection bar ends the mode and clears the selection. **Select Files** on a row adds that row to a selection that already exists. The entry is also in the menu while **Select several files with Cmd and Shift** is off, and it is hidden while the mode runs.
 - **Select with Cmd and Shift:** turn on **Select several files with Cmd and Shift** in Settings (File list). **Cmd+click** then adds or removes a file or folder and **Shift+click** selects every visible row from the last added row to the clicked one. A second Shift+click moves only the end of the range. A double click does not toggle twice. You can pick other clicks in Settings. Without a usable last row (none yet, or hidden by a collapse) Shift+click works like Cmd+click.
@@ -102,7 +105,7 @@ With **Show file sizes** on (Settings, File list; on by default):
 
 ### Navigating above the terminal's folder
 
-Three icons in the header take you above the terminal's folder without leaving the terminal. They never move.
+Three icons in the location line take you above the terminal's folder without leaving the terminal. They never move.
 
 | Icon | Where | What it does |
 |---|---|---|
@@ -110,7 +113,7 @@ Three icons in the header take you above the terminal's folder without leaving t
 | **Back to the terminal's folder** | the folder tree icon between the slash and Up | Shows the folder the terminal is in now. Always there, dimmed while the tree shows the terminal's folder |
 | **Up one level** | the bent arrow right of the folder name | Each click shows the parent folder |
 
-- The header then shows the path of the shown folder (from `~`, cut at the front when the panel is narrow; none at `/`).
+- The location line shows the path of the shown folder (from `~` on this computer, cut at the front when the panel is narrow).
 - The tree stays where you navigated, also when you `cd` in the terminal, until you click **Back to the terminal's folder**.
 - The navigated folder belongs to the terminal you navigated from: another terminal shows its own folder, and switching back shows the navigated one again.
 - Expanded folders and the open file are kept where they lie inside the new folder.
@@ -128,10 +131,10 @@ Three icons in the header take you above the terminal's folder without leaving t
 
 The button left of the gear in the header (**Show This Mac**) opens a second tree under the first one, on this computer. It works with a local terminal too. The first tree keeps following the terminal. The lower tree is always this computer and does not follow the focus. One lower tree serves all spaces and panel copies.
 
-- **Start folder:** it opens in the folder you set as **Start folder for This Mac** in Settings (Downloads). Empty means the download folder. If you change the setting later, the lower tree goes back to the new start folder, also after you navigated it. Up, Go to `/`, **Show as Root** and a double click on a folder move it, and it keeps that folder after a restart.
+- **Start folder:** it opens in the folder you set as **Start folder for This Mac** in Settings (Downloads). Empty means your home folder. If you change the setting later, the lower tree goes back to the new start folder, also after you navigated it. Up, Go to `/`, **Show as Root** and a double click on a folder move it, and it keeps that folder after a restart.
 - **Same rules:** both trees have the same rows, menus, sizes, git marks and selection. A selection is in one tree at a time: a click in the other tree clears it, and a selection that returns with a terminal switch gives way to the lower tree's, and one selection bar sits under both trees.
 - **Between the trees:** **Copy** (or **Cut**) in one tree and **Paste** in a folder of the other moves files between this computer and a machine without the Finder, or between two folders on this computer.
-- **Location lines:** each tree has a line with its place (a server icon and the machine name, or a laptop icon and **This Mac**), its folder and its own Go to `/`, Up and Refresh. **Back to the terminal's folder** is only in the upper line. Both lines have the same height, text size and icon size. The lower line ends in a **×** (tooltip **Hide This Mac**) that hides the lower tree, like the header button.
+- **Location lines:** each tree has its own line (see [The file tree](#the-file-tree)) with its own Go to `/`, Up and **Folder actions**. **Back to the terminal's folder** is only in the upper line. Both lines have the same height, text size and icon size. The lower line ends in a **×** (tooltip **Hide This Mac**) that hides the lower tree, like the header button. **Refresh all trees** in the header reloads both.
 - **The divider:** drag it to resize. Each tree stays at least 120 px high. The sizes, the shown state and the folder are remembered.
 - **Open files:** a file opens in the viewer as before and hides both trees. `←` brings both back at their scroll positions. A file you opened from the lower tree stays open when the terminal moves to another folder or machine.
 
@@ -273,7 +276,7 @@ Right click a file to open it in VS Code, Cursor or Zed, or to edit it in vi, na
 - **Open in &lt;editor&gt;** opens the file in a GUI editor, for example **Open in VS Code**; the name follows the editor you picked.
 - **Edit in Terminal** opens a terminal editor in a new split to the right, on the file's machine.
 - Both are dimmed for folders.
-- Right click the free area below the tree for the same **Open in &lt;editor&gt;** entry, which opens the shown folder (also after Up or Go to /), locally and on SSH machines.
+- **Folder actions** (`…` in the location line) and a right click in the free area below the tree have the same **Open in &lt;editor&gt;** entry, which opens the shown folder (also after Up or Go to /), locally and on SSH machines.
 
 ### Choosing and adding editors
 
@@ -327,7 +330,7 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 ## Transfers
 
 - **Drag out:** rows are drag sources for terminals only (`drag_paths`). Dropping a row into a terminal pastes its path; a remote row keeps its machine. Dropping onto the Finder or onto the other tree cancels in Herdr 0.1.17 and 0.1.18. Between the trees use **Upload to <machine>** (lower tree), **Download to This Mac** (upper machine tree) or Copy and Paste. A selected row drags the whole selection of its tree. A drop of local files from the Finder on a tree uploads (machine tree) or copies (This Mac tree). Rows show no drop highlight.
-- Drop files from the Finder to upload, right click to download. **Upload File…** and **Upload Folder…** in the row menu (next to Download to…) and in the free-area menu (above New Folder…) open the picker and send the chosen files or the folder like a drop: into the folder of the row, or the root of the tree. They show in machine trees only (a local tree would only copy). **Upload File…** is hidden with several rows selected and needs a Herdr version with `pickFiles` (newer than 0.1.17). In the This Mac tree, **Upload to <machine>** (row and selection menu, only while the upper tree shows a machine) uploads into the folder the upper tree shows. In the upper machine tree, **Download to This Mac** (row and selection menu, only while the This Mac tree is shown) downloads into the folder the lower tree shows. Every row shows its full name as a tooltip after the pointer rests 0.5 s.
+- Drop files from the Finder to upload, right click to download. **Upload File…** and **Upload Folder…** in the Folder actions and free-area menu (on top) open the picker and send the chosen files or the folder like a drop, into the folder the tree shows. They show in machine trees only (a local tree would only copy). **Upload File…** needs a Herdr version with `pickFiles` (newer than 0.1.17). In the This Mac tree, **Upload to <machine>** (row and selection menu, only while the upper tree shows a machine) uploads into the folder the upper tree shows. In the upper machine tree, **Download to This Mac** (row and selection menu, only while the This Mac tree is shown) downloads into the folder the lower tree shows. Every row shows its full name as a tooltip after the pointer rests 0.5 s.
 - Every transfer shows progress and can be cancelled.
 - **Cut** on one side and **Paste** on the other moves: see [Move between machines](#move-between-machines).
 - Nothing is overwritten without asking.
@@ -375,7 +378,7 @@ Settings picks among the shipped editors and your own entries. Own entries go in
 
 ### Settings dialog
 
-Most settings can be changed in **Settings**, without a restart. Open it with the gear in the panel header while no file is open, or right click the free area below the tree and pick `Settings…`.
+Most settings can be changed in **Settings**, without a restart. Open it with the gear in the panel header while no file is open.
 
 The dialog shows, in this order:
 
@@ -421,7 +424,7 @@ All settings live in `~/.config/herdr-app/filer-pro.json`:
 |---|---|---|---|---|
 | `update_check` | Updates: Check for updates automatically | `true` | `true` / `false` | Daily update check |
 | `download_folder` | Downloads: Download folder | `~/Downloads` | not empty | Where downloads go |
-| `local_tree_folder` | Downloads: Start folder for This Mac | empty | empty or a folder | Where the lower tree opens; empty uses the download folder |
+| `local_tree_folder` | Downloads: Start folder for This Mac | empty | empty or a folder | Where the lower tree opens; empty uses your home folder |
 | `terminal_editor`, `terminal_editors`, `gui_editor`, `gui_editors` | Editors: Open in Editor, Edit in Terminal (the lists: config file only) | see [Editors](#editors) | | Edit in Terminal, Open in &lt;editor&gt; |
 | `hide_system_files` | File list: Hide system files | `true` | `true` / `false` | Hide OS clutter: `.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.DocumentRevisions-V100`, `.apdisk`, `Icon\r`, `Thumbs.db`, `desktop.ini` (the last two in any case). Hidden entries do not count against the list limits; copy, move and delete of a folder still include them |
 | `hide_dotfiles` | File list: Hide hidden files | `false` | `true` / `false` | Hide every file and folder whose name starts with a dot; while on, system files are hidden too, whatever `hide_system_files` says |

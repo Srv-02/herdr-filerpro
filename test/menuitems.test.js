@@ -2,34 +2,44 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { rowMenuItems, rowMenuState, rootMenuItems, menuHeight, MENU_WIDTH } from "../mods/filer-pro/lib/menuitems.js";
 const on = { paste: { enabled: true, reason: null } }, off = { paste: { enabled: false, reason: "Nothing to paste" } };
-test("row menu lists seventeen entries in five groups, Open first and Delete last", () => {
-  const items = rowMenuItems(on);
+test("row menu of a file on a machine lists fifteen entries in five groups, Open first and Delete last", () => {
+  const items = rowMenuItems({ ...on, remote: true });
   assert.deepEqual(items.filter((i) => !i.separator).map((i) => i.label), [
-    "Open", "Open in Preview", "Open in Editor", "Edit in Terminal", "Show in Finder", "Select Files", "Download", "Download to…", "Copy", "Cut", "Paste",
-    "Copy Path", "Copy Relative Path", "New Folder…", "Rename…", "Permissions…", "Delete…",
+    "Open", "Open in Preview", "Open in Editor", "Edit in Terminal", "Show in Finder", "Select Files", "Download", "Download to…", "Copy", "Cut",
+    "Copy Path", "Copy Relative Path", "Rename…", "Permissions…", "Delete…",
   ]);
   assert.deepEqual(items.map((i) => (i.separator ? "|" : i.action)), [
-    "open", "open_preview", "open_editor", "edit_terminal", "reveal", "select_files", "|", "download", "download_to", "|", "copy", "cut", "paste", "|",
-    "copy_path", "copy_relative_path", "|", "new_folder", "rename", "permissions", "delete",
+    "open", "open_preview", "open_editor", "edit_terminal", "reveal", "select_files", "|", "download", "download_to", "|", "copy", "cut", "|",
+    "copy_path", "copy_relative_path", "|", "rename", "permissions", "delete",
   ]);
   assert.equal(items.find((i) => i.action === "open_preview").id, "filer-pro-menu-open-preview");
   assert.equal(items.find((i) => i.action === "copy_relative_path").id, "filer-pro-menu-copy-relative-path");
   assert.equal(items.find((i) => i.action === "cut").id, "filer-pro-menu-cut");
   assert.equal(items.find((i) => i.action === "open_editor").id, "filer-pro-menu-open-editor");
   assert.equal(items.find((i) => i.action === "edit_terminal").id, "filer-pro-menu-edit-terminal");
-  assert.ok(items.filter((i) => !i.separator).every((i) => i.enabled === true));
+  assert.ok(items.filter((i) => !i.separator && i.action !== "reveal").every((i) => i.enabled === true));
 });
-test("root menu: Open in <editor> in its own group on top, then New Folder…, Paste and Select Files, then Settings…", () => {
+test("#112 folder menu: New Folder… and Paste, then Show in Finder (local), Open in <editor> and Select Files, then Show Hidden Files; no Settings…", () => {
   const map = (items) => items.map((i) => (i.separator ? "|" : [i.id, i.label, i.action, i.enabled]));
   assert.deepEqual(map(rootMenuItems({ ...on, editor: "VS Code" })), [
-    ["filer-pro-menu-open-editor", "Open in VS Code", "open_editor", true], "|",
-    ["filer-pro-menu-new-folder", "New Folder…", "new_folder", true], ["filer-pro-menu-paste", "Paste", "paste", true],
+    ["filer-pro-menu-new-folder", "New Folder…", "new_folder", true], ["filer-pro-menu-paste", "Paste", "paste", true], "|",
+    ["filer-pro-menu-reveal", "Show in Finder", "reveal", true],
+    ["filer-pro-menu-open-editor", "Open in VS Code", "open_editor", true],
     ["filer-pro-menu-select-files", "Select Files", "select_files", true], "|",
-    ["filer-pro-menu-settings", "Settings…", "settings", true],
+    ["filer-pro-menu-toggle-hidden", "Show Hidden Files", "toggle_hidden", true],
   ]);
   const dim = map(rootMenuItems({ ...on, editor: "VS Code", editorFolder: false }));
-  assert.equal(dim[0][3], false);
-  assert.deepEqual(dim.slice(1), map(rootMenuItems({ ...on, editor: "VS Code" })).slice(1));
+  assert.equal(dim[4][3], false);
+  assert.equal(rootMenuItems({ ...on, remote: true }).some((i) => i.action === "reveal"), false, "no Show in Finder on a machine");
+  assert.equal(rootMenuItems(on).some((i) => i.action === "settings"), false);
+});
+
+test("#112 Show Hidden Files is checked while hide_dotfiles is off", () => {
+  const hidden = (state) => rootMenuItems({ ...on, ...state }).find((i) => i.action === "toggle_hidden");
+  assert.equal(hidden({}).checked, true);
+  assert.equal(hidden({ hideDotfiles: false }).checked, true);
+  assert.equal(hidden({ hideDotfiles: true }).checked, false);
+  assert.equal(rowMenuItems(on).some((i) => "checked" in i), false, "row entries are not checkable");
 });
 test("the row entry names the configured editor", () => {
   const e = (state) => rowMenuItems(state)[2];
@@ -46,7 +56,7 @@ test("Open in <editor> is dimmed when the editor cannot open the file there", ()
 });
 test("paste in the root menu is dimmed without clipboard", () => {
   assert.equal(rootMenuItems(off).find((i) => i.action === "paste").enabled, false);
-  assert.equal(rowMenuItems(off).find((i) => i.action === "paste").enabled, false);
+  assert.equal(rowMenuItems({ ...off, isDir: true }).find((i) => i.action === "paste").enabled, false);
   assert.equal(rowMenuItems(off).find((i) => i.action === "cut").enabled, true);
 });
 test("Open, Open in Preview, Open in Editor and Edit in Terminal are dimmed for a folder, Show in Finder and Copy Path stay enabled", () => {
@@ -56,7 +66,7 @@ test("Open, Open in Preview, Open in Editor and Edit in Terminal are dimmed for 
     assert.equal(enabled(dir, a), false);
     assert.equal(enabled(file, a), true);
   }
-  for (const a of ["reveal", "copy_path", "copy_relative_path", "download", "delete"]) assert.equal(enabled(dir, a), true);
+  for (const a of ["reveal", "copy_path", "copy_relative_path", "delete"]) assert.equal(enabled(dir, a), true);
   assert.equal(enabled(file, "open"), true);
   assert.equal(enabled(file, "open_preview"), true);
   assert.equal(enabled(rowMenuItems(on), "open"), true); // isDir absent: a file
@@ -74,14 +84,20 @@ test("Show in Finder is dimmed on a machine for files and folders, Open and Open
     assert.equal(enabled(rowMenuItems({ ...on, isDir, remote: false }), "reveal"), true);
   }
   assert.equal(enabled(rowMenuItems(on), "reveal"), true); // remote absent: local
-  assert.equal(menuHeight(rowMenuItems({ ...on, remote: true })), 516);
+  assert.equal(menuHeight(rowMenuItems({ ...on, remote: true })), 460);
 });
-test("menu height matches the item count", () => {
-  assert.equal(menuHeight(rowMenuItems(on)), 516);
-  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 572, "a folder has Calculate Size (issue #58) and Show as Root (issue #90)");
-  assert.equal(menuHeight(rootMenuItems(on)), 166);
-  assert.equal(menuHeight(rootMenuItems({ ...on, editorFolder: false })), 166);
-  assert.equal(menuHeight(rowMenuItems({ ...on, editorFile: false })), 516);
+test("menu height matches the item count (#112: file and folder, machine and local, single and several)", () => {
+  assert.equal(menuHeight(rowMenuItems(on)), 397);
+  assert.equal(menuHeight(rowMenuItems({ ...on, remote: true })), 460);
+  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true })), 509, "a folder has Calculate Size (issue #58), Show as Root (issue #90), Paste and New Folder…");
+  assert.equal(menuHeight(rowMenuItems({ ...on, isDir: true, remote: true })), 572);
+  assert.equal(menuHeight(rowMenuItems({ ...on, count: 3 })), 201);
+  assert.equal(menuHeight(rowMenuItems({ ...on, count: 3, remote: true })), 264);
+  assert.equal(menuHeight(rootMenuItems(on)), 194);
+  assert.equal(menuHeight(rootMenuItems({ ...on, remote: true })), 166);
+  assert.equal(menuHeight(rootMenuItems({ ...on, remote: true, upload: true, uploadFolder: true })), 229);
+  assert.equal(menuHeight(rootMenuItems({ ...on, editorFolder: false })), 194);
+  assert.equal(menuHeight(rowMenuItems({ ...on, editorFile: false })), 397);
   assert.equal(MENU_WIDTH, 200);
 });
 
@@ -100,7 +116,7 @@ test("Permissions… is dimmed on this computer when it is Windows (no chmod the
   assert.equal(enabled({ ...on, windows: true }), false);
   assert.equal(enabled({ ...on, windows: true, remote: true }), true);
   assert.equal(enabled({ ...on, windows: false }), true);
-  assert.equal(menuHeight(rowMenuItems({ ...on, windows: true })), 516, "the height does not depend on it");
+  assert.equal(menuHeight(rowMenuItems({ ...on, windows: true })), 397, "the height does not depend on it");
 });
 
 // Issue #58: Calculate Size on folders (packages too), with the result at the right of the entry.
@@ -128,8 +144,8 @@ const AFTER_DOWNLOAD = ["download", "download_to", "|", "extract_here", "extract
 test("extract entries: an archive gets its own group between Download and Copy, locally and on a machine", () => {
   for (const remote of [false, true]) {
     const items = rowMenuItems({ ...on, isDir: false, name: "photos.tar.gz", remote });
-    const s = seq(items), i = s.indexOf("download");
-    assert.deepEqual(s.slice(i, i + AFTER_DOWNLOAD.length), AFTER_DOWNLOAD);
+    const want = remote ? AFTER_DOWNLOAD : AFTER_DOWNLOAD.slice(2), s = seq(items), i = remote ? s.indexOf("download") : s.indexOf("extract_here") - 1;
+    assert.deepEqual(s.slice(i, i + want.length), want);
     assert.equal(items.find((e) => e.action === "extract_here").label, "Extract Here");
     assert.equal(items.find((e) => e.action === "extract_to").label, 'Extract to "photos/"');
     assert.equal(items.find((e) => e.action === "extract_here").id, "filer-pro-menu-extract-here");
@@ -165,7 +181,7 @@ test("Select Files closes the first group of the row menu and follows Paste in t
   assert.equal(folder[folder.indexOf("select_files") + 1], "|");
   const pkg = actions(rowMenuItems({ ...on, isDir: true, bundle: true }));
   assert.equal(pkg[pkg.indexOf("calculate_size") + 1], "select_files");
-  assert.deepEqual(actions(rootMenuItems(on)), ["open_editor", "|", "new_folder", "paste", "select_files", "|", "settings"]);
+  assert.deepEqual(actions(rootMenuItems(on)), ["new_folder", "paste", "|", "reveal", "open_editor", "select_files", "|", "toggle_hidden"]);
   assert.equal(rowMenuItems(on).find((i) => i.action === "select_files").id, "filer-pro-menu-select-files");
   assert.equal(rowMenuItems(on).find((i) => i.action === "select_files").enabled, true);
 });
@@ -180,7 +196,7 @@ test("no Select Files entry while the mode is on, and the menus shrink by one ro
   assert.equal(rowMenuState({ name: "a" }).selecting, false);
 });
 test("#99 several rows: the short menu with eight entries, labels carry the count", () => {
-  const items = rowMenuItems({ ...on, count: 3 });
+  const items = rowMenuItems({ ...on, count: 3, remote: true });
   assert.deepEqual(items.map((i) => (i.separator ? "|" : i.action)), [
     "download", "download_to", "|", "copy", "cut", "paste", "|", "copy_path", "|", "delete", "|", "clear_selection",
   ]);
@@ -194,43 +210,61 @@ test("#99 several rows: the short menu with eight entries, labels carry the coun
 });
 test("#99 a count of one or none gives today's menu; thousands are grouped", () => {
   assert.deepEqual(rowMenuItems({ ...on, count: 1 }), rowMenuItems(on));
-  assert.equal(menuHeight(rowMenuItems({ ...on, count: 1 })), 516);
-  assert.equal(rowMenuItems({ ...on, count: 1234 })[0].label, "Download 1,234 Items");
+  assert.equal(menuHeight(rowMenuItems({ ...on, count: 1 })), 397);
+  assert.equal(rowMenuItems({ ...on, count: 1234, remote: true })[0].label, "Download 1,234 Items");
   assert.equal(rowMenuState({ name: "a", count: 3 }).count, 3);
   assert.equal(rowMenuState({ name: "a" }).count, 1);
   assert.equal(rowMenuState({ name: "a", count: 0 }).count, 1);
 });
 
-test("#27 Upload File… only with upload: row after Download to…, free area above New Folder…, heights", () => {
+test("#27 #112 Upload File… only with upload, and only in the folder menu (top), heights", () => {
   const acts = (items) => items.filter((i) => !i.separator).map((i) => i.action);
-  assert.equal(acts(rowMenuItems(on)).includes("upload"), false);
   assert.equal(acts(rootMenuItems(on)).includes("upload"), false);
-  const row = acts(rowMenuItems({ ...on, upload: true }));
-  assert.equal(row[row.indexOf("download_to") + 1], "upload");
-  assert.equal(rowMenuItems({ ...on, upload: true }).find((i) => i.action === "upload").label, "Upload File…");
-  const root = acts(rootMenuItems({ ...on, upload: true }));
-  assert.equal(root[root.indexOf("upload") + 1], "new_folder");
-  assert.equal(menuHeight(rowMenuItems({ ...on, upload: true })), 516 + 28);
-  assert.equal(menuHeight(rowMenuItems({ ...on, upload: true, isDir: true })), 572 + 28);
-  assert.equal(menuHeight(rootMenuItems({ ...on, upload: true })), 166 + 28);
-  assert.equal(acts(rowMenuItems({ ...on, upload: true, count: 2 })).includes("upload"), false);
+  for (const st of [{}, { isDir: true }, { remote: true }, { isDir: true, remote: true }, { count: 2, remote: true }]) {
+    const row = acts(rowMenuItems({ ...on, ...st, upload: true, uploadFolder: true }));
+    assert.equal(row.includes("upload") || row.includes("upload_folder"), false, JSON.stringify(st));
+  }
+  const root = rootMenuItems({ ...on, remote: true, upload: true });
+  assert.deepEqual(seq(root).slice(0, 3), ["upload", "|", "new_folder"]);
+  assert.equal(root[0].label, "Upload File…");
+  assert.equal(menuHeight(rootMenuItems({ ...on, remote: true, upload: true })), 166 + 28 + 7);
 });
 
-test("#111 Upload to / Download to This Mac after Download to…, Upload File… and Upload Folder… after them, heights", () => {
+test("#111 #112 Upload to / Download to This Mac after Download to… in the row menus, Upload Folder… in the folder menu", () => {
   const acts = (items) => items.filter((i) => !i.separator).map((i) => i.action);
-  const st = { ...on, upload: true, uploadFolder: true, uploadTo: "box", downloadHere: true };
+  const st = { ...on, remote: true, upload: true, uploadFolder: true, downloadHere: true };
   const row = acts(rowMenuItems(st));
-  assert.deepEqual(row.slice(row.indexOf("download_to"), row.indexOf("download_to") + 5), ["download_to", "upload_to", "download_here", "upload", "upload_folder"]);
-  const labels = rowMenuItems(st).filter((i) => i.action === "upload_to" || i.action === "download_here" || i.action === "upload_folder").map((i) => i.label);
-  assert.deepEqual(labels, ["Upload to box", "Download to This Mac", "Upload Folder…"]);
-  assert.equal(menuHeight(rowMenuItems(st)), 516 + 4 * 28);
+  assert.deepEqual(row.slice(row.indexOf("download_to"), row.indexOf("download_to") + 2), ["download_to", "download_here"]);
+  assert.equal(rowMenuItems(st).find((i) => i.action === "download_here").label, "Download to This Mac");
+  assert.equal(menuHeight(rowMenuItems(st)), 460 + 28);
   const multi = rowMenuItems({ ...st, count: 3 });
-  assert.deepEqual(acts(multi).slice(0, 5), ["download", "download_to", "upload_to", "download_here", "copy"]);
-  assert.equal(multi.some((i) => i.action === "upload" || i.action === "upload_folder"), false);
-  assert.equal(menuHeight(multi), menuHeight(rowMenuItems({ ...on, count: 3 })) + 2 * 28);
-  const root = acts(rootMenuItems(st));
-  assert.deepEqual(root.slice(root.indexOf("upload")), ["upload", "upload_folder", "new_folder", "paste", "select_files", "settings"]);
-  assert.equal(menuHeight(rootMenuItems({ ...on, uploadFolder: true })), 166 + 28);
+  assert.deepEqual(acts(multi).slice(0, 4), ["download", "download_to", "download_here", "copy"]);
+  assert.equal(menuHeight(multi), 264 + 28);
+  const local = { ...on, uploadTo: "box" };
+  assert.deepEqual(seq(rowMenuItems(local)).slice(6, 9), ["|", "upload_to", "|"]);
+  assert.equal(rowMenuItems(local).find((i) => i.action === "upload_to").label, "Upload to box");
+  assert.deepEqual(seq(rowMenuItems({ ...local, count: 3 })).slice(0, 3), ["upload_to", "|", "copy"]);
+  assert.deepEqual(acts(rootMenuItems(st)).slice(0, 3), ["upload", "upload_folder", "new_folder"]);
+  assert.equal(rootMenuItems(st).find((i) => i.action === "upload_folder").label, "Upload Folder…");
   const none = acts(rowMenuItems(on));
   for (const a of ["upload_to", "download_here", "upload_folder"]) assert.equal(none.includes(a), false);
+});
+
+test("#112 row menus act on the row only: file/folder x machine/local x single/several", () => {
+  const has = (state, a) => seq(rowMenuItems({ ...on, ...state })).includes(a);
+  for (const remote of [false, true]) {
+    for (const a of ["new_folder", "paste", "upload", "upload_folder"]) assert.equal(has({ remote, upload: true, uploadFolder: true }, a), false, `file ${remote} ${a}`);
+    assert.equal(has({ remote, isDir: true }, "new_folder"), true);
+    assert.equal(has({ remote, isDir: true }, "paste"), true);
+    for (const a of ["download", "download_to"]) {
+      assert.equal(has({ remote }, a), remote);
+      assert.equal(has({ remote, isDir: true }, a), remote);
+      assert.equal(has({ remote, count: 3 }, a), remote);
+    }
+  }
+  for (const state of [{}, { isDir: true }, { count: 3 }, { remote: true }, { remote: true, count: 3 }, { name: "a.zip" }]) {
+    const s = seq(rowMenuItems({ ...on, ...state }));
+    assert.notEqual(s[0], "|"); assert.notEqual(s.at(-1), "|");
+    assert.equal(s.some((x, k) => x === "|" && s[k + 1] === "|"), false, JSON.stringify(state));
+  }
 });

@@ -36,7 +36,8 @@ Then click `Filer Pro` in the tab bar.
 
 - **Your terminal's folder:** `cd` in the terminal, and the tree follows.
 - **This Mac below:** a second tree on this computer under the terminal's tree; Copy in one, Paste in the other.
-- **Navigate freely:** Up one level, Go to `/`, and one click back to the terminal's folder.
+- **Navigate freely:** Up one level, Go to `/`, and one click back to the terminal's folder, in a location line above each tree.
+- **Folder actions:** the `…` button of each tree for New Folder, Paste, Upload, Show in Finder, Open in your editor and Show Hidden Files.
 - **Sizes and git marks:** file sizes next to each name, Calculate Size for folders, `M` `A` `U` `D` from git.
 - **Always current:** follows file system events on this Mac, no polling.
 - **Select several files:** Select Files in the right-click menu, or Cmd+click and Shift+click with the switch in Settings.
@@ -87,7 +88,7 @@ Then click `Filer Pro` in the tab bar.
 
 ### Transfers
 
-- **Drop to upload** from the Finder, or **Upload File…** or **Upload Folder…** in the menu of a machine tree (the file picker needs a Herdr version with `pickFiles`), right click to download.
+- **Drop to upload** from the Finder, or **Upload File…** or **Upload Folder…** in the Folder actions of a machine tree (the file picker needs a Herdr version with `pickFiles`), right click to download.
 - **Drag out:** rows are drag sources for terminals only (the path is pasted). Between the two trees use **Upload to <machine>**, **Download to This Mac** or Copy and Paste.
 - **Progress and cancel** for every transfer, nothing overwritten without asking.
 - **Machine to machine:** Copy or Cut on one, Paste on the other, through this computer. A Cut copies, checks and then deletes the original.

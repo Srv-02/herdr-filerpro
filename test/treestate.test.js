@@ -31,8 +31,8 @@ test("writeLocalTree keeps the reference when nothing changes", () => {
   assert.equal(writeLocalTree(z, { sizes: [1, 2] }), z);
 });
 
-test("startFolder prefers local_tree_folder", () => {
-  assert.equal(startFolder({ local_tree_folder: "/a", download_folder: "/b" }), "/a");
-  assert.equal(startFolder({ local_tree_folder: "", download_folder: "/b" }), "/b");
+test("startFolder prefers local_tree_folder, else the home folder (#112)", () => {
+  assert.equal(startFolder({ local_tree_folder: "/a", download_folder: "/b" }, "/Users/e"), "/a");
+  assert.equal(startFolder({ local_tree_folder: "", download_folder: "/b" }, "/Users/e"), "/Users/e");
   assert.equal(startFolder({}), null);
 });
