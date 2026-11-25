@@ -384,7 +384,7 @@ The dialog shows, in this order:
 
 | Section | Contents |
 |---|---|
-| **Updates** | The installed version, **Check now**, and the switch for the automatic check |
+| **Updates** | A gold box with the new version, its release notes and the line for your agent (only when a new release is out), the installed version, **Check now**, and the switch for the automatic check |
 | **Downloads** | The folder, with **Choose…** for the system folder picker |
 | **Editors** | Pick the GUI and the terminal editor. Own editors are added in the config file (see [Editors](#editors)) and appear here after reopening Settings |
 | **File list** | The switches **Hide system files**, **Hide hidden files**, **Show file sizes**, **Open files with a double click**, **Open apps with a double click**, **Show folders as root with a double click**, **Select several files with Cmd and Shift**, **Click to add or remove a file**, **Click to select a range** and **Check free space before extracting**. The two click pickers are dimmed while **Select several files with Cmd and Shift** is off, and the two picks must differ. While hidden files are hidden, **Hide system files** shows on and cannot be switched |
@@ -474,14 +474,20 @@ All settings live in `~/.config/herdr-app/filer-pro.json`:
 ## Updates
 
 - The installed version is in `mods/filer-pro/mod.json` and shown at the top of Settings.
-- Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the panel header shows `● <version> available`, which opens the release page.
-- **Check now** in Settings asks at once and shows the answer there: up to date (with the time of the last check), a newer version with a link to its release page, or that GitHub could not be reached.
-- Nothing is downloaded or installed. To update, install the new version as described in [Install](#install).
+- Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the Settings gear in the panel header turns gold, with a gold dot and a slow shine; its tooltip names the version (`1.5.0 available`). While a file is open the header has no gear, so the signal shows again when you go back to the tree.
+- Settings then starts with a gold box: `Filer Pro <version> is available`, a **Release notes** link, the version you have, and the line to give your agent in Herdr, with **Copy**:
+
+  ```text
+  Update this mod: https://github.com/Srv-02/herdr-filerpro/tree/main
+  ```
+
+- **Check now** in Settings asks at once and shows the answer there: up to date (with the time of the last check), the gold box for a newer version, or that GitHub could not be reached.
+- Nothing is downloaded or installed. Your agent updates the mod, or you install the new version as described in [Install](#install).
 
 ### Privacy
 
 - The request goes to GitHub without any account or token and sends no data about you or your files, but GitHub sees your IP address.
-- To turn the daily check off, switch off **Check for updates automatically** in Settings, or set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`. Then no request is made unless you click **Check now**, and a hint already shown disappears within a second.
+- To turn the daily check off, switch off **Check for updates automatically** in Settings, or set `"update_check": false` in `~/.config/herdr-app/filer-pro.json`. Then no request is made unless you click **Check now**, and a gold gear turns plain within a second.
 - If you turn it on again, the first automatic check can take up to an hour, because the update pass runs at most hourly; **Check now** asks at once.
 
 ## What it runs and touches

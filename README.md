@@ -28,7 +28,7 @@ Read ~/.config/herdr-app/AGENTS.md, then add this mod: https://github.com/Srv-02
 Then click `Filer Pro` in the tab bar.
 
 - **Needs** Herdr on macOS. SSH machines can run Linux or macOS.
-- **Update:** the header shows `● <version> available` when a new release is out; install it the same way.
+- **Update:** the gear turns gold when a new release is out; Settings shows what to ask your agent.
 - **By hand, removing, requirements:** see the [guide](docs/GUIDE.md#install).
 
 ## Features
@@ -138,7 +138,7 @@ Then click `Filer Pro` in the tab bar.
 
 - **One dialog:** the gear in the panel header, changes apply without a restart.
 - **Your way:** one click or two for files and apps, and what the tree hides.
-- **Update check:** once a day, one switch turns it off.
+- **Update check:** once a day, one switch turns it off. A gold gear means a new release is out.
 
 ![The settings dialog: Updates, Downloads and Editors on the left, the File list switches including Show file sizes on the right](screenshots/settings.png)
 

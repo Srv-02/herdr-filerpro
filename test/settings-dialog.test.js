@@ -253,7 +253,11 @@ test("view: the update row in its four states", async () => {
   assert.ok(at(null).includes("Not checked yet.") && at(null).includes("Check now"));
   assert.ok(at({ at: Date.now(), local: "1.0.0", latest: "v1.0.0" }).some((x) => /^You’re up to date\. Last checked today at \d\d:\d\d\.$/.test(x)));
   const newer = at({ at: 1, local: "1.0.0", latest: "v1.1.0" });
-  assert.ok(newer.includes("Version 1.1.0 is available.") && newer.includes("What’s new in 1.1.0"));
+  assert.ok(newer.includes("Filer Pro 1.1.0 is available") && newer.includes("Release notes"), "the gold box");
+  assert.ok(newer.includes("You have 1.0.0. To update, ask your agent in Herdr:"));
+  assert.ok(newer.includes("Update this mod: https://github.com/Srv-02/herdr-filerpro/tree/main") && newer.includes("Copy"));
+  assert.ok(newer.includes("Check now") && newer.includes("#filer-pro-settings-version"), "the version row stays below the box");
+  assert.ok(newer.indexOf("#filer-pro-settings-update") < newer.indexOf("#filer-pro-settings-version"), "box above the version row");
   s.check = { phase: "checking" };
   assert.ok(at(null).includes("Asking GitHub for the latest version…") && at(null).includes("Checking…"));
   s.check = { phase: "failed" };
@@ -483,4 +487,26 @@ test("dialog: the lower tree's start folder row follows the download folder, wit
   const all = [...walk(v)].map((n) => n.calls?.find(([k]) => k === "id")?.[1][0]).filter(Boolean);
   assert.ok(all.indexOf("filer-pro-settings-local_tree_folder") === all.indexOf("filer-pro-settings-download_folder") + 1 || all.indexOf("filer-pro-settings-local_tree_folder") > all.indexOf("filer-pro-settings-download_folder"));
   assert.ok(byId(v, "filer-pro-settings-choose-local"));
+});
+
+test("view: the gold box shows only while a newer release is out", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  for (const stored of [null, { at: 1, local: "1.0.0", latest: "v1.0.0" }, { at: 1, local: "1.0.0", latest: null }, { at: 1, local: "1.0.0", latest: "v0.9.0" }]) {
+    const out = texts(view(s, stored));
+    assert.ok(!out.includes("#filer-pro-settings-update"), JSON.stringify(stored));
+    assert.ok(!out.some((x) => /is available/.test(x)), JSON.stringify(stored));
+  }
+  const box = byId(view(s, { at: 1, local: "1.0.0", latest: "v1.1.0" }), "filer-pro-settings-update");
+  assert.ok(box.calls.some(([k, a]) => k === "bg" && a[0] === "#f0c85a14"), "light gold background");
+  assert.ok(box.calls.some(([k, a]) => k === "border_color" && a[0] === "#f0c85a66"), "gold border");
+});
+
+test("view: Release notes opens the release page, Copy hands the prompt to onCopy", async () => {
+  const s = createSettingsDialog(await snapshot(undefined), cx);
+  const opened = [], copied = [], c = { open_url: (u) => opened.push(u) };
+  const v = settingsView(t, s, { ...noop, onCopy: (text) => copied.push(text) }, { at: 1, local: "1.0.0", latest: "v1.1.0" });
+  called(byId(v, "filer-pro-settings-notes"), "on_click")[0][0]({}, c);
+  called(byId(v, "filer-pro-settings-copy-prompt"), "on_click")[0][0]({}, c);
+  assert.deepEqual(opened, ["https://github.com/Srv-02/herdr-filerpro/releases/tag/v1.1.0"]);
+  assert.deepEqual(copied, ["Update this mod: https://github.com/Srv-02/herdr-filerpro/tree/main"]);
 });
