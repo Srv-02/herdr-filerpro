@@ -9,7 +9,7 @@ import { leaseNext, staleLegacyKeys } from "./lib/lease.js";
 import { claim, processRequest, handleRequest, closeAnswer, panelPlan, answerShow, openResult, modeResult } from "./lib/requests.js";
 import { loadConfig } from "./lib/config.js";
 import { editInTerminal, openInEditor, editorMenu } from "./lib/editors.js";
-import { createUpdateGate, updateCheck, fetchLatest, fetchRelease, localVersion, updateHint } from "./lib/update.js";
+import { createUpdateGate, updateCheck, fetchLatest, fetchRelease, localVersion, gearState, GOLD, gold } from "./lib/update.js";
 import { langOf, previewKind } from "./lib/langs.js";
 import { extOf } from "./lib/langs.js";
 import { createPerf, lagProbe, PERF_DIR, PERF_FILE } from "./lib/perf.js";
@@ -572,6 +572,10 @@ export default class FilerPro extends View {
           close();
         }),
         onCheck: (cx) => this.checkNow(cx),
+        // The update prompt of the gold box: to the clipboard, then a short toast (a failure has its own).
+        onCopy: (text, cx) => writeClipboard(text, { cx, exec, notify, platform }).then((r) => {
+          if (r.ok) notify({ title: "Copied", body: "Paste it to your agent in Herdr.", level: "success", timeout: 2500 });
+        }),
         onChoose: (cx, key) => this.chooseFolder(cx, key),
       }, shared("filer-pro.update"));
     }
@@ -2216,11 +2220,17 @@ export default class FilerPro extends View {
   }
 
   // The Settings button in the panel header while no file is open: a gear in a 24px hit area, muted at rest.
-  gear(t) {
-    return div().id("files-settings").w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
-      .hover((s) => s.bg(t.hover)).tooltip("Settings").accessibility_label("Settings")
+  // state: gearState (lib/update.js). While a newer release is out: gold icon, a light gold background, a gold dot top
+  // right and a slow shine (a gold layer whose opacity loops every 2.4 s, natively: no render runs for it).
+  gear(t, state = { update: false, tip: "Settings" }) {
+    const on = state.update === true;
+    return div().id("files-settings").relative().w(24).h(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .when(on, (e) => e.bg(gold("1a")))
+      .hover((s) => s.bg(on ? gold("33") : t.hover)).tooltip(state.tip).accessibility_label(on ? `Settings, ${state.tip}` : "Settings")
       .on_click(() => { this.openSettings().catch((e) => notify({ title: "Settings", body: String(e?.message ?? e), level: "error" })); })
-      .child(svg(`${BASE}/settings.svg`).size(14).text_color(t.muted));
+      .when(on, (e) => e.child(div().id("files-settings-shine").absolute().top(0).left(0).size(24).rounded(6).bg(gold("38")).loop("opacity", { from: 0.15, to: 1, period: 2400 })))
+      .child(svg(`${BASE}/settings.svg`).size(14).text_color(on ? GOLD : t.muted))
+      .when(on, (e) => e.child(div().id("files-settings-dot").absolute().top(2).right(2).size(6).rounded(3).bg(GOLD)));
   }
 
   // The fullscreen dialog (props view "file"): the same header buttons and viewer as the panel, plus Close. Esc closes a
@@ -2491,8 +2501,8 @@ export default class FilerPro extends View {
     this.syncPinned(cx);
     const t = theme(), dark = Boolean(settings().dark);
     if (this.doc?.diagrams && this.previewer && this.colorKey !== this.previewer.colorKey(t)) this.renderDiagrams(cx);
-    // update_check false hides the hint at once; the stored result is cleared by the next hourly pass.
-    const update = this.conf.update_check ? updateHint(shared("filer-pro.update"), this.version) : null;
+    // update_check false makes the gear plain at once; the stored result is cleared by the next hourly pass.
+    const gear = gearState(shared("filer-pro.update"), this.version, Boolean(this.conf.update_check));
     const bar = transfersBar(shared("filer-pro.jobs"), t, { onCancel: (id) => this.jobs.cancel(id).catch(() => {}), onDismiss: (id) => this.jobs.dismiss(id) });
     const trees = this.shownTrees(), local = this.localTree(), selTree = this.selectionTree() ?? this.trees.follow;
     const sel = this.file ? null : selectionBar(t, { count: selTree.selected?.size ?? 0, selecting: selTree.selecting === true }, {
@@ -2504,11 +2514,10 @@ export default class FilerPro extends View {
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => this.requestLeave((cx) => { this.show(null); cx.notify(); }, cx)).child("←")))
         .child(div().flex_none().font_semibold().child("Filer Pro"))
-        .when(Boolean(update), el => el.child(this.tool("files-update", div().text_color(t.ansi4).child(`● ${update.version} available`), t, (cx) => cx.open_url(update.url)).flex_none()))
         .child(this.fileTitle(t, dark, true))
         .child(this.refreshButton(t))
         .when(!this.file, el => el.child(this.localToggle(t)))
-        .when(!this.file, el => el.child(this.gear(t)))
+        .when(!this.file, el => el.child(this.gear(t, gear)))
         .children(this.previewTools(t))
         .children(this.editTools(t))
         .when(Boolean(this.file) && Boolean(this.full), el => el.child(div().id("files-full").px(7).py(2).rounded(6).text_color(t.dim).tooltip("Open in full screen").child(svg(`${BASE}/maximize.svg`).size(13))))

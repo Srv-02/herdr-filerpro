@@ -116,17 +116,18 @@ test("settings: list limits cut the entries, tree_depth stops the rows, the limi
   assert.ok(texts(self.render(cx)).includes("File list limited to 10 entries per folder and 100 total"));
 });
 
-test("settings: update_check false hides the update hint in the header at the next render", () => {
+test("settings: update_check false makes the gold gear plain at the next render", () => {
   const release = { at: 1, local: "1.0.0", latest: "v9.9.9" };
   const draw = (cfg) => {
     host({ files: { "/app/mods/filer-pro/mod.json": '{"version":"1.0.0"}' }, store: { "filer-pro.update": release } });
     const self = panel(cfg);
     Object.assign(self, { reload: { signal: () => false, take: () => false }, saved: new Map(), jobs: {}, perf: null, root: "/data", on: null, file: null, marks: {}, version: "1.0.0" });
     self.context = { key: JSON.stringify({ cwd: "/data", on: null, space: "s1" }), cwd: "/data", on: null };
-    return texts(self.render(fakeCx().cx));
+    const gear = byId(self.render(fakeCx().cx), "files-settings");
+    return gear.calls.find(([k]) => k === "tooltip")[1];
   };
-  assert.ok(draw({ update_check: true }).includes("● 9.9.9 available"), "control: the hint shows while the check is on");
-  assert.ok(!draw({ update_check: false }).some((t) => String(t).includes("available")), "no hint once update_check is false");
+  assert.equal(draw({ update_check: true }), "9.9.9 available", "control: gold while the check is on");
+  assert.equal(draw({ update_check: false }), "Settings", "plain once update_check is false");
 });
 
 test("settings: the refresh tick follows refresh_seconds, and a saved dialog reloads the config at once", async () => {
@@ -254,6 +255,43 @@ test("settings: the panel header has a gear with the tooltip Settings while no f
   assert.equal(byId(self.render(cx), "files-settings"), undefined);
 });
 
+test("settings: the gear turns gold with a dot and a slow shine while a newer release is out, plain otherwise", async () => {
+  const store = { "filer-pro.update": { at: 1, local: "1.0.0", latest: "v1.1.0" } };
+  host({ store });
+  const self = panel({ update_check: true });
+  Object.assign(self, { reload: { signal: () => false, take: () => false }, saved: new Map(), jobs: {}, perf: null, root: "/data", on: null, file: null, marks: {}, version: "1.0.0" });
+  self.context = { key: JSON.stringify({ cwd: "/data", on: null, space: "s1" }), cwd: "/data", on: null };
+  const { cx } = fakeCx();
+  const tree = self.render(cx), gear = byId(tree, "files-settings");
+  assert.ok(gear.calls.some(([k, a]) => k === "tooltip" && a === "1.1.0 available"), "tooltip with the version");
+  assert.ok(gear.calls.some(([k, a]) => k === "bg" && a === "#f0c85a1a"), "light gold background");
+  const icon = gear.kids.find((k) => k.kind === "svg");
+  assert.ok(icon.calls.some(([k, a]) => k === "text_color" && a === "#f0c85a"), "gold icon");
+  assert.ok(byId(tree, "files-settings-dot").calls.some(([k, a]) => k === "bg" && a === "#f0c85a"), "gold dot");
+  const shine = byId(tree, "files-settings-shine");
+  assert.ok(shine.calls.some(([k, a, b]) => k === "loop" && a === "opacity" && b.period === 2400), "native 2.4 s shine");
+  assert.ok(!texts(tree).some((x) => /available/.test(x)), "no text hint in the header any more");
+  assert.equal(byId(tree, "files-update"), undefined);
+  for (const plain of [() => { self.cfg.update_check = false; }, () => { self.cfg.update_check = true; self.version = "1.1.0"; }, () => { delete store["filer-pro.update"]; }]) {
+    plain();
+    const t2 = self.render(cx), g = byId(t2, "files-settings");
+    assert.ok(g.calls.some(([k, a]) => k === "tooltip" && a === "Settings"));
+    assert.ok(!g.calls.some(([k]) => k === "bg"));
+    assert.equal(byId(t2, "files-settings-dot"), undefined);
+    assert.equal(byId(t2, "files-settings-shine"), undefined);
+  }
+});
+
+test("settings dialog in main.js: Copy puts the update prompt on the clipboard and confirms it", async () => {
+  const { h, cx, self } = await dialog({}, { "filer-pro.update": { at: 1, local: "1.0.0", latest: "v1.1.0" } });
+  const clip = [];
+  const c = { ...cx, write_to_clipboard: (x) => clip.push(x) };
+  click(byId(self.overlayView(cx), "filer-pro-settings-copy-prompt"), c);
+  await settle();
+  assert.deepEqual(clip, ["Update this mod: https://github.com/Srv-02/herdr-filerpro/tree/main"]);
+  assert.equal(h.log.notes.at(-1).title, "Copied");
+});
+
 test("settings dialog in main.js: Save writes the changed key with expected, signals the panels and closes", async () => {
   const before = '{"mine":true}';
   const h = host({ props: { overlay: "dlg1", view: "settings" }, files: { "/app/filer-pro.json": before } });
@@ -348,8 +386,8 @@ test("settings dialog: Check now asks GitHub, shows a newer release, and stores 
   assert.equal(h.store["filer-pro.update"].latest, "v1.1.0");
   assert.equal(h.store["filer-pro.update"].local, "1.0.0");
   const out = texts(self.overlayView(cx));
-  assert.ok(out.includes("Version 1.1.0 is available."));
-  assert.ok(out.includes("What’s new in 1.1.0"));
+  assert.ok(out.includes("Filer Pro 1.1.0 is available"));
+  assert.ok(out.includes("Release notes"));
 });
 
 test("settings dialog: Check now offline shows the failure and keeps the last known release", async () => {

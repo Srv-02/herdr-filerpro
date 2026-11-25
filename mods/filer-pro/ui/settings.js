@@ -9,11 +9,11 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar } from "gpui-base";
 import { SETTINGS, ADVANCED, validateField, changedEdits, saveSettings, group, clickProblem } from "../lib/settings.js";
 import { TERMINAL_EDITORS, GUI_EDITORS } from "../lib/editors.js";
-import { updateHint } from "../lib/update.js";
+import { updateHint, GITHUB_URL, UPDATE_PROMPT, GOLD, gold } from "../lib/update.js";
 import { BASE } from "../lib/icons.js";
 
 export const CONFIG_PATH = "~/.config/herdr-app/filer-pro.json";
-export const GITHUB_URL = "https://github.com/Srv-02/herdr-filerpro";
+export { GITHUB_URL, UPDATE_PROMPT };
 export const COFFEE_URL = "https://www.buymeacoffee.com/michaelmayer";
 export const EDITORS_DOC_URL = `${GITHUB_URL}/blob/main/docs/GUIDE.md#editors`;
 export const SVG_WARNING = "A specially prepared SVG image can load content from the internet, slip in code, or grow so large that Filer Pro freezes. With the check off, you open SVG files at your own risk.";
@@ -207,12 +207,32 @@ function numberRow(t, state, s, last) {
     [input(t, f, 84), div().w(92).text_size(12.5).text_color(t.muted).child(s.unit)], { last, error: f.error });
 }
 
-function updatesRow(t, state, handlers, status) {
+// The gold box of a new release, above the version row: what is out, the release notes, and what to ask the agent.
+function availableBox(t, state, handlers, status) {
+  return v_flex().id("filer-pro-settings-update").gap(10).mt(4).mb(6).px(18).py(16).rounded(10).border_1().border_color(gold("66")).bg(gold("14"))
+    .child(h_flex().gap(10).items_center()
+      .child(icon("settings", 18, GOLD))
+      .child(div().flex_1().min_w(0).text_size(15).font_medium().text_color(GOLD).child(`Filer Pro ${status.version} is available`))
+      .child(div().id("filer-pro-settings-notes").text_size(12.5).text_color(GOLD).cursor_pointer().hover((s) => s.underline())
+        .on_click((_e, cx) => cx.open_url(status.url)).child("Release notes")))
+    .child(help(t, `You have ${state.version}. To update, ask your agent in Herdr:`, t.foreground))
+    .child(h_flex().gap(8).items_center()
+      .child(div().id("filer-pro-settings-prompt").flex_1().min_w(0).truncate().px(10).py(8).rounded(7).bg(t.background).border_1().border_color(gold("44"))
+        .font_family("JetBrains Mono").text_size(12).text_color(t.foreground).child(UPDATE_PROMPT))
+      .child(h_flex().id("filer-pro-settings-copy-prompt").px(12).py(5).items_center().rounded(7).cursor_pointer().text_size(13)
+        .border_1().border_color(gold("88")).text_color(GOLD).hover((s) => s.opacity(0.88))
+        .on_click((_e, cx) => handlers.onCopy?.(UPDATE_PROMPT, cx)).child("Copy")));
+}
+
+// The version row: the installed version, when it was last checked, and Check now. A new release shows in the gold
+// box above it (availableBox), so here it only says when the check ran.
+function updatesRow(t, state, handlers, status, stored) {
   const title = state.version ? `Filer Pro ${state.version}` : "Filer Pro";
+  const shownAt = state.check?.phase === "done" ? state.check.state?.at : stored?.at;
   const line = {
     checking: () => help(t, "Asking GitHub for the latest version…"),
     failed: () => help(t, "Could not reach GitHub. Check your connection and try again.", t.ansi1),
-    available: () => h_flex().gap(6).items_center().child(div().w(7).h(7).flex_none().rounded(4).bg(t.accent)).child(help(t, `Version ${status.version} is available.`, t.foreground)),
+    available: () => help(t, typeof shownAt === "number" ? `Last checked ${checkedAt(shownAt, Date.now())}.` : "Not checked yet."),
     uptodate: () => h_flex().gap(6).items_center().child(icon("check", 13, t.ansi2)).child(help(t, `You’re up to date. Last checked ${checkedAt(status.at, Date.now())}.`)),
     unchecked: () => help(t, "Not checked yet."),
   }[status.kind]();
@@ -220,11 +240,7 @@ function updatesRow(t, state, handlers, status) {
     checking: () => h_flex().id("filer-pro-settings-checking").px(12).py(5).gap(6).items_center().text_size(13).text_color(t.muted)
       .child(icon("loader-circle", 13, t.muted).spin(900)).child("Checking…"),
     failed: () => button(t, "filer-pro-settings-retry", "Try again", handlers.onCheck),
-    available: () => button(t, "filer-pro-settings-release", h_flex().gap(6).items_center().child(`What’s new in ${status.version}`).child(icon("external-link", 13, t.accent_foreground)),
-      (cx) => cx.open_url(status.url), true),
-    uptodate: () => button(t, "filer-pro-settings-check", "Check now", handlers.onCheck),
-    unchecked: () => button(t, "filer-pro-settings-check", "Check now", handlers.onCheck),
-  }[status.kind]();
+  }[status.kind]?.() ?? button(t, "filer-pro-settings-check", "Check now", handlers.onCheck);
   return row(t, "filer-pro-settings-version", title, line, [control]);
 }
 
@@ -280,9 +296,11 @@ function body(t, state, handlers, stored) {
   const f = state.fields.download_folder, dl = SETTINGS.find((s) => s.key === "download_folder");
   const lf = state.fields.local_tree_folder, lt = SETTINGS.find((s) => s.key === "local_tree_folder");
   const svgOn = state.flags.svg_check === true, warn = svgOn ? t.ansi3 : t.ansi1;
+  const status = updateStatus(state.check, stored, state.version);
   const items = [
     heading(t, "Updates", true),
-    updatesRow(t, state, handlers, updateStatus(state.check, stored, state.version)),
+    ...(status.kind === "available" ? [availableBox(t, state, handlers, status)] : []),
+    updatesRow(t, state, handlers, status, stored),
     switchRow(t, state, "update_check", { last: true }),
 
     heading(t, "Downloads"),
@@ -357,7 +375,7 @@ function body(t, state, handlers, stored) {
   return items;
 }
 
-// handlers: { onCancel(), onSave(cx), onCheck(cx), onChoose(cx) }; stored: shared("filer-pro.update").
+// handlers: { onCancel(), onSave(cx), onCheck(cx), onChoose(cx), onCopy(text, cx) }; stored: shared("filer-pro.update").
 export function settingsView(t, state, handlers, stored = null) {
   const canSave = !state.busy && !state.broken;
   const bottom = (id, text, primary, enabled, action) => h_flex().id(id).h(32).px(14).items_center().rounded(8)

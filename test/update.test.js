@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   RELEASES_API, UPDATE_INTERVAL_MS, parseVersion, compareVersions, localVersion, releaseUrl, checkDue, fetchLatest, fetchRelease, updateCheck, updateHint, createUpdateGate, ATTEMPT_MS,
+  gearState, GOLD, gold, GITHUB_URL, UPDATE_PROMPT,
 } from "../mods/filer-pro/lib/update.js";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -176,4 +177,19 @@ test("createUpdateGate: only the lease holder, one pass at a time, again after a
   now += 1000;
   assert.equal(gate.take(false), false, "lease lost");
   assert.equal(gate.take(true), true, "lease taken again: at once");
+});
+
+test("gearState: gold with the version as tooltip only while a newer release is out and the check is on", () => {
+  const newer = { at: 1, local: "1.0.0", latest: "v1.1.0" };
+  assert.deepEqual(gearState(newer, "1.0.0"), { update: true, tip: "1.1.0 available", url: "https://github.com/Srv-02/herdr-filerpro/releases/tag/v1.1.0" });
+  assert.deepEqual(gearState(newer, "1.0.0", false), { update: false, tip: "Settings", url: null }, "update_check off");
+  assert.deepEqual(gearState(newer, "1.1.0"), { update: false, tip: "Settings", url: null }, "already installed");
+  assert.deepEqual(gearState(null, "1.0.0"), { update: false, tip: "Settings", url: null }, "never checked");
+});
+
+test("the gold and the update prompt", () => {
+  assert.equal(GOLD, "#f0c85a");
+  assert.equal(gold("1a"), "#f0c85a1a");
+  assert.equal(GITHUB_URL, "https://github.com/Srv-02/herdr-filerpro");
+  assert.equal(UPDATE_PROMPT, "Update this mod: https://github.com/Srv-02/herdr-filerpro/tree/main");
 });

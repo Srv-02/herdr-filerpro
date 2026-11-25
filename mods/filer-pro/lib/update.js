@@ -105,3 +105,20 @@ export function createUpdateGate(now) {
     done() { busy = false; },
   };
 }
+
+// --- what the panel and the Settings dialog show ---
+
+export const GITHUB_URL = `https://github.com/${REPO}`;
+// What to tell the agent in Herdr to update.
+export const UPDATE_PROMPT = `Update this mod: ${GITHUB_URL}/tree/main`;
+// The one color not taken from the theme: the gold of an available update (the Settings button and the dialog's box),
+// and that gold with an alpha byte ("1a" = 10 %).
+export const GOLD = "#f0c85a";
+export const gold = (a) => `${GOLD}${a}`;
+
+// The Settings button of the panel's header: gold with the version as tooltip while a newer release is out.
+// enabled: update_check; with it off the button is plain at once (the stored result is cleared by the next pass).
+export function gearState(state, local, enabled = true) {
+  const hint = enabled ? updateHint(state, local) : null;
+  return hint ? { update: true, tip: `${hint.version} available`, url: hint.url } : { update: false, tip: "Settings", url: null };
+}
