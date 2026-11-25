@@ -2219,7 +2219,8 @@ export default class FilerPro extends View {
     });
   }
 
-  // The Settings button in the panel header while no file is open: a gear in a 24px hit area, muted at rest.
+  // The Settings button in the panel header while no file is open (and, while an update is out, also with a file open):
+  // a gear in a 24px hit area, muted at rest.
   // state: gearState (lib/update.js). While a newer release is out: gold icon, a light gold background, a gold dot top
   // right and a slow shine (a gold layer whose opacity loops every 2.4 s, natively: no render runs for it).
   gear(t, state = { update: false, tip: "Settings" }) {
@@ -2517,7 +2518,8 @@ export default class FilerPro extends View {
         .child(this.fileTitle(t, dark, true))
         .child(this.refreshButton(t))
         .when(!this.file, el => el.child(this.localToggle(t)))
-        .when(!this.file, el => el.child(this.gear(t, gear)))
+        // The gear while no file is open; with a file open only while an update is out, so the gold signal always shows.
+        .when(!this.file || gear.update, el => el.child(this.gear(t, gear)))
         .children(this.previewTools(t))
         .children(this.editTools(t))
         .when(Boolean(this.file) && Boolean(this.full), el => el.child(div().id("files-full").px(7).py(2).rounded(6).text_color(t.dim).tooltip("Open in full screen").child(svg(`${BASE}/maximize.svg`).size(13))))

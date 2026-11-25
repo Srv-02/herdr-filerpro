@@ -257,7 +257,7 @@ test("settings: the panel header has a gear with the tooltip Settings while no f
 
 test("settings: the gear turns gold with a dot and a slow shine while a newer release is out, plain otherwise", async () => {
   const store = { "filer-pro.update": { at: 1, local: "1.0.0", latest: "v1.1.0" } };
-  host({ store });
+  const h = host({ store });
   const self = panel({ update_check: true });
   Object.assign(self, { reload: { signal: () => false, take: () => false }, saved: new Map(), jobs: {}, perf: null, root: "/data", on: null, file: null, marks: {}, version: "1.0.0" });
   self.context = { key: JSON.stringify({ cwd: "/data", on: null, space: "s1" }), cwd: "/data", on: null };
@@ -272,6 +272,16 @@ test("settings: the gear turns gold with a dot and a slow shine while a newer re
   assert.ok(shine.calls.some(([k, a, b]) => k === "loop" && a === "opacity" && b.period === 2400), "native 2.4 s shine");
   assert.ok(!texts(tree).some((x) => /available/.test(x)), "no text hint in the header any more");
   assert.equal(byId(tree, "files-update"), undefined);
+  // With a file open the gold gear stays, with the same tooltip, and a click opens Settings.
+  self.file = "a.txt";
+  const withFile = byId(self.render(cx), "files-settings");
+  assert.ok(withFile, "the gold gear shows with a file open");
+  assert.ok(withFile.calls.some(([k, a]) => k === "tooltip" && a === "1.1.0 available"));
+  assert.ok(withFile.calls.some(([k, a]) => k === "bg" && a === "#f0c85a1a"));
+  click(withFile, cx);
+  await settle();
+  assert.equal(h.log.overlays.at(-1)?.props.view, "settings", "a click opens Settings");
+  self.file = null;
   for (const plain of [() => { self.cfg.update_check = false; }, () => { self.cfg.update_check = true; self.version = "1.1.0"; }, () => { delete store["filer-pro.update"]; }]) {
     plain();
     const t2 = self.render(cx), g = byId(t2, "files-settings");
@@ -279,6 +289,9 @@ test("settings: the gear turns gold with a dot and a slow shine while a newer re
     assert.ok(!g.calls.some(([k]) => k === "bg"));
     assert.equal(byId(t2, "files-settings-dot"), undefined);
     assert.equal(byId(t2, "files-settings-shine"), undefined);
+    self.file = "a.txt";
+    assert.equal(byId(self.render(cx), "files-settings"), undefined, "no gear with a file open and no update");
+    self.file = null;
   }
 });
 
