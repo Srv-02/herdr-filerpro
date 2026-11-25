@@ -474,7 +474,7 @@ All settings live in `~/.config/herdr-app/filer-pro.json`:
 ## Updates
 
 - The installed version is in `mods/filer-pro/mod.json` and shown at the top of Settings.
-- Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the Settings gear in the panel header turns gold, with a gold dot and a slow shine; its tooltip names the version (`1.5.0 available`). While a file is open the header has no gear, so the signal shows again when you go back to the tree.
+- Once a day Filer Pro asks GitHub for its latest release (`api.github.com/repos/Srv-02/herdr-filerpro/releases/latest`). If it is newer, the Settings gear in the panel header turns gold, with a gold dot and a slow shine; its tooltip names the version (`1.5.0 available`). The gold gear also shows while a file is open; without an update the header of an open file has no gear.
 - Settings then starts with a gold box: `Filer Pro <version> is available`, a **Release notes** link, the version you have, and the line to give your agent in Herdr, with **Copy**:
 
   ```text
