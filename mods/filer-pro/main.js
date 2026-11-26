@@ -427,7 +427,7 @@ export default class FilerPro extends View {
           for (const c of body.children) run(want.includes(c.id) ? "layout.show" : "layout.hide", { id: c.id });
           run("layout.show", { id: "panel" });
         })
-        .child(svg(`${BASE}/folder.svg`).size(14).flex_none()).child("Filer Pro"));
+        .child(svg(`${BASE}/folder-bolt.svg`).size(14).flex_none()).child("Filer Pro"));
   }
 
   // Shows the last download in the Finder (toast action "filer-pro.reveal").
@@ -2514,6 +2514,7 @@ export default class FilerPro extends View {
     const root = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => this.requestLeave((cx) => { this.show(null); cx.notify(); }, cx)).child("←")))
+        .child(svg(`${BASE}/folder-bolt.svg`).size(14).flex_none())
         .child(div().flex_none().font_semibold().child("Filer Pro"))
         .child(this.fileTitle(t, dark, true))
         .child(this.refreshButton(t))
